@@ -1,0 +1,15 @@
+dependencies {
+    implementation project(':common:common-exception')
+    implementation project(':common:common-response')
+    implementation project(':common:common-security')
+
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.kafka:spring-kafka'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
+
+    runtimeOnly 'com.mysql:mysql-connector-j'
+}

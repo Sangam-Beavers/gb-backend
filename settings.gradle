@@ -1,0 +1,12 @@
+rootProject.name = 'gb-backend'
+
+// common 모듈
+include 'common:common-exception'
+include 'common:common-response'
+include 'common:common-security'
+
+// 서비스 모듈
+include 'services:user-service'
+include 'services:community-service'
+include 'services:document-service'
+include 'services:wallet-service'
