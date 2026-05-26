@@ -1,5 +1,8 @@
 # Common 모듈 연동 가이드
 
+> 이 문서는 실제 코드(`gb-backend`)의 공통 모듈 연동 규칙 정본이다. 패키지 루트는 `com.gb`.
+> 관련: 전역 규칙 [`conventions.md`](./conventions.md) · 에러 코드 SSOT는 conventions.md §9 및 각 기능 `api-spec.md`.
+
 각 서비스(`wallet` / `member` / `community` / `document`)가 공통 모듈
 (`common-response`, `common-exception`)을 사용하기 위한 **필수 연동 규칙**입니다.
 4개 서비스 모두 동일하게 적용하세요.
