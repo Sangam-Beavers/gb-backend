@@ -63,7 +63,7 @@
       금액·통화 입력
 
 [공통 사전 단계]
-수수료 조회       POST /api/v1/transfers/fee      (또는 GET /transfers/fees — 정본 확인)
+수수료 조회       POST /api/v1/transfers/fee
 송금 비밀번호 검증 POST /api/v1/transfers/verify-password
 FDS 이상거래 검증  POST /api/v1/transfers/fds-check
         │

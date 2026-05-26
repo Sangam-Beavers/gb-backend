@@ -59,7 +59,7 @@
 | 주 계좌 변경 | PATCH | `/api/v1/accounts/{id}/primary` | ✅ |
 | 계좌 삭제 | DELETE | `/api/v1/accounts/{id}` | ✅ |
 
-> ⚠️ 경로 표기 충돌 메모: CSV 작업표에는 일부 GET이 POST(예: 수수료, 환전 견적)로, 일부 경로가 다르게(`fee`/`fees`, `validate-member`/`receivers/search`) 적혀 있다. **위 표는 개별 상세 명세(정본) 기준**이다. 수수료는 개별 명세상 `POST /transfers/fee`, 환전 견적은 `POST /exchanges/quote`로 확정.
+> ✅ 경로 정본 확정: CSV 작업표에는 일부 메서드/경로가 다르게(`fee`/`fees`, GET/POST, `validate-member`/`receivers/search`) 적혀 있으나, **위 표는 개별 상세 명세(정본) 기준이다.** 송금 수수료는 **`POST /api/v1/transfers/fee`**, 환전 견적은 **`POST /api/v1/exchanges/quote`** 로 확정. (CSV의 `GET /transfers/fees` 표기는 무시)
 
 ---
 
