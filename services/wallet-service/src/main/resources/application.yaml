@@ -1,6 +1,9 @@
 spring:
   application:
     name: wallet-service
+  jackson:
+    # 전역 설정: 모든 응답 JSON 필드명을 camelCase → snake_case로 직렬화 (명세 규칙).
+    property-naming-strategy: SNAKE_CASE
 
 server:
   port: 8084
