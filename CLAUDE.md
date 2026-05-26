@@ -195,6 +195,9 @@ com.gb.{서비스}/
 ---
 
 > **참고 문서**
-> - `docs/common-module-integration.md` — common 모듈 연동 상세
-> - 팀 API 명세서 — API/에러코드/enum의 SSOT
-> - 레퍼런스 코드 — `wallet-service`의 잔액 조회(`/api/v1/wallets/me/balances`) 전 계층
+> - docs/README.md — docs 전체 인덱스 (기능별 문서 진입점)
+> - docs/conventions.md — API/코딩 공통 규칙, 에러 코드 표, 인증 임시처리(§14)
+> - docs/database.md — 14개 테이블 스키마 + Redis 키 설계
+> - docs/{auth,remittance,document-analysis,community}/ — 기능별 requirements·flow·api-spec
+> - docs/common-module-integration.md — common 모듈 연동 상세
+> - 레퍼런스 코드 — wallet-service의 잔액 조회(/api/v1/wallets/me/balances) 전 계층
