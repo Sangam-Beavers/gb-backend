@@ -59,7 +59,7 @@
 | 주 계좌 변경 | PATCH | `/api/v1/accounts/{id}/primary` | ✅ |
 | 계좌 삭제 | DELETE | `/api/v1/accounts/{id}` | ✅ |
 
-> ✅ 경로 정본 확정: CSV 작업표에는 일부 메서드/경로가 다르게(`fee`/`fees`, GET/POST, `validate-member`/`receivers/search`) 적혀 있으나, **위 표는 개별 상세 명세(정본) 기준이다.** 송금 수수료는 **`POST /api/v1/transfers/fee`**, 환전 견적은 **`POST /api/v1/exchanges/quote`** 로 확정. (CSV의 `GET /transfers/fees` 표기는 무시)
+> ⚠️ 경로 표기 충돌 메모: CSV 작업표에는 일부 GET이 POST(예: 수수료, 환전 견적)로, 일부 경로가 다르게(`fee`/`fees`, `validate-member`/`receivers/search`) 적혀 있다. **위 표는 개별 상세 명세(정본) 기준**이다. 수수료는 개별 명세상 `POST /transfers/fee`, 환전 견적은 `POST /exchanges/quote`로 확정.
 
 ---
 
@@ -305,3 +305,99 @@
 | 503 | COMMON5031 | 일시적으로 처리할 수 없습니다. |
 
 > 구현 수준 2(Mock): 실제 출금은 Mock 은행(Beaver/Quokka Bank) 응답으로 시뮬레이션. 충전 처리는 `@Transactional`에서 [잔액 조회→검증→증액→audit_log INSERT→커밋].
+
+---
+
+## 13. Mock 은행 연동 (구현 수준 2)
+
+> 충전·현금화 시 본체(`com.gb.wallet`)가 **외부 Mock 은행 서버**(Beaver/Quokka Bank)를 HTTP 클라이언트로 호출한다.
+> 이 서버는 본체와 **장부(DB)가 완전히 분리**돼 있다 — 본체 MySQL(`wallet_balances`)은 앱 포인트, Mock 은행 SQLite(`bank_accounts`)는 외부 현금. 서로의 DB를 직접 만지지 않는다.
+> Mock 은행 측 명세 정본은 **mock-bank 레포의 `API-SPEC.md`**. 본 섹션은 본체 관점의 연동 계약이다.
+> 실서비스 전환 시 호출 URL만 실제 PG/은행 API로 교체하면 본체 로직은 그대로 동작한다.
+
+### 13-1. 본체 API ↔ Mock 은행 엔드포인트 매핑
+
+| 본체 API | 내부에서 호출하는 Mock 은행 | 방향 |
+| --- | --- | --- |
+| `GET /accounts/holder` (예금주 실명조회) | `POST /api/v1/bank/accounts/inquiry` | 조회 |
+| `POST /accounts/verify` (계좌 인증) | `POST /api/v1/bank/accounts/verify` → `account_token` 수신 | 인증 |
+| `POST /accounts/{id}/charge` (충전 실행) | `POST /api/v1/bank/transfers/withdrawal` (저장해둔 `mock_account_token` 사용) | **외부계좌 차감** |
+| 현금화 실행 (REMITTANCE 출금) | `POST /api/v1/bank/transfers/payout` | **외부계좌 증액** |
+
+> **충전 = 출금(외부계좌 ↓), 현금화 = 지급(외부계좌 ↑).** 방향이 정반대다.
+> Mock 은행 통신 금액은 모두 **string 십진수**, 실행 계열(withdrawal/payout)은 **`Idempotency-Key` 헤더**(동일 키 재요청 시 첫 응답 재반환).
+
+### 13-2. 계좌 등록 → 충전 토큰 흐름
+
+```
+[계좌 등록]
+POST /accounts/verify
+  → Mock: POST /bank/accounts/verify { bank_code, account_number, holder_name }
+  → Mock 응답: { account_token, ... }
+POST /accounts (등록 확정)
+  → bank_accounts INSERT, mock_account_token = 받은 account_token 저장
+
+[충전 실행]
+POST /accounts/{id}/charge { amount }
+  → 본체: bank_accounts에서 mock_account_token 조회
+  → Mock: POST /bank/transfers/withdrawal
+          Header Idempotency-Key
+          Body { account_token, amount, currency_code }
+  → Mock 응답 COMPLETED → 본체 @Transactional:
+     wallet_balances 증액 → transaction_audit_logs INSERT → 커밋
+```
+
+> 토큰이 없는(미인증) 계좌는 충전 불가 → `ACCOUNT4006`.
+> Mock `withdrawal` 응답의 `balance_after`는 외부 계좌 잔액일 뿐, 본체 주머니 잔액과 무관하다.
+
+### 13-3. 현금화(지급) 흐름
+
+```
+현금화 실행 (사용자가 포인트를 외부 계좌 현금으로)
+  → 본체 @Transactional: wallet_balances 차감(또는 차감 예약)
+  → Mock: POST /bank/transfers/payout
+          Header Idempotency-Key
+          Body { bank_code, account_number, amount, currency_code }
+          (amount는 본체가 이미 환전 완료한 최종 외화 금액)
+  → Mock 응답 COMPLETED → 본체 차감 확정 + audit_log INSERT → 커밋
+```
+
+> 환율은 **본체가 환전 시점에 적용**하고, Mock 은행에는 최종 외화 금액만 넘긴다. Mock은 환율을 모른다.
+
+### 13-4. Mock 은행 에러 → 본체 에러 매핑
+
+Mock 은행은 외부 시스템이라 자체 코드(`BANK####`)를 쓴다. 본체는 이를 받아 자기 도메인 코드로 변환해 사용자에게 응답한다.
+
+| Mock 은행 코드 | HTTP | 본체 변환 |
+| --- | --- | --- |
+| `BANK4002` (출금 잔액부족) | 400 | `ACCOUNT4003` (연동 계좌의 잔액이 부족합니다) |
+| `BANK4040` (계좌 없음) | 404 | `ACCOUNT4001` (존재하지 않는 계좌입니다) |
+| `BANK4003` (예금주 불일치) | 400 | `ACCOUNT4002` (계좌 인증에 실패했습니다) |
+| `BANK4010` (유효하지 않은 토큰) | 401 | `ACCOUNT4006` (인증되지 않은 계좌입니다) |
+| `BANK4004` (통화 불일치) | 400 | `COMMON4001` (요청 값이 올바르지 않습니다) |
+| `BANK5000` / 타임아웃 / 연결 실패 | 500 | `COMMON5031` (일시적으로 처리할 수 없습니다) |
+
+### 13-5. BankClient 인터페이스 (구현체 교체 지점)
+
+본체는 Mock 은행을 직접 호출하지 않고 인터페이스에 의존한다. 실서비스 전환 시 구현체만 교체한다.
+
+```java
+public interface BankClient {
+    AccountHolder    inquiry(String bankCode, String accountNumber);                 // 예금주 조회
+    AccountToken     verify(String bankCode, String accountNumber, String holder);   // 계좌 인증 → token
+    WithdrawalResult withdraw(String accountToken, BigDecimal amount,
+                              String currencyCode, String idempotencyKey);           // 충전 출금
+    PayoutResult     payout(String bankCode, String accountNumber, BigDecimal amount,
+                            String currencyCode, String idempotencyKey);             // 현금화 지급
+}
+
+@Profile({"dev","stage"}) @Component
+class MockBankClient implements BankClient { /* Mock 은행 서버 호출 */ }
+
+@Profile("prod") @Component
+class RealBankClient implements BankClient { /* 토스페이먼츠/Vietcombank 등 */ }
+```
+
+- 비즈니스 로직(`WalletService`)은 `BankClient`만 의존 → 구현체 교체 시 로직 무변경.
+- Mock 은행 base URL은 환경변수 `BANK_API_BASE_URL`로 분리 (학원/홈서버/실서비스 간 URL만 교체).
+- **mTLS:** Mock 은행이 `TLS_ENABLED=true`이면 본체는 클라이언트 인증서(keystore.p12) + truststore로 상호 인증. 키스토어 경로도 환경변수로 분리. (개발 초기엔 `TLS_ENABLED=false` 평문으로 흐름 검증)

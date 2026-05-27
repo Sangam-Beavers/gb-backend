@@ -50,7 +50,7 @@ Redis                      (분산 락, 캐시, 세션 등)
 | 계정 | 역할 | 주요 리소스 |
 | --- | --- | --- |
 | **계정 A** | 운영 서비스(백엔드) | EKS, Aurora MySQL, ALB, Redis, SQS |
-| **계정 B** | AI 서류 분석 전용 | Lambda(A/B), Bedrock, Aurora PostgreSQL+pgvector, S3 |
+| **계정 B** | AI 서류 분석 전용 | Lambda(A/B), Bedrock, S3 Vectors(법령 RAG), S3 |
 
 분석 작업은 계정 B에서 격리되어 돌아간다. 자세한 파이프라인은 [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md) 참고.
 
@@ -92,7 +92,10 @@ MSA의 각 서비스는 도메인 경계로 나뉜다. 현재는 **단일 Aurora
 - AWS 서비스(S3, Bedrock 등)는 VPC 엔드포인트로 내부망 통신
 
 **계정 A ↔ 계정 B**
-- 서류 분석 결과 전달은 **SQS(크로스 계정)** 비동기 — API Gateway 29초 타임아웃을 피하기 위함
+- 서류 분석 결과는 **요청 출처(`source` 필드)에 따라 한 경로로만** 돌아간다(동시 전송 아님). 백엔드가 `POST /documents` 처리 시 `source`(production/development)를 S3 오브젝트 메타데이터에 심고, Lambda B가 이를 보고 분기한다.
+  - **운영기 요청 (source="production"):** 계정 B → **SQS(크로스 계정)** → 계정 A `SqsConsumer` → Aurora MySQL. (API Gateway 29초 타임아웃 회피용 비동기)
+  - **개발기 요청 (source="development"):** 계정 B Lambda B → 계정 B EC2(HAProxy) → **WireGuard 터널** → 온프렘 개발기 MySQL 직접 INSERT.
+  - 개발기/운영기는 완전 분리 — 요청한 환경으로만 결과가 저장된다.
 
 **관리자 접근**
 - SSH 포트 없음. AWS SSM 세션 매니저로만 접근 (인바운드 포트 0)
