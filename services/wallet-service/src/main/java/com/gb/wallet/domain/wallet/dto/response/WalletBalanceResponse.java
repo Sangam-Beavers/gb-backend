@@ -2,6 +2,7 @@ package com.gb.wallet.domain.wallet.dto.response;
 
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.entity.WalletBalance;
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -25,9 +26,16 @@ import lombok.Getter;
 @Getter
 public class WalletBalanceResponse {
 
+    @Schema(description = "전자지갑 식별자(UUID)", example = "9b2e4c1a-7f3d-4b8e-9a1c-2d5e6f7a8b9c")
     private final String walletPublicId;
+
+    @Schema(description = "지갑 상태", example = "ACTIVE", allowableValues = {"ACTIVE", "SUSPENDED", "CLOSED"})
     private final String status;
+
+    @Schema(description = "통화별 잔액 목록")
     private final List<BalanceItem> balances;
+
+    @Schema(description = "잔액 최종 변경 시각(ISO 8601, UTC Z)", example = "2026-05-26T04:15:30Z")
     private final String updatedAt;
 
     @Builder
@@ -75,7 +83,10 @@ public class WalletBalanceResponse {
     @Getter
     public static class BalanceItem {
 
+        @Schema(description = "통화 코드", example = "KRW", allowableValues = {"KRW", "USD", "PHP", "VND"})
         private final String currencyCode;
+
+        @Schema(description = "잔액(소수점 4자리 고정 string)", example = "1530000.0000", type = "string")
         private final String balance;
 
         @Builder

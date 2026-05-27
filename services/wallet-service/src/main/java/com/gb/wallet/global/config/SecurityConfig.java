@@ -21,6 +21,8 @@ public class SecurityConfig {
                 .formLogin(formLogin -> formLogin.disable())
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                // 현재는 모든 요청 허용이라 Swagger 경로(/swagger-ui/**, /v3/api-docs/**, /swagger-ui.html)도 통과한다.
+                // TODO: 인증 적용 시 Swagger 경로는 인증 예외 처리(permitAll)로 명시하고, 나머지는 authenticated()로 둘 것.
                 .authorizeHttpRequests(auth ->
                         auth.anyRequest().permitAll());
 
