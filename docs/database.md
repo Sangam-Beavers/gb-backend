@@ -138,13 +138,14 @@
 | `user_public_id` | VARCHAR(36) | NOT NULL | **회원 논리 참조** |
 | `bank_id` | BIGINT | FK → banks.id, NOT NULL | 스키마 내부 참조 |
 | `account_number` | VARCHAR(100) | NOT NULL | 계좌번호 (암호화 권장) |
+| `mock_account_token` | VARCHAR(36) | NULL | **충전용 토큰.** 계좌 인증 시 Mock 은행(또는 실서비스 PG)이 발급한 토큰. 충전(출금) 호출 시 이 값으로 계좌를 지칭한다. 실서비스에서는 PG 빌링키에 해당 |
 | `is_virtual` | BOOLEAN | NOT NULL, DEFAULT FALSE | TRUE면 가상계좌(Beaver Bank 발급) |
 | `is_primary` | BOOLEAN | NOT NULL, DEFAULT FALSE | 주 계좌 여부 |
 | `is_active` | BOOLEAN | NOT NULL, DEFAULT TRUE | |
 | `created_at` | DATETIME | NOT NULL | |
 | `updated_at` | DATETIME | NOT NULL | |
 
-### `transactions`
+> `mock_account_token`은 계좌 등록(`POST /accounts`) 시 Mock 은행 `verify` 응답의 `account_token`을 저장한다. 충전(`POST /accounts/{id}/charge`) 시 이 토큰으로 Mock 은행 `withdrawal`을 호출한다. 미인증 계좌(`is_active`/토큰 없음)는 충전 불가. 상세 연동: [`remittance/api-spec.md`](./remittance/api-spec.md)의 "Mock 은행 연동" 섹션.
 > 모든 금융 거래 마스터. `type`으로 유형 구분, 유형별 상세 컬럼 보유.
 
 | 컬럼 | 타입 | 제약 | 설명 |

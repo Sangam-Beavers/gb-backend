@@ -14,7 +14,7 @@
 | 캐시/락 | **Redis** | 분산 락, 멱등성, 세션, 카운터, 캐시 |
 | 인증 | **JWT** | Authentik(개발) / Cognito(운영·스테이징) |
 | 컨테이너 오케스트레이션 | **Kubernetes** | 온프렘(Cilium) / AWS EKS |
-| AI (계정 B) | **AWS Bedrock (Claude)** + **Aurora PostgreSQL + pgvector** | OCR/분석/번역 + 법령 RAG |
+| AI (계정 B) | **AWS Bedrock (Claude)** + **Amazon S3 Vectors** | OCR/분석/번역 + 법령 RAG (서버리스 벡터 검색) |
 | 메시징 | **SQS** | 계정 B → 계정 A 분석 결과 비동기 전달 |
 
 ---
@@ -64,11 +64,12 @@ Redis 키 네이밍 규칙은 [`database.md`](./database.md)의 Redis 섹션 참
 | 데이터 | 저장소 |
 | --- | --- |
 | 회원/금융/커뮤니티/문서 메타 + AI 분석 결과 | **MySQL 8.0** (Aurora / 온프렘 공통) |
-| 법령 임베딩 벡터 (RAG) | **Aurora PostgreSQL + pgvector** (계정 B) |
+| 법령 임베딩 벡터 (RAG) | **Amazon S3 Vectors** (계정 B, 서버리스 벡터 검색) |
 | 분산 락/캐시/세션/카운터 | **Redis** |
 | 업로드 원본 파일 (분석 처리 중) | **S3** (계정 B), 처리 후 삭제 |
 
 > ❌ **DynamoDB는 사용하지 않는다.** (이전 설계에서 제거됨. 분석 결과는 MySQL `document_results`에 직접 저장)
+> ✅ **법령 벡터 DB = Amazon S3 Vectors** (이전 Aurora PostgreSQL + pgvector에서 전환). 법령 임베딩은 거의 불변하고 쿼리 빈도가 낮은(저빈도) 워크로드라 S3 Vectors의 "스토리지 우선" 모델에 적합하다. Aurora를 제거함으로써 (1) Lambda↔DB 커넥션 한계(max_connections·RDS Proxy 고민)와 (2) DB 인스턴스 상시 고정비가 함께 사라지고, AI VPC가 **Lambda + VPC 엔드포인트만 있는 순수 서버리스 구조**가 된다. Bedrock Knowledge Bases 네이티브 통합도 가능.
 
 ---
 
