@@ -58,12 +58,16 @@ target/
 # 환경설정 파일 (절대 올리면 안 됨)
 # ===========================
 application-local.yml
+application-local.yaml
 application-local.properties
 application-prod.yml
+application-prod.yaml
 application-prod.properties
 application-dev.yml
+application-dev.yaml
 application-dev.properties
 **/src/main/resources/application-*.yml
+**/src/main/resources/application-*.yaml
 **/src/main/resources/application-*.properties
 
 # ===========================
