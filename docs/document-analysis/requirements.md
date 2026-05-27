@@ -58,7 +58,11 @@
 - AI 분석 결과는 **MySQL `document_results`에 직접 저장.** **DynamoDB 미사용.**
 - `wage_summary`/`risk_items`는 JSON 컬럼, `translated_text`는 TEXT.
 - 메타(`document_submissions`)와 결과(`document_results`)는 `submission_id`로 1:1 연결.
-- 분석 작업은 AWS 계정 B에서 격리 실행, 결과는 SQS(크로스 계정)로 계정 A에 전달 → MySQL 저장.
+- 분석 작업은 AWS 계정 B에서 격리 실행. 결과는 **요청 출처(`source` 필드)에 따라 한 경로로만** 저장된다(동시 저장 아님).
+  - **운영기 요청 (source="production"):** SQS(크로스 계정) → 계정 A → Aurora MySQL `document_results`.
+  - **개발기 요청 (source="development"):** Lambda B → EC2(HAProxy) → WireGuard → 온프렘 개발기 MySQL 직접 INSERT.
+  - 즉 **개발기에서 보낸 분석은 개발기로, 운영기에서 보낸 분석은 운영기로** 결과가 돌아간다. (환경 격리 + 개인정보)
+- 법령 RAG 벡터 검색은 **Amazon S3 Vectors**(서버리스). 상세: [`ai-pipeline.md`](./ai-pipeline.md).
 
 ---
 

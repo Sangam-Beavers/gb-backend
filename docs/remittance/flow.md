@@ -28,16 +28,20 @@
   │   지원 은행 목록  GET /api/v1/accounts/supported-banks
   │   예금주 실명 조회 GET /api/v1/accounts/holder?bankCode=&accountNumber=
   │   계좌 연결+자동이체 인증 요청 POST /api/v1/accounts/verify
+  │     → Mock 은행: POST /api/v1/bank/accounts/verify → account_token 수신
   │     (※ 실제 인증 불가 → Mock/화면만)
   │   계좌 등록 최종 완료  POST /api/v1/accounts
-  │     → bank_accounts INSERT
+  │     → bank_accounts INSERT (mock_account_token = 받은 토큰 저장)
   └──────────────────────────────────────────────────┘
   │
 [충전 실행]
 출금 계좌 선택 → 금액 입력
 충전 금액 검증 및 실행  POST /api/v1/accounts/{id}/charge
   (Header: Idempotency-Key)
-  → (Mock 은행에서 출금) → 주머니 KRW +P
+  → 본체: bank_accounts에서 mock_account_token 조회
+  → Mock 은행: POST /api/v1/bank/transfers/withdrawal
+       (account_token, amount, currency_code) → 외부계좌 차감, COMPLETED
+  → 본체: 주머니 KRW +P (Mock 성공 응답이 트리거)
   → transactions(type=CHARGE) + audit_log INSERT
   → 201 { public_id, amount, wallet_balance, status=COMPLETED }
 ```
@@ -63,7 +67,7 @@
       금액·통화 입력
 
 [공통 사전 단계]
-수수료 조회       POST /api/v1/transfers/fee
+수수료 조회       POST /api/v1/transfers/fee      (또는 GET /transfers/fees — 정본 확인)
 송금 비밀번호 검증 POST /api/v1/transfers/verify-password
 FDS 이상거래 검증  POST /api/v1/transfers/fds-check
         │

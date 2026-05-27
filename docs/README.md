@@ -70,8 +70,9 @@
 
 Claude Code가 반드시 지켜야 하는 프로젝트 차원의 결정입니다.
 
-- **충전/출금 구현 = 수준 2 (Mock API).** 실제 PG/은행 연동 대신 동일 인터페이스의 Mock 서버로 처리한다. 실서비스 전환 시 URL만 교체.
-- **AI 분석 결과 저장 = MySQL `document_results`에 직접 저장. DynamoDB 미사용.** (개발기 온프렘 MySQL / 운영·스테이징 Aurora MySQL 공통 스키마)
+- **충전/출금 구현 = 수준 2 (Mock API).** 실제 PG/은행 연동 대신 동일 인터페이스의 외부 Mock 은행 서버(Beaver/Quokka Bank)로 처리한다. 본체는 `BankClient` 인터페이스로 호출하고 실서비스 전환 시 URL/구현체만 교체. 충전은 `withdrawal`(외부계좌 차감), 현금화는 `payout`(외부계좌 증액). 계좌 인증 시 받은 `account_token`을 `bank_accounts.mock_account_token`에 저장해 충전 때 사용. 상세 연동·에러 매핑: [`remittance/api-spec.md`](./remittance/api-spec.md) §13.
+- **AI 분석 결과 저장 = MySQL `document_results`에 직접 저장. DynamoDB 미사용.** 결과는 **요청 출처(`source` 필드)에 따라 한 경로로만** 저장된다 — 운영기 요청(source="production")은 SQS→계정 A Aurora MySQL, 개발기 요청(source="development")은 Lambda B→EC2(HAProxy)→WireGuard→온프렘 개발기 MySQL 직접 INSERT. **양쪽 동시 저장이 아니라 요청한 환경으로만 결과가 돌아간다.** (개발기 온프렘 MySQL / 운영·스테이징 Aurora MySQL 공통 스키마)
+- **법령 RAG 벡터 DB = Amazon S3 Vectors (계정 B).** 이전 Aurora PostgreSQL+pgvector에서 전환. AI VPC는 퍼블릭 + 프라이빗(=관리 서브넷) 2티어이며 DB 서브넷이 없다. 상세: [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md).
 - **회원 식별자 보안 원칙** — `users.id`(BIGINT 순번)는 member 도메인 경계를 벗어나지 않는다. 도메인 밖에는 `user_public_id`(UUID)만 노출/전파한다.
 - **금액·환율은 JSON `string` 십진수로 전송**한다. `number`(float) 금지. (표시용 수치 — 등락률·OCR 신뢰도 등 — 만 예외적으로 number 허용)
 - **인증은 현재 미구현.** 본인 식별이 필요한 API는 JWT 추출 대신 `@RequestHeader("X-User-Public-Id")` + TODO로 임시 처리한다. (conventions §14)

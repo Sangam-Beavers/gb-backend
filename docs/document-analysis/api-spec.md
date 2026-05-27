@@ -139,4 +139,4 @@ FAILED 상태 문서의 분석을 다시 트리거. (S3 원본 유지 시 재사
 
 ## 참고
 
-계정 B 내부 분석 파이프라인(Lambda/Bedrock/pgvector)은 [`ai-pipeline.md`](./ai-pipeline.md) 참고. 백엔드(계정 A) 관점에서는 위 API만 구현하면 되고, 결과는 SQS Consumer가 `document_results`에 채운다.
+계정 B 내부 분석 파이프라인(Lambda/Bedrock/S3 Vectors)은 [`ai-pipeline.md`](./ai-pipeline.md) 참고. 백엔드(계정 A) 관점에서는 위 API만 구현하면 되고, 결과는 SQS Consumer가 `document_results`에 채운다.
