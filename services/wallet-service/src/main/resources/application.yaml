@@ -1,6 +1,9 @@
 spring:
   application:
     name: wallet-service
+  profiles:
+    # 기본 활성 프로파일. IDE/CLI에서 SPRING_PROFILES_ACTIVE 등으로 덮어쓸 수 있다.
+    active: dev
   jackson:
     # 전역 설정: 모든 응답 JSON 필드명을 camelCase → snake_case로 직렬화 (명세 규칙).
     property-naming-strategy: SNAKE_CASE
