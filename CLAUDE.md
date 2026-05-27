@@ -15,6 +15,12 @@
   기능을 과하게 잘게 쪼개지 않고 도메인 단위로 묶는다(Chatty API 지양).
 - 인증은 Authentik(개발)/Cognito(운영) 기반 OIDC. **현재 인증은 미구현 상태**이며,
   인증이 필요한 곳은 임시 처리 + `// TODO` 주석으로 표시한다(아래 9번 참고).
+- **AI 서류 분석**은 별도 AWS 계정(계정 B)의 Lambda + Bedrock(Claude) + **S3 Vectors**(법령 RAG)에서
+  처리된다. 본체(`document-service`)는 분석 요청(Pre-signed URL 발급)과 결과 수신(SQS Consumer)만
+  담당하고, 분석 자체는 본체 밖에서 돈다. 상세: `docs/document-analysis/ai-pipeline.md`.
+- **충전·현금화**는 외부 Mock 은행 서버(Beaver/Quokka Bank)를 호출해 시뮬레이션한다(구현 수준 2).
+  `wallet-service`는 `BankClient` 인터페이스로 호출하고, 실서비스 전환 시 구현체/URL만 교체한다.
+  상세: `docs/remittance/api-spec.md` §13.
 
 ---
 
@@ -32,8 +38,8 @@ services/
 - **의존 방향(단방향)**: `서비스 → common-exception → common-response`.
   common은 어떤 서비스에도 의존하지 않는다.
 - **메커니즘은 common, 구체 내용은 서비스**:
-    - 응답 포맷·예외 처리 메커니즘 → common
-    - 서비스별 에러 코드(`WalletErrorCode` 등)·`SecurityConfig`·도메인 enum → 각 서비스
+  - 응답 포맷·예외 처리 메커니즘 → common
+  - 서비스별 에러 코드(`WalletErrorCode` 등)·`SecurityConfig`·도메인 enum → 각 서비스
 - common 연동 상세는 `docs/common-module-integration.md` 참고.
 - **각 서비스 메인 클래스는 `@SpringBootApplication(scanBasePackages = "com.gb")`** 로 둔다.
   (common의 `GlobalExceptionHandler`가 `com.gb.common...`에 있어 스캔 범위를 넓혀야 빈 등록됨)
@@ -130,10 +136,10 @@ com.gb.{서비스}/
   `throw new IllegalArgumentException(...)` 등 임의 예외를 컨트롤러/서비스 흐름에서 쓰지 않는다.
 - 서비스별 에러 코드는 `{서비스}ErrorCode`(enum)가 common의 **`ErrorCode` 인터페이스를 구현**한다.
 - **에러 코드는 명세 §12를 SSOT로** 등록한다. 번호를 임의로 추측하지 말 것.
-    - 형식: `{DOMAIN}{4자리}` (예: `WALLET4001`, `WALLET4002`).
-    - 같은 의미면 코드 하나로 통일. 번호는 한번 부여하면 재사용·재배치 금지.
-    - 서버 측 잘못은 도메인 코드 신설 대신 `COMMON5000` 사용.
-    - 인증 실패(JWT 누락/무효)는 `COMMON4011`, 권한 없음은 `COMMON4031` 재사용.
+  - 형식: `{DOMAIN}{4자리}` (예: `WALLET4001`, `WALLET4002`).
+  - 같은 의미면 코드 하나로 통일. 번호는 한번 부여하면 재사용·재배치 금지.
+  - 서버 측 잘못은 도메인 코드 신설 대신 `COMMON5000` 사용.
+  - 인증 실패(JWT 누락/무효)는 `COMMON4011`, 권한 없음은 `COMMON4031` 재사용.
 - 던져진 예외는 common의 `GlobalExceptionHandler`가 위 실패 Envelope로 변환한다.
 - 입력값 검증은 `@Valid` + Bean Validation. 검증 실패는 `COMMON4001`로 처리됨.
 
@@ -142,11 +148,23 @@ com.gb.{서비스}/
 ## 7. MSA 서비스 간 참조 규칙
 
 - **서비스 경계를 넘는 회원 참조는 `user_public_id`(UUID)** 로 한다. **물리 FK 금지**.
-    - 다른 서비스(member)의 `User` 엔티티를 직접 매핑(`@ManyToOne`)하지 않는다.
-    - 회원은 `String userPublicId` 값으로만 보유. 회원 상세가 필요하면 서비스 간 통신으로.
+  - 다른 서비스(member)의 `User` 엔티티를 직접 매핑(`@ManyToOne`)하지 않는다.
+  - 회원은 `String userPublicId` 값으로만 보유. 회원 상세가 필요하면 서비스 간 통신으로.
 - **같은 서비스(스키마) 내부 참조는 기존대로 `id`(BIGINT) FK** 를 사용한다.
-    - 예: `wallet_balances.wallet_id → wallets.id` 는 정상 FK.
+  - 예: `wallet_balances.wallet_id → wallets.id` 는 정상 FK.
 - 즉 "경계 넘으면 public_id, 내부는 BIGINT FK".
+
+### 외부 시스템 연동 (본체 밖 호출)
+- **Mock 은행(충전/현금화):** `wallet-service`는 외부 Mock 은행 서버를 **`BankClient` 인터페이스**로만 호출한다.
+  구현체는 Profile로 분리(`MockBankClient`=dev/stage, `RealBankClient`=prod), base URL은 환경변수
+  `BANK_API_BASE_URL`로 분리한다. 충전은 `withdrawal`(외부계좌 차감), 현금화는 `payout`(외부계좌 증액).
+  계좌 인증 시 받은 `account_token`을 `bank_accounts.mock_account_token`에 저장해 충전 때 사용한다.
+  은행 측 에러(`BANK####`)는 본체 에러(`ACCOUNT####`/`COMMON####`)로 매핑한다(매핑표: `docs/remittance/api-spec.md` §13-4).
+  Mock 은행은 본체와 **장부(DB)가 완전 분리** — 본체 MySQL(앱 포인트)과 은행 SQLite(외부 현금)는 서로 직접 만지지 않는다.
+- **AI 분석 결과(계정 B → 본체):** `document-service`는 분석 결과를 **SQS Consumer**로 수신해
+  `document_submissions`/`document_results`에 저장한다. 분석 요청(`source=production/development`)의
+  출처에 따라 결과 경로가 갈리며, 운영기는 SQS, 개발기는 온프렘 직접 INSERT(계정 B 소관)다.
+  본체(운영기)는 SQS Consumer만 구현하면 된다. 상세: `docs/document-analysis/ai-pipeline.md`.
 
 ---
 
@@ -196,8 +214,11 @@ com.gb.{서비스}/
 
 > **참고 문서**
 > - docs/README.md — docs 전체 인덱스 (기능별 문서 진입점)
+> - docs/tech-stack.md — 기술 스택 + 데이터 저장 정책 (벡터 DB = S3 Vectors 등)
+> - docs/architecture.md — 시스템/인프라 아키텍처, 계정 A/B 분리, 계정 간 연동
 > - docs/conventions.md — API/코딩 공통 규칙, 에러 코드 표, 인증 임시처리(§14)
-> - docs/database.md — 14개 테이블 스키마 + Redis 키 설계
+> - docs/database.md — 테이블 스키마 + Redis 키 설계 (bank_accounts.mock_account_token 포함)
 > - docs/{auth,remittance,document-analysis,community}/ — 기능별 requirements·flow·api-spec
+    >   (remittance/api-spec.md §13 = Mock 은행 연동, document-analysis/ai-pipeline.md = AI 파이프라인)
 > - docs/common-module-integration.md — common 모듈 연동 상세
 > - 레퍼런스 코드 — wallet-service의 잔액 조회(/api/v1/wallets/me/balances) 전 계층
