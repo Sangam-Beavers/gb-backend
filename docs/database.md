@@ -146,6 +146,8 @@
 | `updated_at` | DATETIME | NOT NULL | |
 
 > `mock_account_token`은 계좌 등록(`POST /accounts`) 시 Mock 은행 `verify` 응답의 `account_token`을 저장한다. 충전(`POST /accounts/{id}/charge`) 시 이 토큰으로 Mock 은행 `withdrawal`을 호출한다. 미인증 계좌(`is_active`/토큰 없음)는 충전 불가. 상세 연동: [`remittance/api-spec.md`](./remittance/api-spec.md)의 "Mock 은행 연동" 섹션.
+
+### `transactions`
 > 모든 금융 거래 마스터. `type`으로 유형 구분, 유형별 상세 컬럼 보유.
 
 | 컬럼 | 타입 | 제약 | 설명 |
@@ -202,7 +204,7 @@
 
 ## 4. document 도메인
 
-> **MySQL이 메타 + 분석 내용을 모두 보관.** DynamoDB 미사용.
+> **MySQL이 (분석) 메타 + 분석 내용을 모두 보관.** **분석 결과 저장에는 DynamoDB 미사용.** (후속 챗봇 대화기록은 별도 워크로드로 계정 B DynamoDB `chat_sessions`에 저장 — [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md). 이 테이블은 계정 B 소관이라 본 스키마 문서 범위 밖.)
 > 분석 처리 흐름은 [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md).
 
 ### `document_submissions`

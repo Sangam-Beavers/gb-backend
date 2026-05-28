@@ -55,7 +55,7 @@
 
 ## 5. 저장 정책 (확정)
 
-- AI 분석 결과는 **MySQL `document_results`에 직접 저장.** **DynamoDB 미사용.**
+- AI **분석 결과**는 **MySQL `document_results`에 직접 저장.** **분석 결과 저장에는 DynamoDB 미사용.** (단, 후속 챗봇 대화기록은 별도 워크로드로 DynamoDB 신규 도입 — [`ai-chatbot-mcp.md`](./ai-chatbot-mcp.md))
 - `wage_summary`/`risk_items`는 JSON 컬럼, `translated_text`는 TEXT.
 - 메타(`document_submissions`)와 결과(`document_results`)는 `submission_id`로 1:1 연결.
 - 분석 작업은 AWS 계정 B에서 격리 실행. 결과는 **요청 출처(`source` 필드)에 따라 한 경로로만** 저장된다(동시 저장 아님).

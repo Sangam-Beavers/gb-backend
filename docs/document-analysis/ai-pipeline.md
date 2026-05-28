@@ -2,8 +2,10 @@
 
 > 이 문서는 서류 분석이 **계정 B에서 어떻게 처리되는지**를 설명한다. (노션 상세본 "AI 파이프라인 v3.3"의 SSOT 요약)
 > 백엔드 개발자는 [`api-spec.md`](./api-spec.md)의 API만 구현하면 되고, 이 파이프라인은 "결과가 어떻게 만들어져 돌아오는가"의 맥락 이해용이다.
-> **벡터 DB(확정):** 법령 RAG는 **Amazon S3 Vectors**(서버리스). Aurora PostgreSQL+pgvector에서 전환.
-> **저장 정책(확정):** 결과는 요청에 실린 **`source` 필드(`production`/`development`)에 따라 한 경로로만** 저장된다. 동시 저장 아님. DynamoDB 미사용.
+> **벡터 DB / 법령 검색(확정):** 법령 RAG는 **Bedrock Knowledge Bases**로 통일하고, KB의 벡터 저장소(백엔드)는 **Amazon S3 Vectors**(서버리스)다. 분석 파이프라인과 후속 챗봇 **양쪽 모두** KB `retrieve`로 법령을 검색한다(검색 코드 일원화). 이전 Aurora PostgreSQL+pgvector에서 전환. (S3 Vectors는 **2025-12 정식 출시(GA)** 되어 **서울 리전(ap-northeast-2)** 포함 다수 리전에서 사용 가능하며 Bedrock Knowledge Bases 백엔드 통합도 GA다 — 더 이상 preview 아님. 다만 배포 시 KB 생성·동기화·`retrieve` 동작은 1회 확인하는 것을 권장.)
+> **저장 정책(확정):** **분석 결과**는 요청에 실린 **`source` 필드(`production`/`development`)에 따라 한 경로로만** 저장된다. 동시 저장 아님. **분석 결과 저장에는 DynamoDB 미사용**(MySQL `document_results`). 단, 후속 챗봇의 **대화기록**은 별도 워크로드로 DynamoDB를 신규 도입한다(→ [`ai-chatbot-mcp.md`](./ai-chatbot-mcp.md)).
+> **`source` 값은 `production`/`development` 2개뿐이다(스테이징 전용 값 없음).** 환경은 dev/stage/prod 3-tier지만, 결과 경로 분기는 "온프렘 개발기로 직결(WireGuard)" vs "AWS Aurora로 SQS 경유" 둘로만 갈린다. **스테이징(stage)은 AWS Aurora를 쓰므로 운영기와 동일하게 `source="production"` 경로(SQS → 계정 A Aurora MySQL)를 탄다.** 즉 매핑은 dev→`development`, stage·prod→`production`이다. (스테이징은 자기 Aurora 스키마에 저장되며 운영 데이터와 섞이지 않는다 — DB는 프로필로 분리.) 백엔드는 `application-{dev|stage|prod}.yml`에서 `source` 값만 위 매핑대로 주입한다.
+> ⚠️ **단, `production` 경로 안에서 stage와 prod는 별도 SQS 큐로 분리한다**(`gb-analysis-results-stage` / `gb-analysis-results-prod`). `source`만으로는 어느 Aurora인지 정해지지 않으므로, 결과가 요청 환경 본인의 DB로만 가도록 **환경별 큐**가 2차 라우팅을 담당한다. 상세는 §8 매핑 블록 참고.
 
 ---
 
@@ -108,28 +110,25 @@ S3 원본 삭제              S3 원본 삭제
 
 - **입력:** 마스킹 텍스트 + `analysis_document_type` + `user_lang` + `source`
 - **모델:** Bedrock Claude + **Tool Use(MCP 패턴) 루프**
-- **RAG:** **Amazon S3 Vectors**에 적재된 노동/근로 관련 법령 임베딩을 유사도 검색
-- **처리:** 조항 분해 → Tool 호출(`get_legal_standard`) 시 S3 Vectors 검색 → 조항↔법령 비교로 위험 항목·등급 산출 → 급여 요약 → 모국어 번역 → 결과 JSON 조립 → **`source`에 따라 한 경로로 전송**
+- **RAG:** **Bedrock Knowledge Bases**에 적재된 노동/근로 관련 법령을 KB `retrieve`로 유사도 검색 (KB 백엔드 저장소 = S3 Vectors)
+- **처리:** 조항 분해 → Tool 호출(`get_legal_standard`) 시 **KB `retrieve` 호출** → 조항↔법령 비교로 위험 항목·등급 산출 → 급여 요약 → 모국어 번역 → 결과 JSON 조립 → **`source`에 따라 한 경로로 전송**
 - **타임아웃:** 10분
 
-Tool 내부 S3 Vectors 검색 (RAG 구현):
+Tool 내부 법령 검색 (KB retrieve로 RAG 구현):
 ```python
-import boto3, json
-bedrock = boto3.client("bedrock-runtime", region_name="ap-northeast-2")
-s3v = boto3.client("s3vectors", region_name="ap-northeast-2")
+import boto3
+# KB가 임베딩·벡터 질의를 내부에서 처리하므로 임베딩 모델을 직접 호출할 필요가 없다.
+bedrock_kb = boto3.client("bedrock-agent-runtime", region_name="ap-northeast-2")
 
 def get_legal_standard(query_text):
-    emb = json.loads(bedrock.invoke_model(
-        modelId="amazon.titan-embed-text-v2:0",
-        body=json.dumps({"inputText": query_text}),
-    )["body"].read())["embedding"]
-    res = s3v.query_vectors(
-        vectorBucketName="globalbridge-legal-vectors",
-        indexName="legal-embeddings",
-        queryVector={"float32": emb},
-        topK=5, returnMetadata=True, returnDistance=True,
+    res = bedrock_kb.retrieve(
+        knowledgeBaseId="<LEGAL_KB_ID>",        # 법령 KB (백엔드 = S3 Vectors)
+        retrievalQuery={"text": query_text},
+        retrievalConfiguration={
+            "vectorSearchConfiguration": {"numberOfResults": 5}
+        },
     )
-    return [v["metadata"]["content"] for v in res["vectors"]]
+    return [r["content"]["text"] for r in res["retrievalResults"]]
 ```
 
 **결과 JSON(요지)** — `document_results` 컬럼에 매핑:
@@ -140,9 +139,9 @@ risk_items[]{risk_level, clause, description},
 translated_text, masked_file_url, failed_reason, completed_at
 ```
 
-> **MCP 패턴 vs RAG:** MCP(Bedrock Tool Use)가 "언제 검색할지" 결정하고, RAG(S3 Vectors)가 "어떻게 검색하는지" 처리한다. Tool 내부 구현이 pgvector 쿼리에서 `s3vectors.query_vectors` 호출로 바뀐 것이며 MCP 루프 구조는 동일하다.
+> **MCP 패턴 vs RAG:** MCP(Bedrock Tool Use)가 "언제 검색할지" 결정하고, RAG가 "어떻게 검색하는지" 처리한다. Tool 내부 구현이 pgvector 쿼리 → (이전 설계) S3 Vectors 직접 쿼리 → (현재 확정) **KB `retrieve` 호출**로 바뀐 것이며 MCP 루프 구조는 동일하다. KB는 검색 오케스트레이션(임베딩·벡터 질의·결과 조립)을 대신하므로 Lambda 코드에서 임베딩 모델을 직접 부를 필요가 없다.
 
-**법령 임베딩 사전 적재(배포 시 1회):** 공공누리 1유형 법령(근로기준법·최저임금법·외국인근로자고용법 등)을 Bedrock Titan Embeddings V2(1024차원)로 임베딩해 S3 Vectors 인덱스(`create_index` → `put_vectors`)에 적재. 법령은 거의 불변(연 1~2회 개정)이라 재적재 빈도가 낮다.
+**법령 KB 사전 적재(배포 시 1회):** 공공누리 1유형 법령(근로기준법·최저임금법·외국인근로자고용법 등) 원문을 S3 데이터 소스 버킷에 올리고, **Bedrock Knowledge Bases를 생성해 해당 버킷을 데이터 소스로 연결한 뒤 동기화(ingestion)** 한다 — KB가 청킹·임베딩(Titan Embeddings V2)·S3 Vectors 인덱스 적재를 자동 수행한다. 분석 파이프라인과 챗봇은 이 **동일한 KB 하나**를 공유한다. 법령은 거의 불변(연 1~2회 개정)이라 재동기화 빈도가 낮다.
 
 ---
 
@@ -150,9 +149,12 @@ translated_text, masked_file_url, failed_reason, completed_at
 
 > Lambda B는 `source`를 보고 **둘 중 하나로만** 보낸다. 동시 전송 아님.
 
-### 경로 1 — source="production" → 계정 A Aurora MySQL (SQS 경유)
+### 경로 1 — source="production" → 계정 A Aurora MySQL (SQS 경유, 환경별 큐 분리)
 ```
-Lambda B → 계정 A SQS(크로스 계정) 발행 → 계정 A SqsConsumer
+Lambda B → 계정 A 환경별 SQS 큐(크로스 계정) 발행 → 해당 환경 SqsConsumer
+  · stage 요청 → gb-analysis-results-stage → stage 백엔드 → stage Aurora
+  · prod  요청 → gb-analysis-results-prod  → prod  백엔드 → prod  Aurora
+  발행 대상 큐는 백엔드가 S3 메타데이터에 심은 result_queue_arn으로 결정(Lambda는 그 큐로만 발행)
   COMPLETED: document_submissions UPDATE(COMPLETED) + document_results INSERT + S3 원본 삭제
   FAILED:    document_submissions UPDATE(FAILED) + S3 원본 유지(재분석) → 7일 수명주기 삭제
 ```
@@ -178,6 +180,8 @@ backend mysql_back
 ---
 
 ## 7. S3 Vectors 선택 이유 (이전 Aurora pgvector에서 전환)
+
+> **현재 확정:** 아래 S3 Vectors의 장점은 그대로 유효하며, 그 위에 **Bedrock Knowledge Bases**를 검색 레이어로 얹어 통일했다. S3 Vectors = 벡터 저장(창고), KB = 검색 오케스트레이션(매니저). 분석·챗봇 모두 KB `retrieve`로 접근하고, 코드에서 S3 Vectors를 직접 만지지 않는다.
 
 ```
 이전 Aurora pgvector의 문제
@@ -217,7 +221,7 @@ backend mysql_back
 | Bedrock 오류 | Lambda B | try/except → 해당 경로로 FAILED 전송 | 일시적 오류 안내 |
 | S3 Vectors 검색 실패 | Lambda B Tool | Claude 자체 지식으로 계속 or FAILED | 법령 조회 실패 안내 |
 | EC2 WireGuard 프록시 장애 | 개발기 경로(dev) | 개발기 요청 실패 (운영기 무관) | 개발팀 직접 확인 |
-| SQS 발행 실패 | 운영기 경로(prod) | document_submissions 직접 업데이트 fallback | 운영팀 알림 |
+| SQS 발행 실패 | production 경로(stage·prod) | document_submissions 직접 업데이트 fallback | 운영팀 알림 |
 | source 누락 | Lambda A/B | 기본값 처리 또는 FAILED | 요청 재시도 안내 |
 
 ---
@@ -235,11 +239,21 @@ backend mysql_back
 이 파이프라인 자체는 계정 B(AI 담당) 소관이고, **백엔드(공통 코드, 환경별 동일)** 가 구현할 접점은 다음뿐이다.
 
 1. `POST /api/v1/documents` — `document_submissions` INSERT + 계정 B S3 Pre-signed URL 발급. **이때 현재 환경의 `source`(production/development)를 결정해 S3 오브젝트 메타데이터에 심는다.** Lambda가 이 값으로 결과 경로를 분기한다.
-2. **결과 수신부 (환경에 따라 본인 것만 동작)**
-   - **운영기:** SQS Consumer — 계정 B가 SQS로 보낸 결과 수신 → `document_submissions.status` 업데이트 + `document_results` INSERT + S3 원본 삭제 트리거.
-   - **개발기:** Consumer 코드 불필요 — 계정 B Lambda B가 온프렘 MySQL에 직접 INSERT. 개발기 백엔드는 조회만 한다.
+2. **결과 수신부 (환경에 따라 본인 것만 동작, 환경별 큐 구독)**
+   - **운영기(prod):** SQS Consumer — `gb-analysis-results-prod` 큐만 구독. 결과 수신 → `document_submissions.status` 업데이트 + `document_results` INSERT + S3 원본 삭제 트리거.
+   - **스테이징(stage):** SQS Consumer — `gb-analysis-results-stage` 큐만 구독(코드는 prod와 동일, 큐 이름만 프로필로 분리) → stage Aurora에 저장.
+   - **개발기(dev):** Consumer 코드 불필요 — 계정 B Lambda B가 온프렘 MySQL에 직접 INSERT. 개발기 백엔드는 조회만 한다.
 3. 조회 API(`/status`, `/result`, 목록) — 각 환경 MySQL에서 조회. (코드 동일, DB만 환경별)
 
 > Spring 코드는 환경에 따라 바뀌지 않는다. `source` 값(AI 요청에 싣는 출처 태그)과 결과 수신 방식의 차이는 **Spring 프로필(`application-{dev|stage|prod}.yml`)** 설정으로 흡수한다.
-> 결과는 **요청한 환경으로만** 저장된다 — production은 Aurora MySQL, development는 온프렘 MySQL. 양쪽 동시 저장 아님.
+> **환경 ↔ `source` + 결과 채널 매핑 (확정 — 큐 분리):** `source`는 `development`/`production` 2값으로 **인프라 계열만** 결정한다(온프렘 vs AWS). 어느 환경 DB로 돌아갈지는 **환경별로 분리된 결과 채널**이 결정하며, 결과는 항상 **요청을 보낸 환경 본인의 DB로만** 저장된다.
+> - **dev** → `source=development` → 온프렘 개발기 MySQL (EC2 HAProxy → WireGuard, 백엔드 Consumer 불필요)
+> - **stage** → `source=production` → **SQS 큐 `gb-analysis-results-stage`** → stage 백엔드 Consumer → **stage Aurora**
+> - **prod** → `source=production` → **SQS 큐 `gb-analysis-results-prod`** → prod 백엔드 Consumer → **prod Aurora**
+>
+> 백엔드는 `POST /documents` 처리 시 `source`와 함께 **자기 환경의 결과 큐 ARN**(`production`일 때만)을 S3 오브젝트 메타데이터에 심는다. Lambda B는 `source=production`이면 이 큐 ARN으로 결과를 발행한다(환경 매핑 테이블을 Lambda가 몰라도 됨). stage 큐와 prod 큐는 **물리적으로 분리**되어 한쪽 Consumer가 다른 환경 메시지를 수신할 수 없다. (단일 큐 + `env` 필드 필터 방식은 채택하지 않는다 — 필터 누락 시 환경 간 오염 위험.)
+> 각 환경 Consumer는 `application-{stage|prod}.yml`에서 자기 큐 이름만 주입받으며 **Consumer 코드는 환경 무관하게 동일**하다.
+> 결과는 **요청한 환경으로만** 저장된다 — dev는 온프렘 MySQL, stage는 `gb-analysis-results-stage` 큐 → stage Aurora, prod는 `gb-analysis-results-prod` 큐 → prod Aurora. 세 환경 모두 자기 채널로 격리되며 동시 저장·교차 수신 없음.
+>
+> 📌 **`source`(2값)와 후속 챗봇의 `environment`(3값)는 별개 필드다.** 이 문서의 `source`는 **분석 결과 저장 경로**(온프렘 vs AWS)만 가른다. 후속 질문 챗봇은 stage/prod의 MCP Pod를 구분해야 하므로 `dev/stage/prod` 3값짜리 별도 `environment` 필드를 쓴다([`ai-chatbot-mcp.md`](./ai-chatbot-mcp.md) §6). 두 필드를 하나로 합치지 않는다 — `source`에 3값을 넣으면 위 큐 분리 설계가 무너진다.
 > 상세 설계·발표 Q&A는 노션 "AI 파이프라인 v3.3" 참고.

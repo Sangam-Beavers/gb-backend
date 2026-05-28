@@ -50,6 +50,7 @@
 | 커뮤니티 | [`community/`](./community/) | `/community` |
 
 추가로 AI 서류 분석 폴더에는 AWS 계정 B에서 도는 분석 파이프라인 상세가 별도로 있습니다: [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md)
+그리고 분석 결과를 본 사용자의 **후속 질문 챗봇 + MCP** 통합 설계: [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md)
 
 ---
 
@@ -71,8 +72,9 @@
 Claude Code가 반드시 지켜야 하는 프로젝트 차원의 결정입니다.
 
 - **충전/출금 구현 = 수준 2 (Mock API).** 실제 PG/은행 연동 대신 동일 인터페이스의 외부 Mock 은행 서버(Beaver/Quokka Bank)로 처리한다. 본체는 `BankClient` 인터페이스로 호출하고 실서비스 전환 시 URL/구현체만 교체. 충전은 `withdrawal`(외부계좌 차감), 현금화는 `payout`(외부계좌 증액). 계좌 인증 시 받은 `account_token`을 `bank_accounts.mock_account_token`에 저장해 충전 때 사용. 상세 연동·에러 매핑: [`remittance/api-spec.md`](./remittance/api-spec.md) §13.
-- **AI 분석 결과 저장 = MySQL `document_results`에 직접 저장. DynamoDB 미사용.** 결과는 **요청 출처(`source` 필드)에 따라 한 경로로만** 저장된다 — 운영기 요청(source="production")은 SQS→계정 A Aurora MySQL, 개발기 요청(source="development")은 Lambda B→EC2(HAProxy)→WireGuard→온프렘 개발기 MySQL 직접 INSERT. **양쪽 동시 저장이 아니라 요청한 환경으로만 결과가 돌아간다.** (개발기 온프렘 MySQL / 운영·스테이징 Aurora MySQL 공통 스키마)
-- **법령 RAG 벡터 DB = Amazon S3 Vectors (계정 B).** 이전 Aurora PostgreSQL+pgvector에서 전환. AI VPC는 퍼블릭 + 프라이빗(=관리 서브넷) 2티어이며 DB 서브넷이 없다. 상세: [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md).
+- **AI 분석 결과 저장 = MySQL `document_results`에 직접 저장. (분석 결과 한정) DynamoDB 미사용.** 결과는 **요청 출처(`source` 필드)에 따라 한 경로로만** 저장된다 — 운영기 요청(source="production")은 SQS→계정 A Aurora MySQL, 개발기 요청(source="development")은 Lambda B→EC2(HAProxy)→WireGuard→온프렘 개발기 MySQL 직접 INSERT. **양쪽 동시 저장이 아니라 요청한 환경으로만 결과가 돌아간다.** (개발기 온프렘 MySQL / 운영·스테이징 Aurora MySQL 공통 스키마)
+- **후속 질문 챗봇 = 신규 추가 (기존 분석 흐름 무변경, "추가만").** 결과 화면 하단에 채팅 영역 1개 + `POST /api/v1/documents/{id}/chat` 1개만 추가한다. 대화기록은 분석 결과와 별개 워크로드라 **계정 B DynamoDB(`chat_sessions`, TTL 90일) + Redis 캐시(30분)** 를 신규 도입한다 — 위 "분석 결과 DynamoDB 미사용" 원칙과 저장 대상이 달라 충돌하지 않는다. 챗봇은 동기 + SSE 스트리밍, 권한 검증은 백엔드(Spring 2차 인가), 신규 에러코드 없음(기존 `COMMON4011/4031`, `DOCUMENT4001` 재사용). 상세: [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md).
+- **법령 RAG = Bedrock Knowledge Bases로 통일 (백엔드 저장소 = Amazon S3 Vectors, 계정 B).** 분석 파이프라인과 챗봇 **양쪽 모두** 법령 검색을 KB `retrieve`로 호출한다(검색 코드 일원화). KB가 검색을 오케스트레이션하고 벡터는 S3 Vectors에 저장된다 — S3 Vectors는 빠지지 않고 KB 아래에 깔린다. AI VPC는 퍼블릭 + 프라이빗(=관리 서브넷) 2티어이며 DB 서브넷이 없다. 상세: [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md), [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md).
 - **회원 식별자 보안 원칙** — `users.id`(BIGINT 순번)는 member 도메인 경계를 벗어나지 않는다. 도메인 밖에는 `user_public_id`(UUID)만 노출/전파한다.
 - **금액·환율은 JSON `string` 십진수로 전송**한다. `number`(float) 금지. (표시용 수치 — 등락률·OCR 신뢰도 등 — 만 예외적으로 number 허용)
 - **인증은 현재 미구현.** 본인 식별이 필요한 API는 JWT 추출 대신 `@RequestHeader("X-User-Public-Id")` + TODO로 임시 처리한다. (conventions §14)
@@ -107,6 +109,7 @@ docs/
 │   ├── flow.md
 │   ├── api-spec.md
 │   ├── ai-pipeline.md              ← AWS 계정 B 분석 파이프라인 상세
+│   ├── ai-chatbot-mcp.md           ← 후속 질문 챗봇 + MCP 통합 설계 (신규)
 │   └── images/
 └── community/                      ← 커뮤니티
     ├── requirements.md
