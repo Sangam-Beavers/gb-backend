@@ -93,20 +93,28 @@ public class MockBankClient implements BankClient {
 
     /**
      * 4xx/5xx 응답 본문에서 Mock 은행 {@code code}를 꺼내 {@link BankClientException}으로 던진다.
-     * 본문 파싱 실패 시 합성 코드({@code BANK5000})로 폴백.
+     * 본문 파싱 실패 시 합성 코드({@code BANK5000})로 폴백하되 {@code parseEx}는 cause로 보존한다.
+     *
+     * <p>{@link HttpStatus#resolve(int)}로 상태를 변환해 비표준 코드(418/451 등)가 와도 NPE/예외 없이
+     * {@link HttpStatus#INTERNAL_SERVER_ERROR}로 폴백한다 — {@link HttpStatus#valueOf(int)}는
+     * 비표준 코드에서 IllegalArgumentException을 던져 에러 핸들러 자체가 깨질 수 있다.
      */
     private void translateError(HttpRequest request, ClientHttpResponse response) throws IOException {
-        HttpStatusCode status = response.getStatusCode();
+        HttpStatusCode statusCode = response.getStatusCode();
+        HttpStatus resolvedStatus = HttpStatus.resolve(statusCode.value());
+        if (resolvedStatus == null) {
+            resolvedStatus = HttpStatus.INTERNAL_SERVER_ERROR;
+        }
         BankErrorBody errorBody;
         try {
             errorBody = objectMapper.readValue(response.getBody(), BankErrorBody.class);
         } catch (Exception parseEx) {
-            throw new BankClientException("BANK5000", HttpStatus.valueOf(status.value()),
-                    "Mock 은행 에러 응답 파싱 실패");
+            throw new BankClientException("BANK5000", resolvedStatus,
+                    "Mock 은행 에러 응답 파싱 실패", parseEx);
         }
         throw new BankClientException(
                 errorBody.code() != null ? errorBody.code() : "BANK5000",
-                HttpStatus.valueOf(status.value()),
+                resolvedStatus,
                 errorBody.message() != null ? errorBody.message() : "Mock 은행 에러");
     }
 
