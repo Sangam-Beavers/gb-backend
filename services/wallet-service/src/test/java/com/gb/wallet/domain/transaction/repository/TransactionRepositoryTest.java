@@ -1,0 +1,166 @@
+package com.gb.wallet.domain.transaction.repository;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
+
+import com.gb.wallet.domain.transaction.entity.Transaction;
+import com.gb.wallet.domain.wallet.entity.Wallet;
+import com.gb.wallet.global.common.enums.CurrencyType;
+import com.gb.wallet.global.common.enums.TransactionStatus;
+import com.gb.wallet.global.common.enums.TransactionType;
+import com.gb.wallet.global.common.enums.WalletStatus;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase.Replace;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.test.context.ActiveProfiles;
+
+/**
+ * {@link TransactionRepository}의 두 쿼리(메인 GROUP BY + IN-batch currency) 검증.
+ *
+ * <p>인메모리 H2(MySQL 호환 모드)에서 돌린다. {@code application-test.yml}이 datasource를 제공하므로
+ * {@code @AutoConfigureTestDatabase(replace = NONE)}로 자동 교체를 막는다.
+ *
+ * <p>{@code created_at}은 native SQL UPDATE로 직접 박는다. 이유:
+ * <ul>
+ *   <li>같은 Gradle test JVM에서 {@code @SpringBootTest}가 함께 도는 경우
+ *       {@code AuditingEntityListener}가 활성화돼 {@code @PrePersist}에서 {@code @CreatedDate}를
+ *       {@code now()}로 덮어쓴다. reflection으로 미리 세팅해도 무용지물.</li>
+ *   <li>JPA의 {@code updatable=false}는 Hibernate가 UPDATE SQL을 만들지 못하게 막을 뿐
+ *       native SQL UPDATE는 그대로 통과한다.</li>
+ * </ul>
+ * 즉 auditing 활성 여부와 무관하게 안전한 방식.
+ */
+@DataJpaTest
+@ActiveProfiles("test")
+@AutoConfigureTestDatabase(replace = Replace.NONE)
+class TransactionRepositoryTest {
+
+    @Autowired
+    private TestEntityManager em;
+
+    @Autowired
+    private TransactionRepository transactionRepository;
+
+    private Wallet sender;
+    private Wallet linhWallet;
+    private Wallet mariaWallet;
+    private Wallet hieuWallet;
+
+    // 시각은 일 단위로 충분히 벌려서 정렬·필터링 의도를 분명히 한다.
+    private static final LocalDateTime T_LINH_OLD = LocalDateTime.of(2026, 5, 21, 10, 0);
+    private static final LocalDateTime T_MARIA    = LocalDateTime.of(2026, 5, 22, 10, 0);
+    private static final LocalDateTime T_HIEU     = LocalDateTime.of(2026, 5, 23, 10, 0);
+    private static final LocalDateTime T_LINH_MID = LocalDateTime.of(2026, 5, 24, 10, 0);
+    private static final LocalDateTime T_LINH_NEW = LocalDateTime.of(2026, 5, 25, 10, 0);
+    private static final LocalDateTime T_FAILED   = LocalDateTime.of(2026, 5, 26, 10, 0);
+    private static final LocalDateTime T_EXCHANGE = LocalDateTime.of(2026, 5, 26, 11, 0);
+    private static final LocalDateTime T_NULL_RX  = LocalDateTime.of(2026, 5, 26, 12, 0);
+
+    @BeforeEach
+    void setUp() {
+        sender      = persistWallet("sender-uuid");
+        linhWallet  = persistWallet("11111111-1111-1111-1111-111111111111");
+        mariaWallet = persistWallet("22222222-2222-2222-2222-222222222222");
+        hieuWallet  = persistWallet("33333333-3333-3333-3333-333333333333");
+
+        // Linh 3건: 가장 최근(T_LINH_NEW) 통화가 KRW가 되도록. 이전 건은 VND, USD.
+        persistTransfer(sender, linhWallet,  CurrencyType.VND, TransactionType.INTERNAL_TRANSFER, TransactionStatus.COMPLETED, T_LINH_OLD);
+        persistTransfer(sender, linhWallet,  CurrencyType.USD, TransactionType.INTERNAL_TRANSFER, TransactionStatus.COMPLETED, T_LINH_MID);
+        persistTransfer(sender, linhWallet,  CurrencyType.KRW, TransactionType.INTERNAL_TRANSFER, TransactionStatus.COMPLETED, T_LINH_NEW);
+        // Maria 1건(가장 옛날), Hieu 1건(중간).
+        persistTransfer(sender, mariaWallet, CurrencyType.KRW, TransactionType.INTERNAL_TRANSFER, TransactionStatus.COMPLETED, T_MARIA);
+        persistTransfer(sender, hieuWallet,  CurrencyType.KRW, TransactionType.INTERNAL_TRANSFER, TransactionStatus.COMPLETED, T_HIEU);
+
+        // 필터 검증용 노이즈 — 모두 결과에 나오면 안 된다.
+        persistTransfer(sender, linhWallet,  CurrencyType.KRW, TransactionType.INTERNAL_TRANSFER, TransactionStatus.FAILED,    T_FAILED);   // status 필터
+        persistTransfer(sender, mariaWallet, CurrencyType.KRW, TransactionType.EXCHANGE,          TransactionStatus.COMPLETED, T_EXCHANGE); // type 필터
+        persistTransfer(sender, null,        CurrencyType.KRW, TransactionType.INTERNAL_TRANSFER, TransactionStatus.COMPLETED, T_NULL_RX);  // receiverWallet IS NOT NULL 필터
+
+        em.flush();
+        em.clear();
+    }
+
+    @Test
+    @DisplayName("수신자별 최신 송금 1건만, 최근순으로, 노이즈 거래(FAILED/EXCHANGE/receiverNull)는 제외돼 반환된다")
+    void findRecentInternalTransferRecipients_정상_조회() {
+        List<RecentRecipientProjection> result = transactionRepository
+                .findRecentInternalTransferRecipients(sender.getId(), PageRequest.of(0, 10));
+
+        assertThat(result)
+                .as("Linh→Hieu→Maria 3명만 lastTransferredAt DESC 순서로")
+                .extracting(RecentRecipientProjection::getReceiverWalletId,
+                            RecentRecipientProjection::getLastTransferredAt)
+                .containsExactly(
+                        tuple(linhWallet.getId(),  T_LINH_NEW),
+                        tuple(hieuWallet.getId(),  T_HIEU),
+                        tuple(mariaWallet.getId(), T_MARIA));
+    }
+
+    @Test
+    @DisplayName("Linh의 가장 최근 송금 통화는 KRW(T_LINH_NEW) — 이전 VND/USD가 아님")
+    void findCurrencyCodesForLatestTransfers_Linh_가장_최근_통화는_KRW() {
+        List<Long> receiverIds      = List.of(linhWallet.getId(), hieuWallet.getId(), mariaWallet.getId());
+        List<LocalDateTime> stamps  = List.of(T_LINH_NEW, T_HIEU, T_MARIA);
+
+        List<ReceiverCurrencyProjection> result = transactionRepository
+                .findCurrencyCodesForLatestTransfers(sender.getId(), receiverIds, stamps);
+
+        assertThat(result)
+                .as("(receiverWalletId, createdAt, currencyCode) 세 항목이 기대값과 정확 매칭")
+                .extracting(ReceiverCurrencyProjection::getReceiverWalletId,
+                            ReceiverCurrencyProjection::getCreatedAt,
+                            ReceiverCurrencyProjection::getCurrencyCode)
+                .containsExactlyInAnyOrder(
+                        tuple(linhWallet.getId(),  T_LINH_NEW, CurrencyType.KRW),
+                        tuple(hieuWallet.getId(),  T_HIEU,     CurrencyType.KRW),
+                        tuple(mariaWallet.getId(), T_MARIA,    CurrencyType.KRW));
+    }
+
+    // ----- helpers -----
+
+    private Wallet persistWallet(String userPublicId) {
+        Wallet w = Wallet.builder()
+                .publicId(UUID.randomUUID().toString())
+                .userPublicId(userPublicId)
+                .status(WalletStatus.ACTIVE)
+                .build();
+        em.persist(w);
+        return w;
+    }
+
+    /**
+     * 트랜잭션 1건을 영속화한 뒤 native SQL UPDATE로 created_at을 지정 시각으로 덮어쓴다.
+     * (JPA 경로로는 auditing/updatable=false 때문에 통제가 어려움 — 클래스 주석 참고)
+     */
+    private void persistTransfer(Wallet senderWallet, Wallet receiverWallet, CurrencyType currency,
+                                 TransactionType type, TransactionStatus status,
+                                 LocalDateTime createdAt) {
+        Transaction t = Transaction.builder()
+                .publicId(UUID.randomUUID().toString())
+                .wallet(senderWallet)
+                .type(type)
+                .amount(BigDecimal.ONE)
+                .currencyCode(currency)
+                .fee(BigDecimal.ZERO)
+                .status(status)
+                .idempotencyKey(UUID.randomUUID().toString())
+                .receiverWallet(receiverWallet)
+                .build();
+        em.persist(t); // IDENTITY라 INSERT 즉시 실행되어 t.getId() 채워짐
+        em.getEntityManager()
+                .createNativeQuery("UPDATE transactions SET created_at = ?1 WHERE id = ?2")
+                .setParameter(1, createdAt)
+                .setParameter(2, t.getId())
+                .executeUpdate();
+    }
+}

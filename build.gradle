@@ -35,6 +35,12 @@ subprojects {
         annotationProcessor 'org.projectlombok:lombok'
         testImplementation 'org.springframework.boot:spring-boot-starter-test'
     }
+
+    // spring-boot-starter-test가 JUnit 5(Jupiter)를 가져오지만, Gradle test 태스크는
+    // 기본이 JUnit 4 러너라 @Test(Jupiter)를 못 찾는다. JUnit Platform을 명시해야 발견됨.
+    tasks.named('test') {
+        useJUnitPlatform()
+    }
 }
 
 configure(subprojects.findAll { it.path.startsWith(':services') }) {
