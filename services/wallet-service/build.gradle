@@ -15,4 +15,7 @@ dependencies {
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.14'
 
     runtimeOnly 'com.mysql:mysql-connector-j'
+
+    // 테스트 전용 인메모리 DB. spring-boot-starter-test는 루트 build.gradle subprojects에서 이미 적용됨.
+    testRuntimeOnly 'com.h2database:h2'
 }
