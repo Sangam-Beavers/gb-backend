@@ -3,22 +3,30 @@ package com.gb.wallet.domain.transaction.controller;
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
+import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 import com.gb.wallet.domain.transaction.service.TransferService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Transfer", description = "송금 관련 API")
 @RestController
 @RequestMapping("/api/v1/transfers")
 @RequiredArgsConstructor
+// @Validated: 메서드 파라미터(@RequestParam @Email 등)의 Bean Validation을 활성화한다.
+// 위반 시 ConstraintViolationException → GlobalExceptionHandler에서 COMMON4001(400)으로 변환.
+@Validated
 public class TransferController {
 
     private final TransferService transferService;
@@ -49,5 +57,40 @@ public class TransferController {
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
             @RequestHeader("X-User-Public-Id") String userPublicId) {
         return ApiResponse.success(transferService.getRecentInternalRecipients(userPublicId));
+    }
+
+    /** 이메일로 앱 사용자 유효성 검증. 🔒 JWT 필요. */
+    @Operation(
+            summary = "앱 사용자 유효성 검증",
+            description = "송금 화면에서 수취인 이메일로 앱 사용자가 존재하는지 검증한다. "
+                    + "존재하면 receiver_public_id/nickname/is_verified를 반환, 없으면 404 MEMBER4001. "
+                    + "이 API는 본인 식별보다 '대상 회원 검증'이 핵심이지만 인증은 필요하다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "검증 성공. 응답은 공통 ApiResponse로 감싸지며 data에 ValidateMemberResponse가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 이메일 형식 오류/누락.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "MEMBER4001 - 존재하지 않는 회원(해당 이메일의 앱 사용자 없음).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @GetMapping("/validate-member")
+    public ApiResponse<ValidateMemberResponse> validateMember(
+            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더.
+            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @RequestParam @NotBlank @Email String email) {
+        return ApiResponse.success(transferService.validateMember(email));
     }
 }

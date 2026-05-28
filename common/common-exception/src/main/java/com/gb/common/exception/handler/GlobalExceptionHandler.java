@@ -5,6 +5,8 @@ import com.gb.common.exception.CommonErrorCode;
 import com.gb.common.exception.ErrorCode;
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -36,6 +38,23 @@ public class GlobalExceptionHandler {
         ErrorCode errorCode = CommonErrorCode.INVALID_REQUEST;
         String message = resolveValidationMessage(e, errorCode);
         log.warn("Validation failed: code={}, message={}", errorCode.getCode(), message);
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(ApiResponse.fail(errorCode.getCode(), message));
+    }
+
+    /**
+     * {@code @Validated} 컨트롤러의 {@code @RequestParam}/{@code @PathVariable} 검증 실패
+     * → COMMON4001. 첫 violation의 메시지를 우선 노출한다.
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ErrorResponse> handleConstraintViolation(ConstraintViolationException e) {
+        ErrorCode errorCode = CommonErrorCode.INVALID_REQUEST;
+        String message = e.getConstraintViolations().stream()
+                .findFirst()
+                .map(ConstraintViolation::getMessage)
+                .orElse(errorCode.getMessage());
+        log.warn("Constraint violation: code={}, message={}", errorCode.getCode(), message);
         return ResponseEntity
                 .status(errorCode.getHttpStatus())
                 .body(ApiResponse.fail(errorCode.getCode(), message));

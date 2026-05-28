@@ -1,4 +1,7 @@
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // GlobalExceptionHandler가 ConstraintViolationException(@RequestParam/@PathVariable 검증 실패)를
+    // 잡으려면 jakarta.validation API 클래스가 런타임/컴파일 모두 필요하다. starter-validation이 표준 묶음.
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation project(':common:common-response')
 }
