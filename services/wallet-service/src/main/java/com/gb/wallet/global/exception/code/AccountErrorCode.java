@@ -6,8 +6,15 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 
 /**
- * wallet-service 계좌(Account) 도메인 에러 코드. 코드/HTTP/메시지는 API 명세 §11, §12 ACCOUNT 도메인 표를 SSOT로 한다.
- * 번호는 한번 부여하면 재사용·재배치 금지(클라이언트 호환).
+ * wallet-service 계좌(Account) 도메인 에러 코드.
+ *
+ * <p>코드/HTTP/메시지는 API 명세 SSOT를 따른다:
+ * <ul>
+ *   <li>{@code docs/remittance/api-spec.md} §11 — ACCOUNT4001/4002/4004/4005/4006 (계좌 등록 흐름)</li>
+ *   <li>{@code docs/remittance/api-spec.md} §12 — ACCOUNT4003/4007 (충전 흐름)</li>
+ * </ul>
+ *
+ * <p>번호는 한번 부여하면 재사용·재배치 금지(클라이언트 호환).
  */
 @Getter
 @RequiredArgsConstructor
