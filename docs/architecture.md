@@ -50,11 +50,13 @@ Redis                      (분산 락, 캐시, 세션 등)
 | 계정 | 역할 | 주요 리소스 |
 | --- | --- | --- |
 | **계정 A** | 운영 서비스(백엔드) | EKS, Aurora MySQL, ALB, Redis, SQS |
-| **계정 B** | AI 서류 분석 전용 | Lambda(A/B), Bedrock, S3 Vectors(법령 RAG), S3 |
+| **계정 B** | AI 서류 분석 + 후속 챗봇 전용 | Lambda(A/B), **챗봇 Lambda**, Bedrock, **Bedrock Knowledge Bases(법령 RAG)** + S3 Vectors(KB 백엔드), S3, **DynamoDB(챗봇 대화기록)**, **챗봇 전용 Redis** |
 
-분석 작업은 계정 B에서 격리되어 돌아간다. 자세한 파이프라인은 [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md) 참고.
+분석 작업은 계정 B에서 격리되어 돌아간다. 자세한 파이프라인은 [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md), 후속 챗봇은 [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md) 참고.
 
-> ⚠️ **저장 정책 (확정):** AI 분석 결과는 **계정 A의 MySQL `document_results`에 직접 저장**한다. **DynamoDB는 사용하지 않는다.**
+> ⚠️ **저장 정책 (확정):** AI **분석 결과**는 **계정 A의 MySQL `document_results`에 직접 저장**한다. **분석 결과 저장에는 DynamoDB를 사용하지 않는다.**
+> ➕ **단, 챗봇 대화기록은 예외:** 후속 질문 챗봇의 대화기록은 분석 결과와 **무관한 별도 워크로드**라, 계정 B에 **DynamoDB(`chat_sessions`, TTL 90일) + Redis 캐시(TTL 30분)** 로 신규 도입한다. 이는 위 "분석 결과는 MySQL" 원칙과 충돌하지 않는다(저장 대상이 다름). 상세: [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md).
+> ➕ **법령 RAG는 Bedrock Knowledge Bases로 통일:** 분석 파이프라인과 챗봇 **양쪽 모두** 법령 검색을 KB `retrieve`로 호출한다. KB의 벡터 저장소(백엔드)는 S3 Vectors다. 즉 S3 Vectors는 빠지지 않고 KB 아래에 깔린다.
 
 ---
 
@@ -62,11 +64,12 @@ Redis                      (분산 락, 캐시, 세션 등)
 
 MSA의 각 서비스는 도메인 경계로 나뉜다. 현재는 **단일 Aurora 안에 스키마만 분리**한 상태다(물리 분리는 미래 과제).
 
-| 도메인 | 책임 | API prefix |
+> **서비스는 4개다: `member` / `wallet` / `document` / `community`.** 송금(`/transfers`)은 별도 서비스가 아니라 **wallet-service 내부 도메인**이다(주머니·잔액·충전·환전·송금이 한 금융 트랜잭션 경계를 공유하므로 같은 서비스/스키마에 둔다). CLAUDE.md §1·§2의 서비스 목록과 일치한다.
+
+| 도메인(서비스) | 책임 | API prefix |
 | --- | --- | --- |
 | member | 회원/인증/프로필/설정 | `/auth`, `/members` |
-| wallet | 주머니/잔액/거래내역/충전/환전 | `/wallets`, `/exchanges`, `/accounts` |
-| transfer | 송금 | `/transfers` |
+| wallet | 주머니/잔액/거래내역/**송금**/충전/환전 | `/wallets`, `/transfers`, `/exchanges`, `/accounts` |
 | document | AI 서류 분석 | `/documents` |
 | community | 게시글/댓글/신고/온도 | `/community` |
 
@@ -93,8 +96,9 @@ MSA의 각 서비스는 도메인 경계로 나뉜다. 현재는 **단일 Aurora
 
 **계정 A ↔ 계정 B**
 - 서류 분석 결과는 **요청 출처(`source` 필드)에 따라 한 경로로만** 돌아간다(동시 전송 아님). 백엔드가 `POST /documents` 처리 시 `source`(production/development)를 S3 오브젝트 메타데이터에 심고, Lambda B가 이를 보고 분기한다.
-  - **운영기 요청 (source="production"):** 계정 B → **SQS(크로스 계정)** → 계정 A `SqsConsumer` → Aurora MySQL. (API Gateway 29초 타임아웃 회피용 비동기)
+  - **운영기 요청 (source="production"):** 계정 B → **SQS 큐 `gb-analysis-results-prod`(크로스 계정)** → prod `SqsConsumer` → prod Aurora MySQL. (API Gateway 29초 타임아웃 회피용 비동기)
   - **개발기 요청 (source="development"):** 계정 B Lambda B → 계정 B EC2(HAProxy) → **WireGuard 터널** → 온프렘 개발기 MySQL 직접 INSERT.
+  - **스테이징(stage):** 별도 `source` 값은 없이 `source="production"` 계열을 타되, **prod와는 물리적으로 분리된 SQS 큐 `gb-analysis-results-stage`** 로 결과를 받아 **자기 stage Aurora**에 저장한다. 즉 `source` 매핑은 dev→`development`, **stage·prod→`production`**(인프라 계열만 결정)이고, 어느 Aurora로 갈지는 **환경별 큐**가 결정한다. stage/prod 큐가 분리돼 결과가 환경 간 섞이거나 교차 수신되지 않는다(dev는 온프렘 직결로 이미 격리). Consumer 코드는 동일, 구독 큐 이름만 `application-{stage|prod}.yml`로 분리.
   - 개발기/운영기는 완전 분리 — 요청한 환경으로만 결과가 저장된다.
 
 **관리자 접근**

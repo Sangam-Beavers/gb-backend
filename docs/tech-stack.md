@@ -14,7 +14,8 @@
 | 캐시/락 | **Redis** | 분산 락, 멱등성, 세션, 카운터, 캐시 |
 | 인증 | **JWT** | Authentik(개발) / Cognito(운영·스테이징) |
 | 컨테이너 오케스트레이션 | **Kubernetes** | 온프렘(Cilium) / AWS EKS |
-| AI (계정 B) | **AWS Bedrock (Claude)** + **Amazon S3 Vectors** | OCR/분석/번역 + 법령 RAG (서버리스 벡터 검색) |
+| AI (계정 B) | **AWS Bedrock (Claude)** + **Bedrock Knowledge Bases** (법령 RAG, 백엔드 = S3 Vectors) | 분석: OCR/분석/번역 · 후속 챗봇: Tool Use + MCP. 법령 검색은 분석·챗봇 공통으로 KB `retrieve` |
+| 챗봇 대화 저장 (계정 B) | **DynamoDB** (TTL 90일) + **Redis** (TTL 30분 캐시) | 후속 질문 챗봇 전용. 분석 결과(MySQL)와 별개 워크로드 |
 | 메시징 | **SQS** | 계정 B → 계정 A 분석 결과 비동기 전달 |
 
 ---
@@ -64,12 +65,14 @@ Redis 키 네이밍 규칙은 [`database.md`](./database.md)의 Redis 섹션 참
 | 데이터 | 저장소 |
 | --- | --- |
 | 회원/금융/커뮤니티/문서 메타 + AI 분석 결과 | **MySQL 8.0** (Aurora / 온프렘 공통) |
-| 법령 임베딩 벡터 (RAG) | **Amazon S3 Vectors** (계정 B, 서버리스 벡터 검색) |
-| 분산 락/캐시/세션/카운터 | **Redis** |
+| 법령 임베딩 벡터 (RAG) | **Bedrock Knowledge Bases** (검색 레이어) + **Amazon S3 Vectors** (KB 백엔드 저장소, 계정 B) |
+| **챗봇 대화기록** (후속 질문) | **DynamoDB** `chat_sessions` (계정 B, TTL 90일) |
+| 분산 락/캐시/세션/카운터 + **챗봇 세션 캐시** | **Redis** (챗봇은 계정 B 전용 Redis, TTL 30분) |
 | 업로드 원본 파일 (분석 처리 중) | **S3** (계정 B), 처리 후 삭제 |
 
-> ❌ **DynamoDB는 사용하지 않는다.** (이전 설계에서 제거됨. 분석 결과는 MySQL `document_results`에 직접 저장)
-> ✅ **법령 벡터 DB = Amazon S3 Vectors** (이전 Aurora PostgreSQL + pgvector에서 전환). 법령 임베딩은 거의 불변하고 쿼리 빈도가 낮은(저빈도) 워크로드라 S3 Vectors의 "스토리지 우선" 모델에 적합하다. Aurora를 제거함으로써 (1) Lambda↔DB 커넥션 한계(max_connections·RDS Proxy 고민)와 (2) DB 인스턴스 상시 고정비가 함께 사라지고, AI VPC가 **Lambda + VPC 엔드포인트만 있는 순수 서버리스 구조**가 된다. Bedrock Knowledge Bases 네이티브 통합도 가능.
+> ❌ **AI 분석 결과 저장에는 DynamoDB를 사용하지 않는다.** (이전 설계에서 제거됨. 분석 결과는 MySQL `document_results`에 직접 저장)
+> ➕ **단, 챗봇 대화기록은 DynamoDB를 신규 도입한다.** 위 금지는 "분석 결과"에 한정된다. 후속 질문 챗봇의 대화기록은 분석 결과와 다른 **별도 워크로드**(챗봇 Lambda가 매 턴 직접 R/W, 같은 계정 B라 크로스계정 0, SSE 스트리밍과 정합)라 DynamoDB가 적합하다. 둘은 저장 대상이 달라 충돌하지 않는다. 상세: [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md).
+> ✅ **법령 RAG = Bedrock Knowledge Bases로 통일, 백엔드 저장소는 Amazon S3 Vectors.** 분석 파이프라인과 챗봇 **양쪽 모두** 법령 검색을 KB `retrieve`로 호출한다(검색 코드 일원화). KB는 검색 오케스트레이션(청킹·임베딩·질의)을 대신하고, 벡터 자체는 S3 Vectors에 저장된다 — 즉 S3 Vectors는 빠지지 않고 KB 아래에 깔린다. 법령 임베딩은 거의 불변·저빈도 워크로드라 S3 Vectors의 "스토리지 우선" 모델에 적합하다. (S3 Vectors는 **2025-12 정식 출시(GA)**, **서울 리전(ap-northeast-2)** 사용 가능, Bedrock Knowledge Bases 백엔드 통합도 GA — 더 이상 preview 아님. 배포 시 KB 동기화·`retrieve`만 1회 확인 권장.)
 
 ---
 
