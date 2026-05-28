@@ -1,6 +1,9 @@
 spring:
   application:
     name: document-service
+  # 기본 프로파일을 dev로 둔다. 운영/스테이징에서는 SPRING_PROFILES_ACTIVE 환경변수로 덮어쓴다.
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
   # CLAUDE.md §5: JSON 필드는 snake_case. DTO 필드는 camelCase로 두고 전역 변환에 의존.
   jackson:
     property-naming-strategy: SNAKE_CASE

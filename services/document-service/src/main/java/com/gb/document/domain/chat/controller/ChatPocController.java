@@ -2,8 +2,8 @@ package com.gb.document.domain.chat.controller;
 
 import com.gb.document.domain.chat.dto.request.ChatbotPayload;
 import com.gb.document.domain.chat.dto.request.PocChatRequest;
-import com.gb.document.domain.chat.service.ChatStreamListener;
 import com.gb.document.domain.chat.service.ChatbotLambdaClient;
+import com.gb.document.domain.chat.util.SseRelayListener;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,8 +15,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.io.IOException;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -74,44 +72,5 @@ public class ChatPocController {
         CompletableFuture.runAsync(() -> chatbotLambdaClient.streamChat(payload, new SseRelayListener(emitter)));
 
         return emitter;
-    }
-
-    /**
-     * {@link ChatStreamListener} 구현 — Lambda 콜백을 {@link SseEmitter} 이벤트로 중계.
-     * onToken/onDone은 SSE 이벤트로, onError는 emitter.completeWithError로 변환.
-     */
-    private static final class SseRelayListener implements ChatStreamListener {
-        private final SseEmitter emitter;
-
-        SseRelayListener(SseEmitter emitter) {
-            this.emitter = emitter;
-        }
-
-        @Override
-        public void onToken(String text) {
-            try {
-                emitter.send(SseEmitter.event().name("token").data(text));
-            } catch (IOException e) {
-                // 클라이언트가 끊은 경우 등. emitter는 이미 망가졌으므로 completeWithError 안전.
-                emitter.completeWithError(e);
-            }
-        }
-
-        @Override
-        public void onDone(String sessionId) {
-            try {
-                emitter.send(SseEmitter.event()
-                        .name("done")
-                        .data(Map.of("session_id", sessionId)));
-            } catch (IOException ignored) {
-                // 종료 직전이라 무시
-            }
-            emitter.complete();
-        }
-
-        @Override
-        public void onError(Throwable t) {
-            emitter.completeWithError(t);
-        }
     }
 }
