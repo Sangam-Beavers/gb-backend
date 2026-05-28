@@ -21,16 +21,16 @@ final class BankErrorMapper {
     static BusinessException toBusinessException(BankClientException ex) {
         String bankCode = ex.getBankCode();
         if (bankCode == null) {
-            // 타임아웃·연결 실패 등 코드 없음 → 일시 장애로 본다.
-            return new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+            // 타임아웃·연결 실패 등 코드 없음 → 일시 장애로 본다. 원본은 cause로 보존(운영 로그 추적용).
+            return new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE, ex);
         }
         return switch (bankCode) {
-            case "BANK4002" -> new BusinessException(AccountErrorCode.INSUFFICIENT_LINKED_ACCOUNT_BALANCE);
-            case "BANK4040" -> new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND);
-            case "BANK4003" -> new BusinessException(AccountErrorCode.ACCOUNT_VERIFICATION_FAILED);
-            case "BANK4010" -> new BusinessException(AccountErrorCode.UNVERIFIED_ACCOUNT);
-            case "BANK4004" -> new BusinessException(CommonErrorCode.INVALID_REQUEST);
-            default -> new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+            case "BANK4002" -> new BusinessException(AccountErrorCode.INSUFFICIENT_LINKED_ACCOUNT_BALANCE, ex);
+            case "BANK4040" -> new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND, ex);
+            case "BANK4003" -> new BusinessException(AccountErrorCode.ACCOUNT_VERIFICATION_FAILED, ex);
+            case "BANK4010" -> new BusinessException(AccountErrorCode.UNVERIFIED_ACCOUNT, ex);
+            case "BANK4004" -> new BusinessException(CommonErrorCode.INVALID_REQUEST, ex);
+            default -> new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE, ex);
         };
     }
 }

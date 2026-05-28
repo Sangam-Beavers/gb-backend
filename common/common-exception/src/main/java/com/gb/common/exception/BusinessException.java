@@ -15,4 +15,13 @@ public class BusinessException extends RuntimeException {
         super(errorCode.getMessage());
         this.errorCode = errorCode;
     }
+
+    /**
+     * 외부 시스템(은행·결제·AI 분석 등) 어댑터에서 본체 도메인 예외로 변환할 때 사용한다.
+     * 원본 예외를 cause로 보존해 운영 로그·스택트레이스에서 근본 원인을 추적할 수 있도록 한다.
+     */
+    public BusinessException(ErrorCode errorCode, Throwable cause) {
+        super(errorCode.getMessage(), cause);
+        this.errorCode = errorCode;
+    }
 }

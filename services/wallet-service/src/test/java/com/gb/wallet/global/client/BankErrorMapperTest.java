@@ -74,4 +74,14 @@ class BankErrorMapperTest {
                 new BankClientException(null, HttpStatus.SERVICE_UNAVAILABLE, "타임아웃"));
         assertThat(result.getErrorCode()).isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
     }
+
+    @Test
+    @DisplayName("원본 BankClientException이 cause로 보존된다 (운영 로그 추적용)")
+    void map_preservesCause() {
+        BankClientException original = new BankClientException(
+                "BANK4040", HttpStatus.NOT_FOUND, "존재하지 않는 계좌");
+        BusinessException mapped = BankErrorMapper.toBusinessException(original);
+
+        assertThat(mapped.getCause()).isSameAs(original);
+    }
 }
