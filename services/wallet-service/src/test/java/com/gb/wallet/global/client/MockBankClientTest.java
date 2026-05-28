@@ -107,4 +107,32 @@ class MockBankClientTest {
         assertThatThrownBy(() -> client.payout("004", "12345", java.math.BigDecimal.ONE, "VND", "k"))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
+
+    @Test
+    @DisplayName("inquiry: 전역 SNAKE_CASE 설정 없이도 @JsonProperty로 매핑된다")
+    void inquiry_doesNotDependOnGlobalSnakeCaseStrategy() {
+        // 기본(camelCase) ObjectMapper로 RestClient를 구성해도 매핑이 깨지지 않아야 한다.
+        // 위 setUp의 snake_case 케이스는 운영 환경 보장용이고, 이 케이스는 어댑터가
+        // 전역 설정에 의존하지 않음을 별개로 증명한다.
+        ObjectMapper defaultMapper = new ObjectMapper(); // SNAKE_CASE 미설정
+        MappingJackson2HttpMessageConverter converter =
+                new MappingJackson2HttpMessageConverter(defaultMapper);
+        RestClient.Builder builder = RestClient.builder()
+                .baseUrl(BASE_URL)
+                .messageConverters(converters -> {
+                    converters.clear();
+                    converters.add(converter);
+                });
+        MockRestServiceServer localServer = MockRestServiceServer.bindTo(builder).build();
+        MockBankClient localClient = new MockBankClient(builder.build(), defaultMapper);
+
+        localServer.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/inquiry"))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"account_holder_name\":\"홍길동\"}"));
+
+        AccountHolder holder = localClient.inquiry("004", "12345");
+
+        assertThat(holder.accountHolderName()).isEqualTo("홍길동");
+    }
 }

@@ -1,5 +1,6 @@
 package com.gb.wallet.global.client;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.wallet.global.client.dto.AccountHolder;
 import com.gb.wallet.global.client.dto.AccountToken;
@@ -25,6 +26,12 @@ import org.springframework.web.client.RestClient;
  * 후속 이슈에서 구현된다(인터페이스 시그니처는 동결).
  *
  * <p>운영 전환 시 {@code RealBankClient}(@Profile("prod"))가 추가되며 Service 코드는 그대로 둔다.
+ *
+ * <p><b>어댑터 경계 규칙:</b> 외부 시스템과의 wire-format 매핑(아래 private record)은
+ * {@code @JsonProperty}로 <em>명시</em>한다. 본체 응답 DTO와 달리 전역 Jackson 설정
+ * ({@code spring.jackson.property-naming-strategy: SNAKE_CASE})에 의존하지 않는다 —
+ * 외부 계약은 전역 설정 변경에 영향받지 않아야 한다. 후속 PR에서 {@code verify}/{@code withdraw}/
+ * {@code payout}용 wire-format record를 추가할 때도 동일 패턴을 따른다.
  */
 @Component
 @Profile({"dev", "stage"})
@@ -104,13 +111,19 @@ public class MockBankClient implements BankClient {
     }
 
     /**
-     * Mock 은행 inquiry 응답. 필드명은 camelCase로 두고 전역 Jackson 설정
-     * ({@code spring.jackson.property-naming-strategy: SNAKE_CASE})이 {@code account_holder_name}으로 매핑한다.
+     * Mock 은행 inquiry 응답의 wire-format.
+     *
+     * <p>{@code @JsonProperty}로 명시 매핑한다 — 어댑터 경계의 외부 계약은 전역 Jackson 설정
+     * ({@code spring.jackson.property-naming-strategy: SNAKE_CASE})에 의존하지 않는다.
+     * 전역 설정이 바뀌어도 어댑터 동작은 동일해야 한다.
      */
-    private record BankInquiryResponse(String accountHolderName) {
+    private record BankInquiryResponse(
+            @JsonProperty("account_holder_name") String accountHolderName) {
     }
 
-    /** Mock 은행 에러 응답 본문(단일어 키라 스네이크 변환 영향 없음). */
-    private record BankErrorBody(String code, String message) {
+    /** Mock 은행 에러 응답 본문. 단일어 키지만 일관성 위해 명시. */
+    private record BankErrorBody(
+            @JsonProperty("code") String code,
+            @JsonProperty("message") String message) {
     }
 }
