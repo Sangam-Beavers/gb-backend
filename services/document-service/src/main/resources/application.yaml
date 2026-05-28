@@ -1,6 +1,9 @@
 spring:
   application:
     name: document-service
+  # CLAUDE.md §5: JSON 필드는 snake_case. DTO 필드는 camelCase로 두고 전역 변환에 의존.
+  jackson:
+    property-naming-strategy: SNAKE_CASE
 
 server:
   port: 8083
@@ -10,3 +13,12 @@ management:
     web:
       exposure:
         include: health, info
+
+# 챗봇 Lambda Function URL 호출 설정 (ai-chatbot-mcp.md §6).
+# 로컬 PoC: function-url을 localhost mock으로, auth-enabled=false로 두면 IAM 서명 스킵.
+# AWS 배포 후: 실제 Function URL + auth-enabled=true + 백엔드 EC2/EKS의 IAM 역할 사용.
+chatbot:
+  function-url: ${CHATBOT_FUNCTION_URL:http://127.0.0.1:9000/}
+  aws-region: ${CHATBOT_AWS_REGION:ap-northeast-2}
+  auth-enabled: ${CHATBOT_AUTH_ENABLED:false}
+  request-timeout-seconds: 120
