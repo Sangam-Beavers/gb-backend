@@ -2,7 +2,9 @@
 
 > 이 문서는 **Claude Code가 읽는 프로젝트 규칙**이자, **팀원이 참고하는 백엔드 개발 가이드**다.
 > 새 코드를 작성하거나 리뷰할 때 이 규칙을 따른다.
-> 살아있는 예시는 **wallet-service의 전자지갑 잔액 조회**(`GET /api/v1/wallets/me/balances`)다.
+> 살아있는 예시는 **wallet-service의 전자지갑 잔액 조회**(`GET /api/v1/wallets/me/balances`)와
+> **최근 송금 앱 사용자 조회**(`GET /api/v1/transfers/recent-recipients/members`),
+> **앱 사용자 유효성 검증**(`GET /api/v1/transfers/validate-member`)이다.
 > 새 기능을 만들 때 이 레퍼런스의 계층 구조·네이밍·변환 방식을 그대로 따라가면 된다.
 
 ---
@@ -67,6 +69,7 @@ com.gb.{서비스}/
 │           └── response/
 └── global/
     ├── config/        // SecurityConfig, RedisConfig, SwaggerConfig, JpaConfig
+    ├── client/        // 다른 서비스/외부 시스템 호출 인터페이스 + 구현체 (7번 참고)
     ├── exception/
     │   └── code/      // {서비스}ErrorCode.java (ErrorCode 구현)
     ├── redis/
@@ -88,10 +91,17 @@ com.gb.{서비스}/
 - 생성자/빌더에서 필수값 검증(null 등)을 둘 수 있다. 단 검증 실패 예외는 6번 규칙을 따른다.
 - 공통 시각 필드(`createdAt`, `updatedAt`)는 **`BaseEntity`(@MappedSuperclass + JPA Auditing)** 로 분리하고 상속한다.
 - 금액·잔액·환율은 **반드시 `BigDecimal`** (DB는 `DECIMAL(18,4)`). `double`/`float` 금지.
+- DB의 `BIGINT FK` 컬럼은 **같은 서비스(스키마) 내부 참조에 한해** JPA `@ManyToOne`(LAZY, 단방향) 객체로
+  매핑한다(예: `transactions.wallet_id` → `@ManyToOne Wallet`). ERD의 "BIGINT FK" 표기는 DB 레벨 표현이고
+  JPA 코드의 객체 매핑은 관행이며, 둘은 모순이 아니다. 단 MSA 경계를 넘는 참조(`user_public_id` 등)는
+  객체 매핑하지 않는다(7번). 아직 만들지 않은 엔티티를 가리키는 FK는 임시로 원시 `Long` + `// TODO`로 두고
+  해당 엔티티 작성 시 `@ManyToOne`으로 교체한다.
 
 ### Repository
 - `JpaRepository<T, Long>` 상속. 메서드 네이밍 규칙으로 충분하면 `@Query` 쓰지 않는다.
 - 단건 조회는 `Optional`, 목록은 `List` 반환.
+- 그룹핑·집계 등 네이밍으로 어려운 쿼리는 `@Query`(JPQL). 한 쿼리로 잡기 까다로운 보조 데이터는
+  Service에서 추가 조회로 조합해도 된다. 여러 건을 채울 땐 건별 반복(N+1) 대신 `IN` 절 batch를 우선.
 
 ### DTO
 - **Entity → DTO 변환은 `Response.from(entity)` 정적 메서드**.
@@ -132,6 +142,30 @@ com.gb.{서비스}/
 { "success": false, "code": "WALLET4001", "message": "존재하지 않는 지갑입니다." }
 ```
 
+### Swagger 문서화 (SpringDoc)
+- 각 서비스에 `springdoc-openapi-starter-webmvc-ui`를 둔다. **버전은 2.8.14 사용.**
+  - 3.0.x는 Spring Boot 4 전용이라 금지(Boot 3.5와 비호환).
+  - 2.8.15~2.8.17은 `/swagger-ui/**/*swagger-initializer.js` 잘못된 경로 패턴을 등록하는 회귀 버그로
+    기동 실패한다(`spring.mvc.pathmatch.matching-strategy=ant_path_matcher`로도 해결 안 됨).
+    2.8.14가 2.8 계열 마지막 정상 버전. 패치 버전이 나오면 재상향.
+- 컨트롤러: `@Tag`(컨트롤러) + `@Operation`(summary/description) + `@ApiResponses`(주요 응답).
+  - `@ApiResponse`의 `responseCode`에는 **HTTP 상태**("200"/"404"), `description`에 비즈니스 코드와
+    의미(예: "WALLET4001 - 존재하지 않는 지갑")를 적는다. 커스텀 코드를 responseCode 자리에 넣지 않는다.
+- **에러 응답은 ErrorResponse 스키마를 연결한다.** 안 하면 Swagger가 본문을 엉뚱하게(success:true,
+  code:"string") 추측해 그린다.
+  ```java
+  @ApiResponse(responseCode = "404", description = "WALLET4001 - 존재하지 않는 지갑입니다.",
+      content = @Content(mediaType = "application/json",
+          schema = @Schema(implementation = ErrorResponse.class)))
+  ```
+  - `ErrorResponse`(common-response)에는 필드별 `@Schema(example=...)`가 붙어 있어, 위처럼 연결하면
+    실제 예시(success:false, code:"WALLET4001")가 표시된다.
+  - 컨트롤러가 **실제로 던지는 에러만** 문서화한다(ErrorCode 확인, 추측 금지).
+- 응답 DTO 필드에는 `@Schema`로 설명/예시(enum은 allowableValues).
+- 인증 미구현 동안 `X-User-Public-Id` 헤더는 `@RequestHeader` 선언만으로 자동 문서화된다.
+- SecurityConfig에서 `/swagger-ui/**`, `/v3/api-docs/**`는 통과(현재 permitAll이라 자동 통과).
+- UI: `http://localhost:{port}/swagger-ui/index.html`. 서비스별로 뜨며, 통합 뷰는 추후 API Gateway에서.
+
 ---
 
 ## 6. 예외 처리
@@ -144,8 +178,16 @@ com.gb.{서비스}/
   - 같은 의미면 코드 하나로 통일. 번호는 한번 부여하면 재사용·재배치 금지.
   - 서버 측 잘못은 도메인 코드 신설 대신 `COMMON5000` 사용.
   - 인증 실패(JWT 누락/무효)는 `COMMON4011`, 권한 없음은 `COMMON4031` 재사용.
+  - "없는 회원"처럼 명확한 도메인 대상이 있으면 도메인 코드(MEMBER4001 등)를 쓰고, 마땅한 도메인
+    코드가 없을 때만 `COMMON4041`(리소스 없음)을 폴백으로 쓴다.
 - 던져진 예외는 common의 `GlobalExceptionHandler`가 위 실패 Envelope로 변환한다.
-- 입력값 검증은 `@Valid` + Bean Validation. 검증 실패는 `COMMON4001`로 처리됨.
+- **입력값 검증**은 Bean Validation으로 하되, 검증 위치에 따라 예외가 다르다(둘 다 COMMON4001로 처리됨):
+  - DTO `@Valid` (request body) → `MethodArgumentNotValidException`
+  - `@RequestParam`/`@PathVariable`의 제약(`@NotBlank`·`@Email` 등) → `ConstraintViolationException`.
+    이 경우 컨트롤러 클래스에 **`@Validated`** 가 있어야 검증이 활성화된다. 둘 다 GlobalExceptionHandler가
+    COMMON4001(400)로 변환한다(둘은 다른 예외 타입이므로 핸들러도 각각 존재).
+  - 입력 형식 검증은 기본 Bean Validation으로 충분하다. 커스텀 검증 어노테이션은 기본으로 표현 불가능한
+    특수 규칙이 있을 때만 만든다(불필요하게 만들지 말 것).
 
 ---
 
@@ -159,6 +201,20 @@ com.gb.{서비스}/
 - 즉 "경계 넘으면 public_id, 내부는 BIGINT FK".
 
 ### 외부 시스템 연동 (본체 밖 호출)
+
+- **일반 원칙 — `client` 인터페이스 패턴:** 다른 서비스(member 등)나 외부 시스템(은행 등)을 호출할 때는
+  `global/client/` 아래에 **인터페이스를 먼저 정의**하고 구현체를 Profile로 분리한다. Service는
+  인터페이스에만 의존하므로, Mock ↔ 실제 구현을 갈아끼워도 **Service 코드는 바뀌지 않는다.**
+  - 인터페이스 `XxxClient` (예: `MemberClient`, `BankClient`), 응답 DTO는 호출 대상의 응답 형태를 모사.
+  - 구현체: `MockXxxClient`(`@Profile("dev")`) = 미구현/개발용, `RealXxxClient`(`@Profile("!dev")`) = 실제 호출.
+  - **MSA 경계 데이터는 DB 직접 참조 금지.** 다른 서비스의 엔티티/테이블을 직접 SELECT하거나, 회원 정보를
+    자기 스키마에 중복 저장하지 않는다. 반드시 client(=API 호출)로 받는다.
+  - 조회 결과가 "없을 수 있는" 경우, 용도에 따라 반환 정책을 다르게 한다: 표시용 보조 조회는 fallback이
+    편할 수 있으나, **검증(존재 확인) 용도는 `Optional`로 받아 없으면 예외**(예: validate-member → MEMBER4001)로
+    명확히 처리한다. 운영 구현체는 조용한 가짜 데이터보다 fail-fast를 권장(금융 데이터 정합성).
+  - **현재 예시:** `member-service` 미구현이라 `MemberClient` + `MockMemberClient`(고정 데이터)로 처리.
+    member-service 구현 후 `RealMemberClient`(@Profile !dev)만 추가하면 Service 변경 없이 전환된다.
+    진짜 호출 전환 시 건별 호출이 N번 발생할 수 있으므로 batch 조회 API 도입을 검토(`// TODO` 표시).
 - **Mock 은행(충전/현금화):** `wallet-service`는 외부 Mock 은행 서버를 **`BankClient` 인터페이스**로만 호출한다.
   구현체는 Profile로 분리(`MockBankClient`=dev/stage, `RealBankClient`=prod), base URL은 환경변수
   `BANK_API_BASE_URL`로 분리한다. 충전은 `withdrawal`(외부계좌 차감), 현금화는 `payout`(외부계좌 증액).
@@ -201,7 +257,42 @@ com.gb.{서비스}/
 
 ---
 
-## 10. 커밋 · 브랜치
+## 10. 테스트
+
+> 금융 도메인이라 잔액 변경·멱등성 등 핵심 로직은 **반드시 테스트 코드로** 검증한다.
+> 수동 INSERT로 운영/개발기 DB를 검증에 쓰지 않는다(데이터를 더럽히고 반복·자동화가 안 된다).
+
+- **실행 기반:** JUnit5(Jupiter). **루트 `build.gradle`에 `useJUnitPlatform()`이 반드시 있어야** 테스트가
+  실행된다. 없으면 Gradle이 JUnit4 러너로 동작해 `@Test`(Jupiter)를 못 찾고 "No tests found"로 조용히
+  지나가, 테스트가 없는데도 통과처럼 보인다. 루트에 일괄 적용:
+  `subprojects { tasks.named('test') { useJUnitPlatform() } }`.
+- **테스트 DB:** 개발기 DB 사용 금지. **H2 인메모리 + MySQL 호환 모드**를 쓴다.
+  `src/test/resources/application-test.yml`에 `jdbc:h2:mem:testdb;MODE=MySQL`, `ddl-auto: create-drop`,
+  `@ActiveProfiles("test")`.
+  - H2는 MySQL과 방언 차이가 있을 수 있다(복잡한 GROUP BY/함수 등). 현재 최근 송금 조회의
+    GROUP BY + MAX + IN 쿼리는 H2(MySQL 모드)에서 정상 동작 확인됨. 단, **돈을 움직이는 핵심 금융
+    로직**(송금 실행·잔액 차감·멱등성 등)은 추후 **Testcontainers(진짜 MySQL)** 전환을 검토한다.
+- **Repository 테스트(통합):** `@DataJpaTest` + `@ActiveProfiles("test")`
+  + `@AutoConfigureTestDatabase(replace = NONE)`(우리가 지정한 H2를 쓰도록. 안 주면 기본 임베디드로 덮어씀).
+    정렬·그룹핑·중복 제거뿐 아니라 **필터링(제외돼야 할 데이터가 안 나오는지)** 도 검증한다
+    (예: status=FAILED·다른 type·receiver=null 거래는 결과에서 빠져야 함).
+- **Service 테스트(단위):** `@ExtendWith(MockitoExtension.class)` + `@Mock`(Repository/Client) + `@InjectMocks`.
+  DB·스프링 컨텍스트 없이 빠르게 조합 로직·예외(`BusinessException`)·early return을 검증한다.
+  예외/빈 결과 시 불필요한 의존 호출이 없는지 `verify`/`verifyNoInteractions`로 확인한다
+  (예: validate-member가 wallet DB를 안 보는지 검증).
+- **컨텍스트 로딩 테스트:** `@SpringBootTest`는 `@ActiveProfiles("test")` + 외부 의존을 `@MockitoBean`으로
+  가린다(예: `MemberClient`). `@MockBean`은 Boot 3.4부터 deprecated이므로 `@MockitoBean`(Boot 3.5 정식)을 쓴다.
+- **Web 통합 테스트(선택):** 검증·직렬화·예외 핸들러 변환(@RequestParam @Email 위반 → 400 등)처럼
+  웹 계층을 거쳐야 보이는 동작은 단위 테스트로 안 잡힌다. 필요 시 `@WebMvcTest`로 HTTP 요청→응답을 검증한다.
+- **시각 통제 주의:** `@CreatedDate`(JPA Auditing)는 `@PrePersist`에서 값을 무조건 덮어쓴다. 테스트에서
+  `createdAt`을 특정 값으로 고정하려면 **persist 후 native UPDATE**로 설정한다(auditing 활성/비활성 어느
+  쪽에서도 안전). reflection으로 박은 값은 auditing이 켜지면 덮어써져 테스트가 환경 따라 깨진다(flaky).
+- **검증 라이브러리:** AssertJ(`assertThat`)·Mockito는 `spring-boot-starter-test`에 포함(별도 설치 불필요).
+  테스트 메서드명은 한글 가독성을 허용한다.
+
+---
+
+## 11. 커밋 · 브랜치
 
 - 커밋 컨벤션: `Feature` / `Fix` / `Refactor` / `Docs` / `Chore` / `Test` /
   `Build` / `Ci` / `Style` / `Plus`(의존성 추가) / `Minus`(의존성 제거) 등.
@@ -209,17 +300,20 @@ com.gb.{서비스}/
 - 브랜치: `feature/{기능}` → `develop` PR(승인 1명 + CodeRabbit 리뷰) → 머지.
   `main`/`develop`은 force push 금지.
 - `.claude/` 등 로컬 설정 폴더는 커밋하지 않는다(.gitignore 처리).
+- `application-{dev|stage|prod}.yml`(접속 정보)은 git 제외. `application-test.yml`(H2, 비밀 없음)은 커밋한다.
 
 ---
 
-## 11. Claude Code 작업 시 유의
+## 12. Claude Code 작업 시 유의
 
 - 새 기능은 **계층을 끊어서**(엔티티 → repository → DTO → service → controller) 작성하고,
   각 단계마다 `./gradlew :services:{서비스}:compileJava`로 컴파일 검증한다.
 - 파일 **삭제는 임의로 하지 말 것**. 삭제 후보는 목록으로 보고하고 사람이 확인 후 삭제한다.
 - 에러 코드·응답 필드는 추측하지 말고 **명세서를 확인**해서 1:1로 맞춘다.
 - common 모듈 변경은 4개 서비스 전체에 영향을 주므로 신중히. 동작을 바꾸는 변경은
-  팀 합의가 필요하다(안전장치 추가 정도는 가능).
+  팀 합의가 필요하다(안전장치 추가 정도는 가능). common을 변경했으면 PR에 명시한다.
+- 라이브러리/프레임워크 버전은 추측하지 말고 확인한다(특히 Spring Boot 3.5 호환성: SpringDoc 2.8.14 등).
+  호환성 문제가 의심되면 임의로 버전을 바꾸기 전에 원인(이슈/CHANGELOG)을 조사해 보고한다.
 
 ---
 
@@ -233,4 +327,5 @@ com.gb.{서비스}/
     >   (remittance/api-spec.md §13 = Mock 은행 연동, document-analysis/ai-pipeline.md = AI 분석 파이프라인,
     >    document-analysis/ai-chatbot-mcp.md = 후속 질문 챗봇 + MCP 설계)
 > - docs/common-module-integration.md — common 모듈 연동 상세
-> - 레퍼런스 코드 — wallet-service의 잔액 조회(/api/v1/wallets/me/balances) 전 계층
+> - 레퍼런스 코드 — wallet-service의 잔액 조회(/api/v1/wallets/me/balances),
+    >   최근 송금 앱 사용자 조회(/recent-recipients/members), 앱 사용자 유효성 검증(/validate-member) 전 계층 + 테스트

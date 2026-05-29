@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import com.gb.common.exception.BusinessException;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse.RecipientItem;
+import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 import com.gb.wallet.domain.transaction.repository.ReceiverCurrencyProjection;
 import com.gb.wallet.domain.transaction.repository.RecentRecipientProjection;
 import com.gb.wallet.domain.transaction.repository.TransactionRepository;
@@ -21,6 +22,7 @@ import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.MemberInfo;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.WalletStatus;
+import com.gb.wallet.global.exception.code.MemberErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -81,9 +83,9 @@ class TransferServiceTest {
                 .willReturn(List.of(linhWallet, mariaWallet));
 
         given(memberClient.getMember("linh-uuid"))
-                .willReturn(new MemberInfo("linh-uuid",  "Linh",  "VN", true, "GREEN"));
+                .willReturn(new MemberInfo("linh-uuid",  "linh-test@example.com",  "Linh",  "VN", true, "GREEN"));
         given(memberClient.getMember("maria-uuid"))
-                .willReturn(new MemberInfo("maria-uuid", "Maria", "PH", true, "BLUE"));
+                .willReturn(new MemberInfo("maria-uuid", "maria-test@example.com", "Maria", "PH", true, "BLUE"));
 
         RecentRecipientsResponse response =
                 transferService.getRecentInternalRecipients(SENDER_PUBLIC_ID);
@@ -130,6 +132,43 @@ class TransferServiceTest {
 
         assertThat(response.getReceivers()).isEmpty();
         verifyNoInteractions(memberClient);
+    }
+
+    @Test
+    @DisplayName("validateMember 정상: 이메일로 찾은 회원의 publicId/nickname/isVerified가 응답에 매핑된다")
+    void validateMember_정상() {
+        String email = "linh@example.com";
+        MemberInfo linh = new MemberInfo(
+                "11111111-1111-1111-1111-111111111111",
+                email,
+                "Linh",
+                "VN",
+                true,
+                "GREEN");
+        given(memberClient.findByEmail(email)).willReturn(Optional.of(linh));
+
+        ValidateMemberResponse response = transferService.validateMember(email);
+
+        assertThat(response.getReceiverPublicId()).isEqualTo("11111111-1111-1111-1111-111111111111");
+        assertThat(response.getNickname()).isEqualTo("Linh");
+        assertThat(response.isVerified()).isTrue();
+
+        // wallet DB 미접근 검증: wallet/transaction Repository는 호출되면 안 된다.
+        verifyNoInteractions(walletRepository, transactionRepository);
+    }
+
+    @Test
+    @DisplayName("validateMember 없는 회원: MEMBER_NOT_FOUND BusinessException, wallet DB 미접근")
+    void validateMember_없는_회원() {
+        String email = "nobody@example.com";
+        given(memberClient.findByEmail(email)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> transferService.validateMember(email))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
+
+        verifyNoInteractions(walletRepository, transactionRepository);
     }
 
     // ----- helpers -----
