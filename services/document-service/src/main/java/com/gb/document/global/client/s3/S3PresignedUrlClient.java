@@ -24,6 +24,14 @@ public interface S3PresignedUrlClient {
      */
     IssueUrlResult issueUploadUrl(String key, String contentType, Map<String, String> metadata, Duration ttl);
 
-    /** 발급 결과 — URL과 만료 시각(응답 expires_at 그대로 노출). */
-    record IssueUrlResult(String url, Instant expiresAt) {}
+    /**
+     * 발급 결과.
+     *
+     * @param url           Pre-signed PUT URL(응답 upload_url 그대로 노출).
+     * @param signedHeaders 서명에 포함된 헤더(Content-Type, x-amz-meta-*). 업로더는 PUT 시 이 헤더를
+     *                      이름+값까지 그대로 다시 보내야 서명이 일치한다(안 보내면 403). host는 HTTP
+     *                      클라이언트가 자동 설정하므로 제외한다. 응답 upload_headers로 노출.
+     * @param expiresAt     URL 만료 시각(응답 expires_at 그대로 노출).
+     */
+    record IssueUrlResult(String url, Map<String, String> signedHeaders, Instant expiresAt) {}
 }

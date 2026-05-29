@@ -63,7 +63,8 @@ public class DocumentSubmissionServiceImpl implements DocumentSubmissionService 
         S3PresignedUrlClient.IssueUrlResult issued = s3PresignedUrlClient.issueUploadUrl(
                 s3Key, DEFAULT_CONTENT_TYPE, metadata, ttl);
 
-        return SubmissionResponse.forSubmit(document, issued.url(), issued.expiresAt());
+        return SubmissionResponse.forSubmit(
+                document, issued.url(), issued.signedHeaders(), issued.expiresAt());
     }
 
     @Override

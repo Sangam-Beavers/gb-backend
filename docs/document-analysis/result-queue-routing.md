@@ -48,6 +48,11 @@ gb:
 Lambda B는 `source=production`이면 메타데이터의 `result_queue_arn`으로만 결과를 발행한다.
 → Lambda는 환경 매핑 테이블을 가질 필요가 없다(백엔드가 ARN을 통째로 넘김).
 
+> ⚠️ 이 메타데이터(`result_queue_arn` 포함)는 Pre-signed PUT URL의 **서명 헤더**에 들어가므로,
+> 클라이언트는 업로드 시 `POST /documents` 응답의 `upload_headers`(`x-amz-meta-result_queue_arn` 등)를
+> 그대로 PUT에 실어야 한다. 안 보내면 403으로 업로드가 실패해 결과 큐 라우팅 자체가 시작되지 않는다.
+> 상세: `api-spec.md` §1.
+
 ---
 
 ## 3. 수신 시 — 자기 큐만 구독 (코드 동일, 큐 이름만 분리)
