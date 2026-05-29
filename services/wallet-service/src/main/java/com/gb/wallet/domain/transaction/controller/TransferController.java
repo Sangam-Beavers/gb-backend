@@ -2,6 +2,7 @@ package com.gb.wallet.domain.transaction.controller;
 
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
+import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
@@ -13,6 +14,8 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
@@ -150,5 +153,49 @@ public class TransferController {
             // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더 (이 API는 본인 식별을 쓰지 않지만 인증 API라 헤더는 받아둠).
             @RequestHeader("X-User-Public-Id") String userPublicId) {
         return ApiResponse.success(transferService.getSupportedCurrencies());
+    }
+
+    /** 최근 송금 계좌(타행 REMITTANCE) 조회. 🔒 JWT 필요. */
+    @Operation(
+            summary = "최근 송금 계좌 조회",
+            description = "내가 송신자였던 타행 송금(REMITTANCE, COMPLETED) 기록에서 "
+                    + "bank_account별 가장 최근 송금 1건씩, 최근순으로 size건(기본 10, 1~50)을 반환한다. "
+                    + "wallet 도메인 내부 DB만 조회하며 외부 호출 없음. "
+                    + "인증 미구현 상태라 현재는 X-User-Public-Id 헤더로 사용자를 식별한다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "조회 성공. 응답은 공통 ApiResponse로 감싸지며 data에 RecentAccountsResponse가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - size 범위 위반(1~50).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "WALLET4001 - 존재하지 않는 지갑(해당 사용자의 지갑 없음).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "WALLET4001", value = EX_WALLET4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000)))
+    })
+    @GetMapping("/recent-accounts")
+    public ApiResponse<RecentAccountsResponse> getRecentRemittanceAccounts(
+            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더.
+            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(50) Integer size) {
+        return ApiResponse.success(transferService.getRecentRemittanceAccounts(userPublicId, size));
     }
 }
