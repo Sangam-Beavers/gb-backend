@@ -29,7 +29,7 @@ import lombok.NoArgsConstructor;
  */
 @Entity
 @Getter
-@Table(name = "documents")
+@Table(name = "document_submissions")
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Document extends BaseEntity {
 

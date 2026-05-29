@@ -18,11 +18,4 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
      * ChatController가 호출 후 {@code DocumentErrorCode.DOCUMENT_NOT_FOUND}로 던진다.
      */
     Optional<Document> findByPublicId(String publicId);
-
-    /**
-     * 분석 API(이유진)에서 본인 문서만 조회할 때 사용 — 권한검증을 쿼리로 합친 형태.
-     * 없으면 빈 Optional. 호출부는 {@code DocumentErrorCode.DOCUMENT_NOT_FOUND}로 통일 처리한다
-     * (존재하지만 본인 것이 아닐 때도 동일하게 404로 응답 — conventions §9 / api-spec §3 Error 표).
-     */
-    Optional<Document> findByPublicIdAndUserPublicId(String publicId, String userPublicId);
 }
