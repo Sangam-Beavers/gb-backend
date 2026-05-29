@@ -63,7 +63,7 @@ public class AccountController {
             // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
             //       이 API는 사용자별 조회가 아니라 마스터 조회이므로 헤더 값 자체는 사용하지 않는다.
-            @RequestHeader("X-User-Public-Id") String userPublicId) {
+            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId) {
         return ApiResponse.success(supportedBankService.getSupportedBanks());
     }
 
@@ -88,7 +88,7 @@ public class AccountController {
     public ApiResponse<AccountListResponse> getMyAccounts(
             // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            @RequestHeader("X-User-Public-Id") String userPublicId) {
+            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId) {
         return ApiResponse.success(bankAccountService.getMyAccounts(userPublicId));
     }
 
@@ -124,7 +124,7 @@ public class AccountController {
             // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
             //       이 API는 사용자별 조회가 아니라 외부 조회 위임이므로 헤더 값 자체는 사용하지 않는다.
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
             @RequestParam("bankCode") @NotBlank @Size(max = 20) String bankCode,
             @RequestParam("accountNumber") @NotBlank @Size(max = 100) String accountNumber) {
         return ApiResponse.success(holderService.getAccountHolder(bankCode, accountNumber));
@@ -163,7 +163,7 @@ public class AccountController {
             // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
             //       이 API는 외부 인증 위임이므로 헤더 값 자체는 사용하지 않는다.
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
             @Valid @RequestBody VerifyAccountRequest request) {
         return ApiResponse.success(bankAccountService.verifyAccount(request));
     }
@@ -195,7 +195,7 @@ public class AccountController {
     public ApiResponse<AccountResponse> registerAccount(
             // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
             @Valid @RequestBody RegisterAccountRequest request) {
         return ApiResponse.success(bankAccountService.registerAccount(userPublicId, request));
     }
