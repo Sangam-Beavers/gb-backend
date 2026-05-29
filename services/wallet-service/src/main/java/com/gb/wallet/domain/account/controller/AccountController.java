@@ -2,29 +2,36 @@ package com.gb.wallet.domain.account.controller;
 
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
+import com.gb.wallet.domain.account.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.account.dto.response.AccountListResponse;
 import com.gb.wallet.domain.account.dto.response.SupportedBankListResponse;
 import com.gb.wallet.domain.account.service.BankAccountService;
+import com.gb.wallet.domain.account.service.HolderService;
 import com.gb.wallet.domain.account.service.SupportedBankService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Account", description = "계좌/은행 API")
 @RestController
 @RequestMapping("/api/v1/accounts")
 @RequiredArgsConstructor
+@Validated // @RequestParam 등 메서드 파라미터의 @NotBlank/@NotNull 검증을 활성화한다.
 public class AccountController {
 
     private final SupportedBankService supportedBankService;
     private final BankAccountService bankAccountService;
+    private final HolderService holderService;
 
     /** 추가 지원 은행 목록 조회. 🔒 JWT 필요(사용자별 결과 아님 — 마스터 데이터 조회). */
     @Operation(
@@ -73,5 +80,43 @@ public class AccountController {
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
             @RequestHeader("X-User-Public-Id") String userPublicId) {
         return ApiResponse.success(bankAccountService.getMyAccounts(userPublicId));
+    }
+
+    /** 예금주 실명 조회. 🔒 JWT 필요. 외부 Mock 은행 호출만 수행하며 본체 DB는 만지지 않는다. */
+    @Operation(
+            summary = "예금주 실명 조회",
+            description = "은행 코드와 계좌번호로 외부 Mock 은행(Beaver/Quokka Bank)에 조회해 예금주 실명을 가져온다. "
+                    + "계좌 등록(/accounts/verify)을 시작하기 전에 사용자가 입력한 계좌번호의 예금주를 보여주는 용도다. "
+                    + "본체 DB에는 아무것도 쓰지 않는다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "조회 성공. data에 AccountHolderResponse(account_holder_name)가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 요청 값이 올바르지 않습니다. / ACCOUNT4002 - 계좌 인증에 실패했습니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "ACCOUNT4001 - 존재하지 않는 계좌입니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "503",
+                    description = "COMMON5031 - 일시적으로 처리할 수 없습니다(Mock 은행 통신 장애).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @GetMapping("/holder")
+    public ApiResponse<AccountHolderResponse> getAccountHolder(
+            // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
+            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
+            //       이 API는 사용자별 조회가 아니라 외부 조회 위임이므로 헤더 값 자체는 사용하지 않는다.
+            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @RequestParam("bankCode") @NotBlank String bankCode,
+            @RequestParam("accountNumber") @NotBlank String accountNumber) {
+        return ApiResponse.success(holderService.getAccountHolder(bankCode, accountNumber));
     }
 }
