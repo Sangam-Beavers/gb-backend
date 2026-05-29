@@ -2,9 +2,13 @@ package com.gb.wallet.domain.account.controller;
 
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
+import com.gb.wallet.domain.account.dto.request.RegisterAccountRequest;
+import com.gb.wallet.domain.account.dto.request.VerifyAccountRequest;
 import com.gb.wallet.domain.account.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.account.dto.response.AccountListResponse;
+import com.gb.wallet.domain.account.dto.response.AccountResponse;
 import com.gb.wallet.domain.account.dto.response.SupportedBankListResponse;
+import com.gb.wallet.domain.account.dto.response.VerifyAccountResponse;
 import com.gb.wallet.domain.account.service.BankAccountService;
 import com.gb.wallet.domain.account.service.HolderService;
 import com.gb.wallet.domain.account.service.SupportedBankService;
@@ -13,13 +17,19 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Account", description = "계좌/은행 API")
@@ -53,7 +63,7 @@ public class AccountController {
             // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
             //       이 API는 사용자별 조회가 아니라 마스터 조회이므로 헤더 값 자체는 사용하지 않는다.
-            @RequestHeader("X-User-Public-Id") String userPublicId) {
+            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId) {
         return ApiResponse.success(supportedBankService.getSupportedBanks());
     }
 
@@ -78,7 +88,7 @@ public class AccountController {
     public ApiResponse<AccountListResponse> getMyAccounts(
             // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            @RequestHeader("X-User-Public-Id") String userPublicId) {
+            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId) {
         return ApiResponse.success(bankAccountService.getMyAccounts(userPublicId));
     }
 
@@ -114,9 +124,79 @@ public class AccountController {
             // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
             //       이 API는 사용자별 조회가 아니라 외부 조회 위임이므로 헤더 값 자체는 사용하지 않는다.
-            @RequestHeader("X-User-Public-Id") String userPublicId,
-            @RequestParam("bankCode") @NotBlank String bankCode,
-            @RequestParam("accountNumber") @NotBlank String accountNumber) {
+            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
+            @RequestParam("bankCode") @NotBlank @Size(max = 20) String bankCode,
+            @RequestParam("accountNumber") @NotBlank @Size(max = 100) String accountNumber) {
         return ApiResponse.success(holderService.getAccountHolder(bankCode, accountNumber));
+    }
+
+    /** 계좌 인증 요청(외부 Mock 은행 호출 → account_token 발급). 🔒 JWT 필요. 본체 DB 미사용. */
+    @Operation(
+            summary = "계좌 연결 + 자동이체 인증 요청",
+            description = "은행 코드/계좌번호/예금주명으로 외부 Mock 은행에 자동이체 인증을 요청해 "
+                    + "account_token을 발급받는다. 본체 DB에는 아무것도 쓰지 않으며, "
+                    + "이어지는 POST /accounts 호출 시 클라이언트가 이 토큰을 함께 보내야 한다. "
+                    + "실제 자동이체 인증은 미구현(Mock/화면용).")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "인증 성공. data.account_token 반환."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 요청 값이 올바르지 않습니다. / ACCOUNT4002 - 계좌 인증에 실패했습니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "ACCOUNT4001 - 존재하지 않는 계좌입니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "503",
+                    description = "COMMON5031 - 일시적으로 처리할 수 없습니다(Mock 은행 통신 장애).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @PostMapping("/verify")
+    public ApiResponse<VerifyAccountResponse> verifyAccount(
+            // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
+            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
+            //       이 API는 외부 인증 위임이므로 헤더 값 자체는 사용하지 않는다.
+            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
+            @Valid @RequestBody VerifyAccountRequest request) {
+        return ApiResponse.success(bankAccountService.verifyAccount(request));
+    }
+
+    /** 계좌 등록 최종 완료. 🔒 JWT 필요. */
+    @Operation(
+            summary = "계좌 등록 최종 완료",
+            description = "verify에서 발급받은 account_token과 계좌 정보를 받아 bank_accounts에 INSERT한다. "
+                    + "사용자의 첫 등록 계좌는 자동으로 주 계좌(is_primary=true)로 설정된다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "등록 성공. data에 AccountResponse가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 요청 값이 올바르지 않습니다(필수값 누락/지원하지 않는 은행 코드).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409",
+                    description = "ACCOUNT4004 - 이미 등록된 계좌입니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public ApiResponse<AccountResponse> registerAccount(
+            // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
+            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
+            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
+            @Valid @RequestBody RegisterAccountRequest request) {
+        return ApiResponse.success(bankAccountService.registerAccount(userPublicId, request));
     }
 }

@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.gb.common.exception.BusinessException;
 import com.gb.wallet.global.client.dto.AccountHolder;
+import com.gb.wallet.global.client.dto.AccountToken;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -54,14 +55,14 @@ class MockBankClientTest {
     }
 
     @Test
-    @DisplayName("inquiry 200: account_holder_name 매핑 + 요청 본문 검증")
+    @DisplayName("inquiry 200: data.account_holder_name 매핑 + 요청 본문 검증")
     void inquiry_success() {
         server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/inquiry"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(content().json("{\"bank_code\":\"004\",\"account_number\":\"12345\"}"))
                 .andRespond(withStatus(HttpStatus.OK)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .body("{\"account_holder_name\":\"홍길동\"}"));
+                        .body("{\"success\":true,\"data\":{\"account_holder_name\":\"홍길동\"},\"message\":\"ok\"}"));
 
         AccountHolder holder = client.inquiry("004", "12345");
 
@@ -98,14 +99,86 @@ class MockBankClientTest {
     }
 
     @Test
-    @DisplayName("verify/withdraw/payout은 이번 PR에서 미구현 → UnsupportedOperationException")
+    @DisplayName("withdraw/payout은 이번 PR에서 미구현 → UnsupportedOperationException")
     void unimplementedMethods_throwUnsupported() {
-        assertThatThrownBy(() -> client.verify("004", "12345", "홍길동"))
-                .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> client.withdraw("tok", java.math.BigDecimal.ONE, "KRW", "k"))
                 .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> client.payout("004", "12345", java.math.BigDecimal.ONE, "VND", "k"))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    @DisplayName("verify 200: data.account_token 매핑 + 요청 본문(bank_code/account_number/holder_name) 검증")
+    void verify_success() {
+        server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/verify"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().json(
+                        "{\"bank_code\":\"004\",\"account_number\":\"1234567890\",\"holder_name\":\"홍길동\"}"))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"success\":true,\"data\":{\"account_token\":\"tok-abcdef\"},\"message\":\"ok\"}"));
+
+        AccountToken token = client.verify("004", "1234567890", "홍길동");
+
+        assertThat(token.accountToken()).isEqualTo("tok-abcdef");
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("verify 400 BANK4003 → BusinessException(ACCOUNT4002 인증 실패)")
+    void verify_holderMismatch_mappedToAccount4002() {
+        server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/verify"))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK4003\",\"message\":\"예금주 불일치\"}"));
+
+        assertThatThrownBy(() -> client.verify("004", "1234567890", "임꺽정"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.ACCOUNT_VERIFICATION_FAILED);
+    }
+
+    @Test
+    @DisplayName("verify 404 BANK4040 → BusinessException(ACCOUNT4001 없는 계좌)")
+    void verify_accountNotFound_mappedToAccount4001() {
+        server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/verify"))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK4040\",\"message\":\"존재하지 않는 계좌\"}"));
+
+        assertThatThrownBy(() -> client.verify("004", "0000000000", "홍길동"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.ACCOUNT_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("verify 200 + data.account_token 누락 → BusinessException(COMMON5031)")
+    void verify_missingToken_mappedToCommon5031() {
+        // 본문이 빈 객체 → envelope.data() 가 null로 떨어져 BANK5000 합성 후 매핑.
+        server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/verify"))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{}"));
+
+        assertThatThrownBy(() -> client.verify("004", "1234567890", "홍길동"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("verify 5xx → BusinessException(COMMON5031)")
+    void verify_serverError_mappedToCommon5031() {
+        server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/verify"))
+                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK5000\",\"message\":\"Mock 내부 오류\"}"));
+
+        assertThatThrownBy(() -> client.verify("004", "1234567890", "홍길동"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
     }
 
     @Test
@@ -129,10 +202,37 @@ class MockBankClientTest {
         localServer.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/inquiry"))
                 .andRespond(withStatus(HttpStatus.OK)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .body("{\"account_holder_name\":\"홍길동\"}"));
+                        .body("{\"success\":true,\"data\":{\"account_holder_name\":\"홍길동\"},\"message\":\"ok\"}"));
 
         AccountHolder holder = localClient.inquiry("004", "12345");
 
         assertThat(holder.accountHolderName()).isEqualTo("홍길동");
+    }
+
+    @Test
+    @DisplayName("verify: 전역 SNAKE_CASE 설정 없이도 @JsonProperty로 envelope 매핑된다")
+    void verify_doesNotDependOnGlobalSnakeCaseStrategy() {
+        // inquiry와 같은 보장. verify도 envelope({data:{account_token}})이라 어댑터가 전역 Jackson 설정에
+        // 의존하지 않음을 별도 검증한다. inquiry 한 곳만 검증하면 verify가 깨지는 회귀를 못 잡는다.
+        ObjectMapper defaultMapper = new ObjectMapper(); // SNAKE_CASE 미설정
+        MappingJackson2HttpMessageConverter converter =
+                new MappingJackson2HttpMessageConverter(defaultMapper);
+        RestClient.Builder builder = RestClient.builder()
+                .baseUrl(BASE_URL)
+                .messageConverters(converters -> {
+                    converters.clear();
+                    converters.add(converter);
+                });
+        MockRestServiceServer localServer = MockRestServiceServer.bindTo(builder).build();
+        MockBankClient localClient = new MockBankClient(builder.build(), defaultMapper);
+
+        localServer.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/verify"))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"success\":true,\"data\":{\"account_token\":\"tok-xyz\"},\"message\":\"ok\"}"));
+
+        AccountToken token = localClient.verify("004", "1234567890", "홍길동");
+
+        assertThat(token.accountToken()).isEqualTo("tok-xyz");
     }
 }
