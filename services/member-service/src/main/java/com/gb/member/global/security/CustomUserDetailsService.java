@@ -31,8 +31,10 @@ public class CustomUserDetailsService implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
+        // 예외 메시지·로그 어디에도 PII(이메일)를 싣지 않는다. 메시지가 로그·스택트레이스·외부 시스템으로
+        // 전파될 수 있어서다. 어차피 호출 측에서 AUTH4001로 통일 변환되므로 추가 식별자가 필요 없다.
         Member member = memberRepository.findByEmail(email)
-                .orElseThrow(() -> new UsernameNotFoundException("Member not found: " + email));
+                .orElseThrow(() -> new UsernameNotFoundException("Member not found"));
 
         return new User(member.getEmail(), member.getPassword(), Collections.emptyList());
     }
