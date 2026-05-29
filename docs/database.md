@@ -206,6 +206,8 @@
 
 > **MySQL이 (분석) 메타 + 분석 내용을 모두 보관.** **분석 결과 저장에는 DynamoDB 미사용.** (후속 챗봇 대화기록은 별도 워크로드로 계정 B DynamoDB `chat_sessions`에 저장 — [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md). 이 테이블은 계정 B 소관이라 본 스키마 문서 범위 밖.)
 > 분석 처리 흐름은 [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md).
+> **결과 페이로드 ↔ DB 컬럼 매핑 SSOT:** [`document-analysis/result-json-schema-agreement.md`](./document-analysis/result-json-schema-agreement.md) (현재 **v1.1**).
+> v1.1 DDL 변경점(2026-05-29): `document_results`에 `analysis_document_type` 신규, `ocr_confidence` `DECIMAL(5,4)` → `DECIMAL(3,2)`, `s3_masked_key`(VARCHAR(500)) → `masked_file_url`(VARCHAR(512)) 리네임 + 사이즈, `translated_lang` 신규. `document_submissions.status`는 `ANALYZING/COMPLETED/FAILED` 그대로 유지(PARTIAL은 결과 품질 수준 컬럼인 `results.processing_status`에만 존재).
 
 ### `document_submissions`
 > 업로드 ~ 분석 전 메타.
@@ -223,19 +225,22 @@
 
 ### `document_results`
 > 분석 완료 결과 메타 **+ 분석 내용(직접 저장)**. submission과 1:1.
+> 컬럼 ↔ 결과 페이로드 매핑 SSOT: [`document-analysis/result-json-schema-agreement.md`](./document-analysis/result-json-schema-agreement.md) §5 (현재 v1.1).
 
 | 컬럼 | 타입 | 제약 | 설명 |
 | --- | --- | --- | --- |
 | `id` | BIGINT | PK, AI | |
 | `submission_id` | BIGINT | FK → document_submissions.id, UNIQUE, NOT NULL | 스키마 내부 참조 (1:1) |
-| `processing_status` | VARCHAR(20) | NOT NULL | COMPLETED/FAILED/PARTIAL |
-| `overall_risk_level` | VARCHAR(10) | NULL | LOW/MEDIUM/HIGH |
-| `ocr_confidence` | DECIMAL(5,4) | NULL | OCR 신뢰도 (0~1) |
+| `analysis_document_type` | VARCHAR(30) | NOT NULL | LABOR_CONTRACT/PAYSLIP/EMPLOYMENT_CONTRACT. v1.1 신규. submissions 동일 컬럼과 일관(Lambda B 페이로드 1:1) |
+| `processing_status` | VARCHAR(20) | NOT NULL | COMPLETED/FAILED/PARTIAL. submissions.status(진행 상태)와는 별개 — 결과 품질 수준 |
+| `overall_risk_level` | VARCHAR(10) | NULL | LOW/MEDIUM/HIGH. 위험 없음/분석 실패 시 NULL |
+| `ocr_confidence` | DECIMAL(3,2) | NULL | OCR 신뢰도, 범위 [0.00, 1.00] 고정. v1.1 — DECIMAL(5,4)에서 변경 |
 | `wage_summary` | JSON | NULL | 급여 요약 (통화, 월급, 시급, 공제 목록) |
 | `risk_items` | JSON | NULL | 위험 항목 배열 (risk_level, clause, description) |
 | `translated_text` | TEXT | NULL | 번역 전문 |
-| `s3_masked_key` | VARCHAR(500) | NULL | 마스킹본 S3 경로 (조회 시 presigned URL 생성) |
-| `failed_reason` | VARCHAR(255) | NULL | 실패 사유 |
+| `translated_lang` | VARCHAR(8) | NULL | 번역 결과 언어 코드 (ISO 639-1, 데모 `"ko"` 고정). v1.1 신규 |
+| `masked_file_url` | VARCHAR(512) | NULL | 마스킹본 S3 풀 URL(`s3://bucket/key`). 환경별 버킷명이 달라 풀 URL 통째 저장 — 키만 잘라 저장 금지. v1.1 — `s3_masked_key`(VARCHAR(500))에서 컬럼명·사이즈 변경 |
+| `failed_reason` | VARCHAR(255) | NULL | 실패 사유 (FAILED/PARTIAL일 때) |
 | `completed_at` | DATETIME | NULL | 분석 완료 시각 |
 | `created_at` | DATETIME | NOT NULL | |
 | `updated_at` | DATETIME | NOT NULL | |
