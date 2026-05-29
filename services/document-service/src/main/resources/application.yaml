@@ -30,7 +30,7 @@ chatbot:
 # - source: Lambda A가 S3 메타데이터에서 읽어 결과 경로를 분기한다. dev=development(온프렘 직결),
 #   stage/prod=production(SQS 경유). 환경별 application-{env}.yml에서 덮어쓴다.
 # - result-queue-arn: production 계열에서만 S3 메타데이터에 주입. 환경별로 다른 큐를 가리킨다.
-# - request-queue-url: retry 시 Lambda A를 재트리거할 요청 큐. 없으면 publish 스킵.
+# - request-queue-url: retry 시 Lambda A를 재트리거할 요청 큐. 운영(!dev)에서 비어 있으면 retry 시 예외.
 # - upload-bucket: Pre-signed PUT URL이 가리킬 S3 버킷.
 gb:
   analysis:

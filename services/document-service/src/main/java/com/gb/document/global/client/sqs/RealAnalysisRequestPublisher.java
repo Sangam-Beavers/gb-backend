@@ -1,5 +1,7 @@
 package com.gb.document.global.client.sqs;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.document.global.config.AnalysisProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,20 +22,31 @@ public class RealAnalysisRequestPublisher implements AnalysisRequestPublisher {
 
     private final SqsClient sqsClient;
     private final AnalysisProperties properties;
+    private final ObjectMapper objectMapper;
 
     @Override
     public void publishRetry(String documentPublicId, String userPublicId, String s3Key) {
         String queueUrl = properties.requestQueueUrl();
         if (queueUrl == null || queueUrl.isBlank()) {
-            log.warn("[sqs] request-queue-url 미설정 — retry publish 스킵 documentPublicId={}", documentPublicId);
-            return;
+            log.error("[sqs] request-queue-url 미설정 — retry publish 실패 documentPublicId={}", documentPublicId);
+            throw new IllegalStateException(
+                    "request-queue-url 미설정 — retry publish 불가 documentPublicId=" + documentPublicId);
         }
-        String body = """
-                {"document_public_id":"%s","user_public_id":"%s","s3_key":"%s","reason":"retry"}
-                """.formatted(documentPublicId, userPublicId, s3Key);
+        // s3Key에 사용자 파일명(따옴표 가능)이 들어가므로 수동 문자열이 아닌 직렬화로 이스케이프한다.
+        String body;
+        try {
+            body = objectMapper.writeValueAsString(
+                    new RetryMessage(documentPublicId, userPublicId, s3Key, "retry"));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(
+                    "retry 메시지 직렬화 실패 documentPublicId=" + documentPublicId, e);
+        }
         sqsClient.sendMessage(SendMessageRequest.builder()
                 .queueUrl(queueUrl)
                 .messageBody(body)
                 .build());
     }
+
+    /** 분석 요청 큐로 보내는 재시도 메시지. 전역 SNAKE_CASE 전략으로 직렬화된다. */
+    private record RetryMessage(String documentPublicId, String userPublicId, String s3Key, String reason) {}
 }

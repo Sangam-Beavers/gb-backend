@@ -10,7 +10,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *
  * @param source                   "development"(dev 온프렘 직결) 또는 "production"(stage/prod SQS 경유)
  * @param resultQueueArn           production 계열에서만 사용. S3 메타데이터에 주입돼 Lambda A가 결과를 보낼 큐.
- * @param requestQueueUrl          retry 시 Lambda A 재트리거용 요청 큐 URL. 빈 값이면 publish 스킵.
+ * @param requestQueueUrl          retry 시 Lambda A 재트리거용 요청 큐 URL. 운영(!dev)에서 빈 값이면 retry 시 예외.
  * @param uploadBucket             Pre-signed PUT URL이 가리킬 S3 버킷.
  * @param uploadUrlExpiresSeconds  Pre-signed URL 유효시간(초). 기본 600(10분).
  * @param awsRegion                AWS 리전.
