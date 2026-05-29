@@ -1,0 +1,38 @@
+# 테스트 전용 프로파일. @ActiveProfiles("test")로 활성화.
+# 인메모리 H2(MySQL 호환 모드)로 Repository 통합 테스트를 돌린다 — 개발기 DB는 절대 만지지 않는다.
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: true
+    show-sql: true
+  sql:
+    init:
+      mode: never
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+
+# 챗봇 Lambda 설정 — 테스트에서는 실제 호출 없음. @Value 해석용 더미값.
+chatbot:
+  function-url: http://localhost:0/
+  aws-region: ap-northeast-2
+  auth-enabled: false
+  request-timeout-seconds: 5
+
+# 분석 파이프라인 — 테스트는 production 분기를 타지 않도록 development로.
+gb:
+  analysis:
+    source: development
+    result-queue-arn: ""
+    request-queue-url: ""
+    upload-bucket: gb-document-uploads-test
+    upload-url-expires-seconds: 600
+    aws-region: ap-northeast-2
