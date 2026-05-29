@@ -54,4 +54,49 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
             @Param("senderWalletId") Long senderWalletId,
             @Param("receiverWalletIds") List<Long> receiverWalletIds,
             @Param("timestamps") List<LocalDateTime> timestamps);
+
+    /**
+     * 내가 송신자인 REMITTANCE(COMPLETED) 중, bank_account별로 가장 최근 송금 한 건씩
+     * 골라 최근순으로 N건을 반환한다. {@code N}은 {@link Pageable#getPageSize()}로 제어한다.
+     *
+     * <p>표시용 컬럼(amount/currencyCode/receiverName)은 {@link #findAmountsForLatestRemittances}
+     * 보조 IN-batch로 채운다 — INTERNAL_TRANSFER 최근 조회와 동일한 두-단계 패턴.
+     */
+    @Query("""
+            SELECT t.bankAccountId AS bankAccountId,
+                   MAX(t.createdAt) AS lastTransferredAt
+            FROM Transaction t
+            WHERE t.wallet.id = :senderWalletId
+              AND t.type = com.gb.wallet.global.common.enums.TransactionType.REMITTANCE
+              AND t.status = com.gb.wallet.global.common.enums.TransactionStatus.COMPLETED
+              AND t.bankAccountId IS NOT NULL
+            GROUP BY t.bankAccountId
+            ORDER BY MAX(t.createdAt) DESC
+            """)
+    List<RecentAccountProjection> findRecentRemittanceAccounts(
+            @Param("senderWalletId") Long senderWalletId,
+            Pageable pageable);
+
+    /**
+     * 위 결과의 (bankAccountId, lastTransferredAt) 쌍에 정확히 대응하는 행에서
+     * amount/currencyCode/receiverName을 한 쿼리(IN-batch)로 가져온다.
+     * 동일 timestamp 충돌은 Service에서 (bankAccountId, createdAt) 정확 매칭으로 한 번 더 걸러낸다.
+     */
+    @Query("""
+            SELECT t.bankAccountId AS bankAccountId,
+                   t.amount        AS amount,
+                   t.currencyCode  AS currencyCode,
+                   t.receiverName  AS receiverName,
+                   t.createdAt     AS createdAt
+            FROM Transaction t
+            WHERE t.wallet.id = :senderWalletId
+              AND t.type = com.gb.wallet.global.common.enums.TransactionType.REMITTANCE
+              AND t.status = com.gb.wallet.global.common.enums.TransactionStatus.COMPLETED
+              AND t.bankAccountId IN :bankAccountIds
+              AND t.createdAt IN :timestamps
+            """)
+    List<RemittanceAmountProjection> findAmountsForLatestRemittances(
+            @Param("senderWalletId") Long senderWalletId,
+            @Param("bankAccountIds") List<Long> bankAccountIds,
+            @Param("timestamps") List<LocalDateTime> timestamps);
 }

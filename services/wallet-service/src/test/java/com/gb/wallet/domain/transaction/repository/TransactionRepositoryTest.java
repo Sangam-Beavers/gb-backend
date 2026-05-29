@@ -126,6 +126,75 @@ class TransactionRepositoryTest {
                         tuple(mariaWallet.getId(), T_MARIA,    CurrencyType.KRW));
     }
 
+    @Test
+    @DisplayName("REMITTANCE: bank_account별 최신 1건씩 최근순 + 노이즈(FAILED/IT/bankAccountId NULL) 제외")
+    void findRecentRemittanceAccounts_정상_조회() {
+        // REMITTANCE는 receiverWallet=null, bankAccountId=Long으로 분리되므로 별도 데이터를 추가한다.
+        // 기존 @BeforeEach가 만들어 둔 INTERNAL_TRANSFER 거래는 type 필터로 자동 제외된다.
+        long BANK_ACCOUNT_A = 101L;
+        long BANK_ACCOUNT_B = 102L;
+        LocalDateTime T_A_OLD = LocalDateTime.of(2026, 6, 1, 10, 0);
+        LocalDateTime T_A_NEW = LocalDateTime.of(2026, 6, 3, 10, 0); // A의 최신 (KRW 200000)
+        LocalDateTime T_B     = LocalDateTime.of(2026, 6, 2, 10, 0); // B의 유일
+        LocalDateTime T_FAILED   = LocalDateTime.of(2026, 6, 4, 10, 0);
+        LocalDateTime T_NULL_BA  = LocalDateTime.of(2026, 6, 5, 10, 0);
+
+        persistRemittance(sender, BANK_ACCOUNT_A, new java.math.BigDecimal("100000"), CurrencyType.KRW, "김민수", TransactionStatus.COMPLETED, T_A_OLD);
+        persistRemittance(sender, BANK_ACCOUNT_A, new java.math.BigDecimal("200000"), CurrencyType.KRW, "김민수", TransactionStatus.COMPLETED, T_A_NEW);
+        persistRemittance(sender, BANK_ACCOUNT_B, new java.math.BigDecimal("50"),     CurrencyType.USD, "Nguyen", TransactionStatus.COMPLETED, T_B);
+        // 노이즈: FAILED, bankAccountId NULL — 결과에서 제외돼야 함
+        persistRemittance(sender, BANK_ACCOUNT_A, new java.math.BigDecimal("999"), CurrencyType.KRW, "X", TransactionStatus.FAILED,    T_FAILED);
+        persistRemittance(sender, null,           new java.math.BigDecimal("999"), CurrencyType.KRW, "X", TransactionStatus.COMPLETED, T_NULL_BA);
+        em.flush();
+        em.clear();
+
+        List<RecentAccountProjection> result = transactionRepository
+                .findRecentRemittanceAccounts(sender.getId(), PageRequest.of(0, 10));
+
+        assertThat(result)
+                .as("A→B 순서로 (A는 T_A_NEW가 그룹 대표), 노이즈 제외")
+                .extracting(RecentAccountProjection::getBankAccountId,
+                            RecentAccountProjection::getLastTransferredAt)
+                .containsExactly(
+                        tuple(BANK_ACCOUNT_A, T_A_NEW),
+                        tuple(BANK_ACCOUNT_B, T_B));
+    }
+
+    @Test
+    @DisplayName("REMITTANCE: 최신 송금의 amount/currency/receiverName이 IN-batch로 정확 매칭")
+    void findAmountsForLatestRemittances_정상_조회() {
+        long BANK_ACCOUNT_A = 201L;
+        long BANK_ACCOUNT_B = 202L;
+        LocalDateTime T_A_OLD = LocalDateTime.of(2026, 6, 1, 10, 0);
+        LocalDateTime T_A_NEW = LocalDateTime.of(2026, 6, 3, 10, 0);
+        LocalDateTime T_B     = LocalDateTime.of(2026, 6, 2, 10, 0);
+
+        // A에 두 건(OLD 100000 USD / NEW 200000 KRW), B에 한 건(50 USD).
+        // 매칭 대상은 NEW 한 건만이어야 함 (이전 OLD의 USD가 잘못 매칭되면 안 됨).
+        persistRemittance(sender, BANK_ACCOUNT_A, new java.math.BigDecimal("100000"), CurrencyType.USD, "OldHolder", TransactionStatus.COMPLETED, T_A_OLD);
+        persistRemittance(sender, BANK_ACCOUNT_A, new java.math.BigDecimal("200000"), CurrencyType.KRW, "김민수",     TransactionStatus.COMPLETED, T_A_NEW);
+        persistRemittance(sender, BANK_ACCOUNT_B, new java.math.BigDecimal("50"),     CurrencyType.USD, "Nguyen",    TransactionStatus.COMPLETED, T_B);
+        em.flush();
+        em.clear();
+
+        List<RemittanceAmountProjection> result = transactionRepository
+                .findAmountsForLatestRemittances(
+                        sender.getId(),
+                        List.of(BANK_ACCOUNT_A, BANK_ACCOUNT_B),
+                        List.of(T_A_NEW, T_B));
+
+        assertThat(result)
+                .as("(bankAccountId, createdAt, amount(스케일4), currencyCode, receiverName)이 1:1")
+                .extracting(RemittanceAmountProjection::getBankAccountId,
+                            RemittanceAmountProjection::getCreatedAt,
+                            r -> r.getAmount().setScale(4).toPlainString(),
+                            RemittanceAmountProjection::getCurrencyCode,
+                            RemittanceAmountProjection::getReceiverName)
+                .containsExactlyInAnyOrder(
+                        tuple(BANK_ACCOUNT_A, T_A_NEW, "200000.0000", CurrencyType.KRW, "김민수"),
+                        tuple(BANK_ACCOUNT_B, T_B,     "50.0000",     CurrencyType.USD, "Nguyen"));
+    }
+
     // ----- helpers -----
 
     private Wallet persistWallet(String userPublicId) {
@@ -157,6 +226,34 @@ class TransactionRepositoryTest {
                 .receiverWallet(receiverWallet)
                 .build();
         em.persist(t); // IDENTITY라 INSERT 즉시 실행되어 t.getId() 채워짐
+        em.getEntityManager()
+                .createNativeQuery("UPDATE transactions SET created_at = ?1 WHERE id = ?2")
+                .setParameter(1, createdAt)
+                .setParameter(2, t.getId())
+                .executeUpdate();
+    }
+
+    /**
+     * REMITTANCE용 헬퍼: receiverWallet=null, bankAccountId(raw Long) + receiverName + amount/currency 지정.
+     * Transaction.bankAccountId는 현재 원시 Long(@ManyToOne 마이그레이션 전)이라 실제 bank_accounts 행
+     * 없이도 임의 Long으로 안전하게 사용 가능.
+     */
+    private void persistRemittance(Wallet senderWallet, Long bankAccountId, BigDecimal amount,
+                                   CurrencyType currency, String receiverName,
+                                   TransactionStatus status, LocalDateTime createdAt) {
+        Transaction t = Transaction.builder()
+                .publicId(UUID.randomUUID().toString())
+                .wallet(senderWallet)
+                .type(TransactionType.REMITTANCE)
+                .amount(amount)
+                .currencyCode(currency)
+                .fee(BigDecimal.ZERO)
+                .status(status)
+                .idempotencyKey(UUID.randomUUID().toString())
+                .bankAccountId(bankAccountId)
+                .receiverName(receiverName)
+                .build();
+        em.persist(t);
         em.getEntityManager()
                 .createNativeQuery("UPDATE transactions SET created_at = ?1 WHERE id = ?2")
                 .setParameter(1, createdAt)

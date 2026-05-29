@@ -1,6 +1,8 @@
 package com.gb.wallet.domain.transaction.service;
 
+import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
+import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 
 public interface TransferService {
@@ -16,4 +18,16 @@ public interface TransferService {
      * wallet DB는 조회하지 않고 MemberClient만 사용한다.
      */
     ValidateMemberResponse validateMember(String email);
+
+    /**
+     * 지원 통화 목록 조회(KRW/USD/PHP/VND). CurrencyType enum이 SSOT라 DB/외부 호출 없이
+     * enum 순회로 응답을 만든다.
+     */
+    SupportedCurrenciesResponse getSupportedCurrencies();
+
+    /**
+     * "최근 송금 계좌" 조회. 내가 송신자였던 REMITTANCE(COMPLETED) 중 bank_account별로 가장 최근
+     * 1건씩, 최근순으로 size건 반환. size는 1~50, 기본 10. wallet 도메인 내부 DB만 사용한다.
+     */
+    RecentAccountsResponse getRecentRemittanceAccounts(String userPublicId, int size);
 }
