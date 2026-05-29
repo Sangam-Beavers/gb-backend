@@ -9,13 +9,20 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.gb.common.exception.BusinessException;
+import com.gb.wallet.domain.account.entity.Bank;
+import com.gb.wallet.domain.account.entity.BankAccount;
+import com.gb.wallet.domain.account.repository.BankAccountRepository;
+import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
+import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse.AccountItem;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse.RecipientItem;
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse.CurrencyItem;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 import com.gb.wallet.domain.transaction.repository.ReceiverCurrencyProjection;
+import com.gb.wallet.domain.transaction.repository.RecentAccountProjection;
 import com.gb.wallet.domain.transaction.repository.RecentRecipientProjection;
+import com.gb.wallet.domain.transaction.repository.RemittanceAmountProjection;
 import com.gb.wallet.domain.transaction.repository.TransactionRepository;
 import com.gb.wallet.domain.transaction.service.impl.TransferServiceImpl;
 import com.gb.wallet.domain.wallet.entity.Wallet;
@@ -26,6 +33,7 @@ import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.exception.code.MemberErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -50,6 +58,7 @@ class TransferServiceTest {
 
     @Mock private WalletRepository walletRepository;
     @Mock private TransactionRepository transactionRepository;
+    @Mock private BankAccountRepository bankAccountRepository;
     @Mock private MemberClient memberClient;
     @InjectMocks private TransferServiceImpl transferService;
 
@@ -197,6 +206,80 @@ class TransferServiceTest {
         verifyNoInteractions(walletRepository, transactionRepository, memberClient);
     }
 
+    @Test
+    @DisplayName("getRecentRemittanceAccounts 정상: bankAccount + amount/currency/receiverName + 마스킹 결합")
+    void getRecentRemittanceAccounts_정상() {
+        String SENDER = "sender-uuid";
+        Wallet sender = wallet(1L, SENDER);
+        long BANK_ACCOUNT_A = 101L;
+        long BANK_ACCOUNT_B = 102L;
+        LocalDateTime T_A = LocalDateTime.of(2026, 6, 3, 10, 0);
+        LocalDateTime T_B = LocalDateTime.of(2026, 6, 2, 10, 0);
+
+        given(walletRepository.findByUserPublicId(SENDER)).willReturn(Optional.of(sender));
+        given(transactionRepository.findRecentRemittanceAccounts(eq(1L), any(Pageable.class)))
+                .willReturn(List.of(
+                        recentAccount(BANK_ACCOUNT_A, T_A),
+                        recentAccount(BANK_ACCOUNT_B, T_B)));
+        given(transactionRepository.findAmountsForLatestRemittances(
+                eq(1L),
+                eq(List.of(BANK_ACCOUNT_A, BANK_ACCOUNT_B)),
+                eq(List.of(T_A, T_B))))
+                .willReturn(List.of(
+                        remittanceAmount(BANK_ACCOUNT_A, new BigDecimal("200000"), CurrencyType.KRW, "김민수",  T_A),
+                        remittanceAmount(BANK_ACCOUNT_B, new BigDecimal("50"),     CurrencyType.USD, "Nguyen", T_B)));
+        given(bankAccountRepository.findAllByIdIn(List.of(BANK_ACCOUNT_A, BANK_ACCOUNT_B)))
+                .willReturn(List.of(
+                        bankAccount(BANK_ACCOUNT_A, bank("KOOKMIN", "국민은행"), "1234567891111"),
+                        bankAccount(BANK_ACCOUNT_B, bank("ACB",     "ACB Bank"), "987654321")));
+
+        RecentAccountsResponse response = transferService.getRecentRemittanceAccounts(SENDER, 10);
+
+        assertThat(response.getAccounts())
+                .as("순서(A→B) + 모든 필드 매핑 + 마스킹(앞3-****-뒤4) + 금액 string(스케일4) + ISO Z 시각")
+                .extracting(AccountItem::getBankCode,
+                            AccountItem::getBankName,
+                            AccountItem::getAccountNumber,
+                            AccountItem::getAccountHolder,
+                            AccountItem::getCurrencyCode,
+                            AccountItem::getLastAmount,
+                            AccountItem::getLastTransferredAt)
+                .containsExactly(
+                        tuple("KOOKMIN", "국민은행",  "123-****-1111", "김민수",  "KRW", "200000.0000", "2026-06-03T10:00:00Z"),
+                        tuple("ACB",     "ACB Bank", "987-****-4321", "Nguyen", "USD", "50.0000",     "2026-06-02T10:00:00Z"));
+
+        verifyNoInteractions(memberClient);
+    }
+
+    @Test
+    @DisplayName("getRecentRemittanceAccounts 지갑 없음: WALLET4001 + 이후 호출 0회")
+    void getRecentRemittanceAccounts_지갑_없음() {
+        given(walletRepository.findByUserPublicId("unknown")).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> transferService.getRecentRemittanceAccounts("unknown", 10))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_NOT_FOUND);
+
+        verifyNoInteractions(transactionRepository, bankAccountRepository, memberClient);
+    }
+
+    @Test
+    @DisplayName("getRecentRemittanceAccounts 빈 결과: accounts=[] + 보조 조회/BankAccount 미호출")
+    void getRecentRemittanceAccounts_빈_결과() {
+        String SENDER = "sender-uuid";
+        Wallet sender = wallet(1L, SENDER);
+
+        given(walletRepository.findByUserPublicId(SENDER)).willReturn(Optional.of(sender));
+        given(transactionRepository.findRecentRemittanceAccounts(eq(1L), any(Pageable.class)))
+                .willReturn(List.of());
+
+        RecentAccountsResponse response = transferService.getRecentRemittanceAccounts(SENDER, 10);
+
+        assertThat(response.getAccounts()).isEmpty();
+        verifyNoInteractions(bankAccountRepository, memberClient);
+    }
+
     // ----- helpers -----
 
     /** Wallet은 GenerationType.IDENTITY라 단위 테스트에선 id를 reflection으로 직접 박는다. */
@@ -224,5 +307,50 @@ class TransferServiceTest {
             @Override public CurrencyType getCurrencyCode() { return currency; }
             @Override public LocalDateTime getCreatedAt() { return createdAt; }
         };
+    }
+
+    private RecentAccountProjection recentAccount(Long bankAccountId, LocalDateTime time) {
+        return new RecentAccountProjection() {
+            @Override public Long getBankAccountId() { return bankAccountId; }
+            @Override public LocalDateTime getLastTransferredAt() { return time; }
+        };
+    }
+
+    private RemittanceAmountProjection remittanceAmount(Long bankAccountId, BigDecimal amount,
+                                                        CurrencyType currency, String receiverName,
+                                                        LocalDateTime createdAt) {
+        return new RemittanceAmountProjection() {
+            @Override public Long getBankAccountId() { return bankAccountId; }
+            @Override public BigDecimal getAmount() { return amount; }
+            @Override public CurrencyType getCurrencyCode() { return currency; }
+            @Override public String getReceiverName() { return receiverName; }
+            @Override public LocalDateTime getCreatedAt() { return createdAt; }
+        };
+    }
+
+    /** Bank entity는 builder 있음. id는 응답에 안 쓰이므로 reflection 생략. */
+    private Bank bank(String code, String name) {
+        return Bank.builder()
+                .code(code)
+                .name(name)
+                .country("KR")
+                .isDomestic(true)
+                .isActive(true)
+                .build();
+    }
+
+    /** BankAccount entity. id는 Service의 grouping map 키로 쓰이므로 reflection으로 박는다. */
+    private BankAccount bankAccount(Long id, Bank bank, String accountNumber) {
+        BankAccount account = BankAccount.builder()
+                .publicId(UUID.randomUUID().toString())
+                .userPublicId(UUID.randomUUID().toString())
+                .bank(bank)
+                .accountNumber(accountNumber)
+                .isVirtual(false)
+                .isPrimary(false)
+                .isActive(true)
+                .build();
+        ReflectionTestUtils.setField(account, "id", id);
+        return account;
     }
 }
