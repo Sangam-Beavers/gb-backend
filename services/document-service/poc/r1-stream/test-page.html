@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>R1 PoC — Spring SSE 점진 표시 테스트</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+    #output { white-space: pre-wrap; border: 1px solid #ccc; padding: 16px; min-height: 200px;
+              border-radius: 8px; background: #fafafa; }
+    button { padding: 10px 16px; font-size: 14px; border-radius: 6px; border: 1px solid #888;
+             background: #fff; cursor: pointer; }
+    button:hover { background: #f0f0f0; }
+    .meta { color: #888; font-size: 12px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>R1 PoC — SSE 토큰 점진 표시</h1>
+  <p>버튼을 누르면 Spring(8083)을 거쳐 더미 Lambda(또는 mock 9000)에서 토큰이 0.3초 간격으로 흘러옴.
+     화면에 점진적으로 글자가 찍히면 R1 통과.</p>
+  <button id="go">스트리밍 시작</button>
+  <div id="output"></div>
+  <div class="meta" id="meta"></div>
+
+  <script>
+    const out = document.getElementById("output");
+    const meta = document.getElementById("meta");
+    document.getElementById("go").addEventListener("click", async () => {
+      out.textContent = "";
+      meta.textContent = "";
+
+      // fetch + ReadableStream 으로 SSE 수신(POST + body 지원).
+      // EventSource는 GET만 가능해서 PoC에는 fetch 방식이 더 편함.
+      const res = await fetch("http://localhost:8083/api/v1/poc/chat-stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-User-Public-Id": "demo-user",
+        },
+        body: JSON.stringify({
+          message: "베트남 돈으로 얼마야?",
+          user_lang: "ko",
+        }),
+      });
+
+      if (!res.ok) {
+        out.textContent = `[에러] HTTP ${res.status}`;
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE 프레임 단위로 잘라서 처리(\n\n 구분).
+        let idx;
+        while ((idx = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+
+          const lines = frame.split("\n");
+          let event = "message";
+          let data = "";
+          for (const line of lines) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) data += line.slice(5).trimStart();
+          }
+          if (event === "token") {
+            out.textContent += data;
+          } else if (event === "done") {
+            meta.textContent = `완료 — ${data}`;
+            return;
+          }
+        }
+      }
+    });
+  </script>
+</body>
+</html>

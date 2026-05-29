@@ -12,5 +12,12 @@ dependencies {
     implementation 'org.springframework.kafka:spring-kafka'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
 
+    // R1 PoC — Lambda Function URL을 IAM(SigV4)로 서명해 호출하기 위한 AWS SDK v2 auth 모듈.
+    // HTTP 자체는 Java 17 java.net.http.HttpClient로 처리하고, 여기서는 서명 유틸만 사용한다.
+    // BOM으로 버전 통일(다른 AWS 모듈 추가 시에도 동일 BOM 사용).
+    implementation platform('software.amazon.awssdk:bom:2.31.0')
+    implementation 'software.amazon.awssdk:auth'
+    implementation 'software.amazon.awssdk:http-client-spi'
+
     runtimeOnly 'com.mysql:mysql-connector-j'
 }
