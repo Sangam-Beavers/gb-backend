@@ -20,3 +20,9 @@ spring:
   jackson:
     # main과 동일한 전역 규칙(응답 JSON 검증 시 대비).
     property-naming-strategy: SNAKE_CASE
+
+# BankClientConfig가 RestClient 빈 등록 시 사용하는 base URL.
+# 테스트는 외부 Mock 은행을 실제로 호출하지 않지만, @Value 해석을 위해 더미 값을 둔다.
+bank:
+  api:
+    base-url: http://localhost:0

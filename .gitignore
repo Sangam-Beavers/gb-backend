@@ -1,6 +1,5 @@
 .gradle
 build/
-!gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
 .kotlin
@@ -53,6 +52,9 @@ target/
 *.zip
 *.tar.gz
 *.rar
+# *.jar 차단 룰의 예외: Gradle wrapper jar는 반드시 커밋되어야 한다(없으면 ./gradlew가 안 돈다).
+# 화이트리스트(!)는 반드시 차단 룰(*.jar) "뒤"에 와야 우선순위가 살아남는다.
+!gradle/wrapper/gradle-wrapper.jar
 
 # ===========================
 # 환경설정 파일 (절대 올리면 안 됨)
