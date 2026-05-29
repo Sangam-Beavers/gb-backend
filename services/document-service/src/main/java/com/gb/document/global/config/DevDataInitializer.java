@@ -1,6 +1,7 @@
 package com.gb.document.global.config;
 
 import com.gb.document.domain.document.entity.Document;
+import com.gb.document.domain.document.entity.DocumentStatus;
 import com.gb.document.domain.document.repository.DocumentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,12 +44,15 @@ public class DevDataInitializer implements ApplicationRunner {
             log.info("[dev-seed] 데모 문서 이미 존재 — 시드 스킵 (publicId={})", DEMO_DOCUMENT_PUBLIC_ID);
             return;
         }
+        // "이미 분석 끝난 문서로 챗봇이 답변하는 데모" 컨텍스트이므로 COMPLETED로 박는다.
+        // Document.status는 어제 PR(#23)에서 NOT NULL 도입됨 — DDL 강제 시 누락이면 깨지므로 명시.
         Document seeded = Document.builder()
                 .publicId(DEMO_DOCUMENT_PUBLIC_ID)
                 .userPublicId(DEMO_USER_PUBLIC_ID)
+                .status(DocumentStatus.COMPLETED)
                 .build();
         documentRepository.save(seeded);
-        log.info("[dev-seed] 데모 문서 시드 완료 — publicId={} ownerPublicId={}",
-                DEMO_DOCUMENT_PUBLIC_ID, DEMO_USER_PUBLIC_ID);
+        log.info("[dev-seed] 데모 문서 시드 완료 — publicId={} ownerPublicId={} status={}",
+                DEMO_DOCUMENT_PUBLIC_ID, DEMO_USER_PUBLIC_ID, DocumentStatus.COMPLETED);
     }
 }
