@@ -1,5 +1,6 @@
 package com.gb.wallet.global.common.enums;
 
+import java.util.Optional;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
@@ -21,4 +22,20 @@ public enum CurrencyType {
 
     private final String displayName;
     private final String symbol;
+
+    /**
+     * 외부 입력 문자열(예: 요청 본문의 {@code currency_code})을 안전하게 {@link CurrencyType}으로 변환한다.
+     * 미지원 코드면 {@link Optional#empty()}. enum이 도메인-중립적이도록 throw 대신 Optional을 반환해,
+     * 호출 측이 도메인에 맞는 에러(예: {@code TransferErrorCode.UNSUPPORTED_CURRENCY})로 매핑한다.
+     */
+    public static Optional<CurrencyType> fromCode(String code) {
+        if (code == null) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(valueOf(code));
+        } catch (IllegalArgumentException e) {
+            return Optional.empty();
+        }
+    }
 }

@@ -12,9 +12,12 @@ import com.gb.common.exception.BusinessException;
 import com.gb.wallet.domain.account.entity.Bank;
 import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
+import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
+import com.gb.wallet.domain.transaction.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse.AccountItem;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
+import com.gb.wallet.domain.transaction.dto.response.TransferFeeResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse.RecipientItem;
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse.CurrencyItem;
@@ -27,11 +30,15 @@ import com.gb.wallet.domain.transaction.repository.TransactionRepository;
 import com.gb.wallet.domain.transaction.service.impl.TransferServiceImpl;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
+import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.MemberInfo;
+import com.gb.wallet.global.client.dto.AccountHolder;
+import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.exception.code.MemberErrorCode;
+import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -60,6 +67,7 @@ class TransferServiceTest {
     @Mock private TransactionRepository transactionRepository;
     @Mock private BankAccountRepository bankAccountRepository;
     @Mock private MemberClient memberClient;
+    @Mock private BankClient bankClient;
     @InjectMocks private TransferServiceImpl transferService;
 
     private static final String SENDER_PUBLIC_ID = "sender-uuid";
@@ -278,6 +286,105 @@ class TransferServiceTest {
 
         assertThat(response.getAccounts()).isEmpty();
         verifyNoInteractions(bankAccountRepository, memberClient);
+    }
+
+    @Test
+    @DisplayName("getAccountHolder 정상: BankClient.inquiry 결과의 예금주명이 응답에 매핑된다")
+    void getAccountHolder_정상() {
+        given(bankClient.inquiry("KOOKMIN", "123456")).willReturn(new AccountHolder("김민수"));
+
+        AccountHolderResponse response = transferService.getAccountHolder("KOOKMIN", "123456");
+
+        assertThat(response.getAccountHolderName()).isEqualTo("김민수");
+
+        // 이 API가 DB/Member/BankAccount 안 본다는 설계 못 박기.
+        verifyNoInteractions(walletRepository, transactionRepository, bankAccountRepository, memberClient);
+    }
+
+    @Test
+    @DisplayName("getAccountHolder BankClient가 BusinessException(ACCOUNT4001) 던지면 그대로 전파")
+    void getAccountHolder_BankClient_예외_전파() {
+        BusinessException bankFailure = new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND);
+        given(bankClient.inquiry("KOOKMIN", "no-such")).willThrow(bankFailure);
+
+        // Service가 추가 try-catch/변환 없이 동일 인스턴스 그대로 흘려보내는지 검증.
+        assertThatThrownBy(() -> transferService.getAccountHolder("KOOKMIN", "no-such"))
+                .isSameAs(bankFailure);
+
+        verifyNoInteractions(walletRepository, transactionRepository, bankAccountRepository, memberClient);
+    }
+
+    @Test
+    @DisplayName("getTransferFee REMITTANCE KRW 10000 → fee=50.0000, total=10050.0000, fee_currency=KRW")
+    void getTransferFee_REMITTANCE_KRW_정상() {
+        TransferFeeResponse response = transferService.getTransferFee(
+                new TransferFeeRequest("REMITTANCE", "KRW", "10000.0000"));
+
+        assertThat(response.getFee()).isEqualTo("50.0000");
+        assertThat(response.getFeeCurrencyCode()).isEqualTo("KRW");
+        assertThat(response.getTotalDeductAmount()).isEqualTo("10050.0000");
+
+        verifyExternalsNotTouched();
+    }
+
+    @Test
+    @DisplayName("getTransferFee REMITTANCE USD 100 → fee=0.5000, total=100.5000, fee_currency=USD")
+    void getTransferFee_REMITTANCE_USD_정상() {
+        TransferFeeResponse response = transferService.getTransferFee(
+                new TransferFeeRequest("REMITTANCE", "USD", "100.0000"));
+
+        assertThat(response.getFee()).isEqualTo("0.5000");
+        assertThat(response.getFeeCurrencyCode()).isEqualTo("USD");
+        assertThat(response.getTotalDeductAmount()).isEqualTo("100.5000");
+
+        verifyExternalsNotTouched();
+    }
+
+    @Test
+    @DisplayName("getTransferFee INTERNAL_TRANSFER → fee=0.0000, total=amount 그대로")
+    void getTransferFee_INTERNAL_TRANSFER_정상() {
+        TransferFeeResponse response = transferService.getTransferFee(
+                new TransferFeeRequest("INTERNAL_TRANSFER", "KRW", "10000.0000"));
+
+        assertThat(response.getFee()).isEqualTo("0.0000");
+        assertThat(response.getFeeCurrencyCode()).isEqualTo("KRW");
+        assertThat(response.getTotalDeductAmount()).isEqualTo("10000.0000");
+
+        verifyExternalsNotTouched();
+    }
+
+    @Test
+    @DisplayName("getTransferFee 미지원 통화(EUR) → BusinessException(TRANSFER4002)")
+    void getTransferFee_미지원_통화() {
+        TransferFeeRequest req = new TransferFeeRequest("REMITTANCE", "EUR", "10000.0000");
+
+        assertThatThrownBy(() -> transferService.getTransferFee(req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.UNSUPPORTED_CURRENCY);
+
+        verifyExternalsNotTouched();
+    }
+
+    @Test
+    @DisplayName("getTransferFee BigDecimal 정밀도: 10000.5555 × 0.005 = 50.0027775 → HALF_UP scale 4 = 50.0028")
+    void getTransferFee_BigDecimal_정밀도() {
+        TransferFeeResponse response = transferService.getTransferFee(
+                new TransferFeeRequest("REMITTANCE", "KRW", "10000.5555"));
+
+        // 10000.5555 * 0.005 = 50.0027775 → HALF_UP scale 4 → 50.0028
+        assertThat(response.getFee()).isEqualTo("50.0028");
+        // total = 10000.5555 + 50.0028 = 10050.5583
+        assertThat(response.getTotalDeductAmount()).isEqualTo("10050.5583");
+        assertThat(response.getFeeCurrencyCode()).isEqualTo("KRW");
+
+        verifyExternalsNotTouched();
+    }
+
+    /** 이 API가 DB/외부 호출을 안 한다는 설계를 모든 케이스에서 한 줄로 못 박는다. */
+    private void verifyExternalsNotTouched() {
+        verifyNoInteractions(walletRepository, transactionRepository,
+                bankAccountRepository, memberClient, bankClient);
     }
 
     // ----- helpers -----

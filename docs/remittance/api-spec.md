@@ -121,12 +121,28 @@
 | `currency_code` | string | O | KRW/USD/PHP/VND |
 | `amount` | string | O | 송금 금액 (string 십진수) |
 
-**Response 200** — `data`: `fee`(string), `fee_currency_code`(string), `total_deduct_amount`(string, amount+fee)
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `fee` | string | N | 수수료 (string 십진수, 소수점 4자리) |
+| `fee_currency_code` | string | N | 수수료 통화 (송금 통화와 동일) |
+| `total_deduct_amount` | string | N | 총 차감 금액 (amount + fee, string 십진수, 소수점 4자리) |
 
-**Error**: 400 TRANSFER4002 (미지원 통화) / 401 COMMON4011
+**Error**: 400 COMMON4001 (Body 검증 실패) / 400 TRANSFER4002 (미지원 통화) / 401 COMMON4011
+
+### 수수료 정책 (임시 — 실제 정책 확정 시 교체)
+- `INTERNAL_TRANSFER`: 무료 (`fee = 0`)
+- `REMITTANCE`: `amount × 0.5%` (소수점 4자리, `RoundingMode.HALF_UP`)
+- `fee_currency_code`: 송금 통화(`currency_code`)와 동일
+- `total_deduct_amount`: `amount + fee`
+
+**예시:**
+- `REMITTANCE`, `KRW`, `amount=10000.0000` → `fee=50.0000`, `total_deduct_amount=10050.0000`
+- `INTERNAL_TRANSFER`, `KRW`, `amount=10000.0000` → `fee=0.0000`, `total_deduct_amount=10000.0000`
+
+> ⚠️ 위 비율(0.5%)은 명세 확정 전 임시 값이다. 실제 정책 확정 시 정책 테이블/외부 조회로 교체될 수 있다.
 
 > 앱 내 송금(INTERNAL_TRANSFER)은 수수료 무료, 타행(REMITTANCE)은 수수료 발생.
-
 ---
 
 ## 5. 송금 사전 검증

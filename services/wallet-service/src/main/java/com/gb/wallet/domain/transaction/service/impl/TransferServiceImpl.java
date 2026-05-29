@@ -3,8 +3,11 @@ package com.gb.wallet.domain.transaction.service.impl;
 import com.gb.common.exception.BusinessException;
 import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
+import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
+import com.gb.wallet.domain.transaction.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse.AccountItem;
+import com.gb.wallet.domain.transaction.dto.response.TransferFeeResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse.RecipientItem;
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
@@ -18,12 +21,16 @@ import com.gb.wallet.domain.transaction.repository.TransactionRepository;
 import com.gb.wallet.domain.transaction.service.TransferService;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
+import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.MemberInfo;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.util.AccountNumberMasker;
 import com.gb.wallet.global.exception.code.MemberErrorCode;
+import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -44,10 +51,17 @@ public class TransferServiceImpl implements TransferService {
     /** 명세상 고정 10명. 페이지네이션 없음. */
     private static final int RECENT_LIMIT = 10;
 
+    // 송금 수수료 정책 상수.
+    // TODO: 수수료 정책 확정 시 정책 테이블/외부 조회로 교체. 현재 0.5%는 임시 값
+    //       (docs/remittance/api-spec.md §4 참고). 정책 SSOT가 docs라 코드 상수 동기화 주의.
+    private static final BigDecimal REMITTANCE_FEE_RATE = new BigDecimal("0.005");
+    private static final int FEE_SCALE = 4;
+
     private final WalletRepository walletRepository;
     private final TransactionRepository transactionRepository;
     private final BankAccountRepository bankAccountRepository;
     private final MemberClient memberClient;
+    private final BankClient bankClient;
 
     @Override
     public RecentRecipientsResponse getRecentInternalRecipients(String userPublicId) {
@@ -182,5 +196,36 @@ public class TransferServiceImpl implements TransferService {
                 .toList();
 
         return RecentAccountsResponse.of(items);
+    }
+
+    @Override
+    public AccountHolderResponse getAccountHolder(String bankCode, String accountNumber) {
+        // DB 안 보고 외부 Mock 은행만 호출. 외부 에러는 BankErrorMapper가 BusinessException으로 변환해
+        // 던지므로 (BANK4040→ACCOUNT4001, 네트워크 실패→COMMON5031 등) Service에서 try-catch 불필요.
+        return AccountHolderResponse.from(bankClient.inquiry(bankCode, accountNumber));
+    }
+
+    @Override
+    public TransferFeeResponse getTransferFee(TransferFeeRequest request) {
+        // 1) 통화 도메인 검증 — KRW/USD/PHP/VND 외는 TRANSFER4002. (형식 검증은 @Valid 단계에서 끝남)
+        CurrencyType currency = CurrencyType.fromCode(request.currencyCode())
+                .orElseThrow(() -> new BusinessException(TransferErrorCode.UNSUPPORTED_CURRENCY));
+
+        // 2) amount 파싱. @Pattern으로 형식 보장됨(양수 십진수, 소수 4자리 이내).
+        BigDecimal amount = new BigDecimal(request.amount());
+
+        // 3) 송금 방식별 수수료. @Pattern으로 값 보장됨이라 default 분기 불필요.
+        BigDecimal fee = switch (request.transferType()) {
+            case "INTERNAL_TRANSFER" -> BigDecimal.ZERO.setScale(FEE_SCALE, RoundingMode.HALF_UP);
+            case "REMITTANCE" -> amount.multiply(REMITTANCE_FEE_RATE)
+                    .setScale(FEE_SCALE, RoundingMode.HALF_UP);
+            // @Valid가 막아주지만 Java switch는 default를 요구 — 검증 우회 시 내부 오류로 떨어뜨림(→ COMMON5000).
+            default -> throw new IllegalStateException("Unsupported transferType: " + request.transferType());
+        };
+
+        // 4) total = amount + fee. add는 scale = max(scale)을 따르므로 명시 setScale로 4자리 고정.
+        BigDecimal totalDeduct = amount.add(fee).setScale(FEE_SCALE, RoundingMode.HALF_UP);
+
+        return TransferFeeResponse.of(fee, currency, totalDeduct);
     }
 }

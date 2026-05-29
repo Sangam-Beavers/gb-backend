@@ -188,6 +188,10 @@ com.gb.{서비스}/
     COMMON4001(400)로 변환한다(둘은 다른 예외 타입이므로 핸들러도 각각 존재).
   - 입력 형식 검증은 기본 Bean Validation으로 충분하다. 커스텀 검증 어노테이션은 기본으로 표현 불가능한
     특수 규칙이 있을 때만 만든다(불필요하게 만들지 말 것).
+- **enum 변환 검증**: Bean Validation `@Pattern`으로 enum 후보를 박지 말고, Service에서
+    enum 변환 시도 후 실패 시 도메인 ErrorCode로 처리한다 (`@Pattern`은 COMMON4001로 떨어져
+    도메인 의도와 다름). 예: `currency_code` 검증은 Service에서 `CurrencyType.valueOf()`
+    실패 시 `TransferErrorCode.UNSUPPORTED_CURRENCY`(TRANSFER4002) throw.
 
 ---
 
