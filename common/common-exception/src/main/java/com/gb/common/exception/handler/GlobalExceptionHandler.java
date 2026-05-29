@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -55,6 +56,26 @@ public class GlobalExceptionHandler {
                 .map(ConstraintViolation::getMessage)
                 .orElse(errorCode.getMessage());
         log.warn("Constraint violation: code={}, message={}", errorCode.getCode(), message);
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(ApiResponse.fail(errorCode.getCode(), message));
+    }
+
+    /**
+     * 필수 요청 파라미터({@code @RequestParam} required) 누락, 필수 헤더({@code @RequestHeader} required)
+     * 누락, {@code @PathVariable} 누락 등 Spring의 요청 바인딩 자체가 깨지는 케이스 → COMMON4001.
+     *
+     * <p>이 분기가 없으면 입력 누락이 fallback {@link Exception} 핸들러로 떨어져 500으로 응답된다 —
+     * 사용자 측 잘못인데 서버 오류로 보이게 되므로 400으로 통일한다.
+     * {@link MissingServletRequestParameterException}/{@link MissingRequestHeaderException}/
+     * {@link MissingPathVariableException} 등은 모두
+     * {@link ServletRequestBindingException}의 하위 타입이라 한 핸들러로 묶는다.
+     */
+    @ExceptionHandler(ServletRequestBindingException.class)
+    public ResponseEntity<ErrorResponse> handleBindingException(ServletRequestBindingException e) {
+        ErrorCode errorCode = CommonErrorCode.INVALID_REQUEST;
+        String message = e.getMessage() != null ? e.getMessage() : errorCode.getMessage();
+        log.warn("Request binding failed: code={}, message={}", errorCode.getCode(), message);
         return ResponseEntity
                 .status(errorCode.getHttpStatus())
                 .body(ApiResponse.fail(errorCode.getCode(), message));
