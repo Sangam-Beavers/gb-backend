@@ -1,5 +1,6 @@
 package com.gb.wallet.domain.transaction.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -56,7 +57,11 @@ public class RecentRecipientsResponse {
         @Schema(description = "국적 코드", example = "VN")
         private final String nationality;
 
+        // primitive boolean + 필드명 isXxx 조합은 Lombok이 isXxx() 게터를 만들고 Jackson이 'is'를 떼
+        // property를 'verified'로 추출하므로, 전역 SNAKE_CASE 변환을 거쳐도 명세("is_verified")와
+        // 어긋난다. 이 케이스는 @JsonProperty로 명시 고정한다(전역 변환의 사각지대 — 예외적 사용).
         @Schema(description = "회원 인증 배지 여부", example = "true")
+        @JsonProperty("is_verified")
         private final boolean isVerified;
 
         @Schema(description = "이웃 온도 등급", example = "GREEN",

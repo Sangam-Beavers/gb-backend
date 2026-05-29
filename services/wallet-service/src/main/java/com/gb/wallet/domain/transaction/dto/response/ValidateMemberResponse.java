@@ -1,5 +1,6 @@
 package com.gb.wallet.domain.transaction.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.gb.wallet.global.client.MemberInfo;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Builder;
@@ -21,7 +22,11 @@ public class ValidateMemberResponse {
     @Schema(description = "수신자 닉네임", example = "Linh")
     private final String nickname;
 
+    // primitive boolean + 필드명 isXxx 조합은 Lombok이 isXxx() 게터를 만들고 Jackson이 'is'를 떼
+    // property를 'verified'로 추출하므로, 전역 SNAKE_CASE 변환을 거쳐도 명세("is_verified")와
+    // 어긋난다. 이 케이스는 @JsonProperty로 명시 고정한다(전역 변환의 사각지대 — 예외적 사용).
     @Schema(description = "회원 인증 배지 여부", example = "true")
+    @JsonProperty("is_verified")
     private final boolean isVerified;
 
     @Builder
