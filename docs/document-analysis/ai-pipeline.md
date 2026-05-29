@@ -239,6 +239,7 @@ backend mysql_back
 이 파이프라인 자체는 계정 B(AI 담당) 소관이고, **백엔드(공통 코드, 환경별 동일)** 가 구현할 접점은 다음뿐이다.
 
 1. `POST /api/v1/documents` — `document_submissions` INSERT + 계정 B S3 Pre-signed URL 발급. **이때 현재 환경의 `source`(production/development)를 결정해 S3 오브젝트 메타데이터에 심는다.** Lambda가 이 값으로 결과 경로를 분기한다.
+   - ⚠️ **메타데이터는 Pre-signed URL의 서명 헤더(`X-Amz-SignedHeaders`)에 포함**된다(SDK v2 presigner 동작). 따라서 백엔드는 응답에 `upload_headers`(Content-Type + `x-amz-meta-*`)를 함께 내려주고, **클라이언트는 PUT 업로드 시 이 헤더를 이름·값 그대로 전송**해야 메타데이터가 오브젝트에 박힌다(누락/변경 시 403, 분기 자체가 깨짐). 상세: `api-spec.md` §1.
 2. **결과 수신부 (환경에 따라 본인 것만 동작, 환경별 큐 구독)**
    - **운영기(prod):** SQS Consumer — `gb-analysis-results-prod` 큐만 구독. 결과 수신 → `document_submissions.status` 업데이트 + `document_results` INSERT + S3 원본 삭제 트리거.
    - **스테이징(stage):** SQS Consumer — `gb-analysis-results-stage` 큐만 구독(코드는 prod와 동일, 큐 이름만 프로필로 분리) → stage Aurora에 저장.

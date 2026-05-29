@@ -3,6 +3,7 @@ package com.gb.document.global.client.s3;
 import com.gb.document.global.config.AnalysisProperties;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,8 +31,12 @@ public class MockS3PresignedUrlClient implements S3PresignedUrlClient {
         String url = "https://mock-s3.local/%s/%s?X-Amz-MockSignature=dev"
                 .formatted(properties.uploadBucket(), key);
         Instant expiresAt = Instant.now().plus(ttl);
+        // Real 구현과 동일 shape — 업로더가 PUT 시 보내야 할 헤더(Content-Type + x-amz-meta-*).
+        Map<String, String> signedHeaders = new LinkedHashMap<>();
+        signedHeaders.put("Content-Type", contentType);
+        metadata.forEach((k, v) -> signedHeaders.put("x-amz-meta-" + k, v));
         log.info("[mock-s3] presigned PUT 발급 — bucket={} key={} contentType={} metadata={} expires={}",
                 properties.uploadBucket(), key, contentType, metadata, expiresAt);
-        return new IssueUrlResult(url, expiresAt);
+        return new IssueUrlResult(url, signedHeaders, expiresAt);
     }
 }
