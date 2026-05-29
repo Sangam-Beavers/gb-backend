@@ -3,6 +3,8 @@ package com.gb.document.domain.document.entity;
 import com.gb.document.global.common.entity.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -46,9 +48,15 @@ public class Document extends BaseEntity {
     @Column(name = "user_public_id", length = 36, nullable = false)
     private String userPublicId;
 
+    /** 분석 진행 상태. api-spec.md §2 SSOT — ANALYZING/COMPLETED/FAILED. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", length = 20, nullable = false)
+    private DocumentStatus status;
+
     @Builder
-    private Document(String publicId, String userPublicId) {
+    private Document(String publicId, String userPublicId, DocumentStatus status) {
         this.publicId = publicId;
         this.userPublicId = userPublicId;
+        this.status = status;
     }
 }

@@ -1,13 +1,21 @@
-# 결과 JSON 스키마 합의 (v1.0)
+# 결과 JSON 스키마 합의 (v1.1)
 
 > **분석 Lambda B(이유진) → SQS → Consumer(심규보, document-service)** 사이를 잇는 결과 JSON의 합의 정본.
 > 한쪽이 바꾸면 다른 쪽이 깨지는 인터페이스이므로, **변경 시 반드시 공동 합의**한다(아래 §7).
-> 정합성 출처: `CLAUDE.md` §5, `docs/conventions.md` §0/§12, `docs/document-analysis/ai-pipeline.md`, `AI-WORK-SPLIT.md` §3-②.
+> 정합성 출처(우선순위): `docs/document-analysis/api-spec.md` > `docs/conventions.md` §0/§10/§12 > `CLAUDE.md` §5 > `AI-WORK-SPLIT.md` §3-②.
 
-- **합의일**: 2026-05-28
+- **합의일**: 2026-05-28 (v1.0) / 2026-05-29 (v1.1 SSOT 정합)
 - **합의자**: 이유진(분석 파이프라인) / 심규보(챗봇·Consumer)
-- **schema_version**: `1.0` (확정)
-- **개정 이력**: 2026-05-28 — 초안 작성 + 유진 검토 의견 5건 반영(§3 enum 연동 규칙, ocr_confidence DECIMAL(3,2), masked URL 풀 저장, source envelope 분리 등)
+- **schema_version**: `1.1`
+- **개정 이력**:
+  - 2026-05-28 — v1.0 초안 작성 + 유진 검토 의견 5건 반영(§3 enum 연동 규칙, ocr_confidence DECIMAL(3,2), masked URL 풀 저장, source envelope 분리 등)
+  - 2026-05-29 — v1.1 SSOT 정합. api-spec.md / conventions §10과 충돌하던 5건 정리:
+    ① 필드명 `document_type` → `analysis_document_type` (conventions §10 — 도메인별 분리 강제)
+    ② enum 값 `EMPLOYMENT_CONTRACT/LEASE_CONTRACT/OTHER` → `LABOR_CONTRACT/PAYSLIP/EMPLOYMENT_CONTRACT` (api-spec 정본)
+    ③ `processing_status` `PROCESSING` 제거 → `COMPLETED/FAILED/PARTIAL` (결과 페이로드는 분석 완료 후 전송이라 PROCESSING 불가)
+    ④ `overall_risk_level` `NONE` 제거 → `LOW/MEDIUM/HIGH` + nullable(위험 없음=`null`)
+    ⑤ §3-2 연동 규칙도 위 ④에 맞춰 `risk_items=[]`일 때 `overall_risk_level=null`로 변경
+  - 2026-05-29 — v1.1 DB 매핑 정정. `processing_status` 매핑을 `document_submissions.status`에서 `document_results.processing_status`로 정정(v1.0의 매핑 오류). `submissions.status`는 사용자 진행 상태(`ANALYZING/COMPLETED/FAILED`)로 분리 유지. database.md DDL 갱신 완료(`document_results.analysis_document_type` 신규, `ocr_confidence` `DECIMAL(3,2)`, `s3_masked_key` → `masked_file_url`, `translated_lang` 신규).
 
 ---
 
@@ -21,13 +29,13 @@
 
 ---
 
-## 2. 최종 스키마 (v1.0)
+## 2. 최종 스키마 (v1.1)
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "document_public_id": "550e8400-e29b-41d4-a716-446655440000",
-  "document_type": "EMPLOYMENT_CONTRACT",
+  "analysis_document_type": "LABOR_CONTRACT",
   "processing_status": "COMPLETED",
   "overall_risk_level": "HIGH",
   "ocr_confidence": 0.92,
@@ -48,11 +56,32 @@
   ],
   "translated_text": "...",
   "translated_lang": "ko",
-  "masked_file_url": "s3://gb-document-masked-prod/2026-05-28/abc.png",
+  "masked_file_url": "s3://gb-document-masked-prod/2026-05-29/abc.png",
   "failed_reason": null,
-  "completed_at": "2026-05-28T09:00:00Z"
+  "completed_at": "2026-05-29T09:00:00Z"
 }
 ```
+
+**위험 없음 예시(`overall_risk_level=null` + `risk_items=[]`):**
+```json
+{
+  "overall_risk_level": null,
+  "risk_items": []
+}
+```
+
+**PARTIAL 예시(텍스트 추출 OK + 번역 실패):**
+```json
+{
+  "processing_status": "PARTIAL",
+  "failed_reason": "번역 단계 실패: Bedrock translation timeout",
+  "translated_text": "",
+  "translated_lang": "ko",
+  "wage_summary": { "currency_code": "KRW", "monthly_wage": "2000000", "hourly_wage": null, "deductions": [] },
+  "risk_items": [ ... ]
+}
+```
+PARTIAL은 **일부 성공** — 가용한 데이터만 채우고, 실패한 단계는 빈/`null` 표현 + `failed_reason`에 사유 명시.
 
 ---
 
@@ -60,11 +89,11 @@
 
 | 필드 | 타입 | 필수 | 비고 |
 | --- | --- | --- | --- |
-| `schema_version` | string | O | 현재 `"1.0"` 고정. 변경 시 §7 절차. |
+| `schema_version` | string | O | 현재 `"1.1"` 고정. 변경 시 §7 절차. |
 | `document_public_id` | string(UUID) | O | **correlation key**. Consumer가 update할 row 식별. SQS envelope에도 동일 값 넣어 이중 안전. |
-| `document_type` | enum | O | `EMPLOYMENT_CONTRACT` / `LEASE_CONTRACT` / `OTHER`. 데모는 `EMPLOYMENT_CONTRACT`만 사용. |
-| `processing_status` | enum | O | `COMPLETED` / `FAILED` / `PROCESSING`. |
-| `overall_risk_level` | enum | O | `HIGH` / `MEDIUM` / `LOW` / `NONE`. `risk_items`와 연동 규칙 있음 — §3-2 참조. |
+| `analysis_document_type` | enum | O | `LABOR_CONTRACT` / `PAYSLIP` / `EMPLOYMENT_CONTRACT`. conventions §10 — `document_type` 단일 필드명 금지(신분증과 구분). 데모는 `LABOR_CONTRACT`만 사용. |
+| `processing_status` | enum | O | `COMPLETED` / `FAILED` / `PARTIAL`. PARTIAL은 일부 단계만 성공한 케이스(§2 PARTIAL 예시). |
+| `overall_risk_level` | enum \| null | O | `LOW` / `MEDIUM` / `HIGH` 또는 `null`. `risk_items`와 연동 규칙 있음 — §3-2 참조. |
 | `ocr_confidence` | number | O | 표시용 float, **범위 [0.00, 1.00]로 고정**(백분율 형태 금지). conventions §0 예외. DB는 `DECIMAL(3,2)`. 양쪽 모두 출력/입력 시 범위 검증. |
 | `wage_summary` | object | O | 아래 §3-1. 임금 정보 없으면 빈 객체 `{}`가 아니라 모든 하위 필드 `null`. |
 | `risk_items` | array | O | 위험 항목 없으면 빈 배열 `[]` (null 아님). 아래 §3-2. |
@@ -89,16 +118,17 @@
 
 | 필드 | 타입 | 비고 |
 | --- | --- | --- |
-| `risk_level` | enum | `HIGH` / `MEDIUM` / `LOW`. **`NONE` 없음** — "위험 항목" 자체이므로 의미상 NONE은 존재하지 않는다. "위험 없음" 상태는 `risk_items = []`로 표현한다. |
+| `risk_level` | enum | `LOW` / `MEDIUM` / `HIGH`. "위험 항목" 자체라 `null`은 없다. "위험 없음" 상태는 `risk_items = []`로 표현. |
 | `clause` | string | 조항 위치(예: `"제8조"`, `"6.2항"`). 위치 추적 안 되면 `"-"`. |
 | `description` | string | 사용자 노출용 한국어 설명. ~100자 이내 권장. |
 
 **`overall_risk_level` ↔ `risk_items[]` 연동 규칙** (Lambda B 프롬프트에 강제, Consumer는 검증만):
 
-- `risk_items.size() == 0` → `overall_risk_level == "NONE"`
+- `risk_items.size() == 0` → `overall_risk_level == null`
 - `risk_items.size() > 0` → `overall_risk_level == max(risk_items[].risk_level)` (HIGH > MEDIUM > LOW)
 
-> 데모 단계에선 1:1 일관성을 강제한다. 운영 단계에서 "items엔 안 잡혔지만 전체 위험 평가는 존재" 같은 케이스가 필요해지면 그때 규칙을 재검토(§7 절차).
+> `overall_risk_level=null`은 "위험 평가는 정상 완료, 위험 없음"을 뜻한다. 분석 자체가 실패한 경우(`processing_status=FAILED`)에도 `null`이 들어가며, 두 케이스는 `processing_status`로 구분한다. api-spec.md §3 nullable=Y와 의미 일치.
+> 운영 단계에서 "items엔 안 잡혔지만 전체 위험 평가는 존재" 같은 케이스가 필요해지면 §7 절차로 재검토.
 
 ---
 
@@ -125,9 +155,9 @@ Consumer(`document-service`)가 SQS에서 위 JSON을 받으면 다음 대로 IN
 | JSON 필드 | DB 컬럼 | 비고 |
 | --- | --- | --- |
 | `document_public_id` | (correlation — `document_submissions`에서 row 식별) | 직접 컬럼 매핑 아님 |
-| `document_type` | `document_results.document_type` | enum 그대로 |
-| `processing_status` | `document_submissions.status` | enum 그대로 |
-| `overall_risk_level` | `document_results.overall_risk_level` | |
+| `analysis_document_type` | `document_results.analysis_document_type` | enum 그대로. v1.1 — `document_results`에 신규 컬럼 추가(submissions의 동일 컬럼과 페이로드 1:1 일관). database.md 반영 완료. |
+| `processing_status` | `document_results.processing_status` | enum 그대로(`COMPLETED/FAILED/PARTIAL`). **`document_submissions.status`와는 별개 컬럼**(submissions.status는 사용자 진행 상태 `ANALYZING/COMPLETED/FAILED`로 유지). Consumer는 results에 INSERT하면서 submissions.status도 결과에 맞춰 COMPLETED/FAILED로 별도 업데이트. PARTIAL은 submissions에선 COMPLETED로 본다(결과는 받아왔으므로). |
+| `overall_risk_level` | `document_results.overall_risk_level` | nullable. NULL 허용으로 컬럼 정의(VARCHAR(10) NULL). |
 | `ocr_confidence` | `document_results.ocr_confidence` | **`DECIMAL(3,2)`** — 범위 [0.00, 1.00] 고정 |
 | `wage_summary` | `document_results.wage_summary_json` | JSON 컬럼 그대로 저장 |
 | `risk_items` | `document_results.risk_items_json` | JSON 컬럼 그대로 저장 |
@@ -137,8 +167,13 @@ Consumer(`document-service`)가 SQS에서 위 JSON을 받으면 다음 대로 IN
 | `failed_reason` | `document_results.failed_reason` | nullable VARCHAR |
 | `completed_at` | `document_results.completed_at` | DATETIME(UTC) |
 
-> ⚠️ DDL은 `docs/database.md`에 반영 후 Flyway/Liquibase로 migration. v1.0 시점에 위 컬럼들이 모두 존재한다고 가정.
+> ⚠️ DDL은 `docs/database.md`에 반영 후 Flyway/Liquibase로 migration. v1.1 시점 DDL 정합 완료(2026-05-29 — database.md `document_results` 갱신).
 > v1.0 변경점: `ocr_confidence` 컬럼은 `DECIMAL(3,2)`, `s3_masked_key` → `masked_file_url`(VARCHAR(512))로 컬럼명 변경.
+> v1.1 변경점:
+> - `document_results.analysis_document_type` 신규(VARCHAR(30) NOT NULL) — 페이로드 1:1 매핑
+> - `document_results.translated_lang` 신규(VARCHAR(8) NULL)
+> - `document_results.overall_risk_level` NULL 허용 명시
+> - `document_submissions.status` enum **불변**(`ANALYZING/COMPLETED/FAILED`) — 결과 품질 PARTIAL은 `results.processing_status`에만 둠. submissions는 사용자 진행 상태 표시용
 
 ---
 
@@ -153,13 +188,15 @@ Consumer(`document-service`)가 SQS에서 위 JSON을 받으면 다음 대로 IN
 ```
 위험도 {overall_risk_level}. {top 1~2개 risk_items.description}.
 임금: 월 {monthly_wage}원 / 시급 {hourly_wage}원.
-문서유형: {document_type 한국어}.
+문서유형: {analysis_document_type 한국어}.
 ```
 
 **실제 예시**:
 > "위험도 HIGH. 최저임금 미달(시급 9,620원 기준 미충족), 주 50시간 초과근무 조항 존재. 임금: 월 2,000,000원 / 시급 9,620원. 문서유형: 근로계약서."
 
-`document_type` 한국어 매핑: `EMPLOYMENT_CONTRACT` → "근로계약서", `LEASE_CONTRACT` → "임대차계약", `OTHER` → "기타 문서".
+`analysis_document_type` 한국어 매핑: `LABOR_CONTRACT` → "근로계약서", `PAYSLIP` → "급여명세서", `EMPLOYMENT_CONTRACT` → "고용계약서".
+
+> `overall_risk_level=null`이면 "위험 없음"으로 첫 줄을 바꾼다(예: `"위험 항목 없음. 임금: ..."`).
 
 ---
 
@@ -176,9 +213,10 @@ Consumer(`document-service`)가 SQS에서 위 JSON을 받으면 다음 대로 IN
 
 ## 8. 의도적으로 뺀 것 (데모 단계 제약)
 
-영상 시연 범위 밖이라 v1.0에서는 다루지 않음. 운영 단계에서 추가 검토:
+영상 시연 범위 밖이라 v1.1에서는 다루지 않음. 운영 단계에서 추가 검토:
 
-- `processing_status="FAILED"` 케이스 상세 처리 — 데모는 항상 `COMPLETED` 가정
+- `processing_status="FAILED"` 케이스 상세 처리 — 데모는 항상 `COMPLETED` 가정 (PARTIAL도 데모에선 흔치 않음)
+- `analysis_document_type` 데모 외 값(`PAYSLIP`, `EMPLOYMENT_CONTRACT`) 본격 지원 — 데모는 `LABOR_CONTRACT`만
 - 멀티 페이지 PDF 결과 (현재는 단일 이미지 가정)
 - 다국어 번역 (`translated_lang`은 `"ko"` 고정)
 - 통화 다양화 (`currency_code`는 `"KRW"` 고정)
@@ -187,4 +225,4 @@ Consumer(`document-service`)가 SQS에서 위 JSON을 받으면 다음 대로 IN
 
 ---
 
-*GlobalBridge | document-analysis 결과 JSON 스키마 합의 v1.0*
+*GlobalBridge | document-analysis 결과 JSON 스키마 합의 v1.1*
