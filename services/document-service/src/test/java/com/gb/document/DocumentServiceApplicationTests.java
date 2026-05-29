@@ -1,13 +1,29 @@
 package com.gb.document;
 
+import com.gb.document.global.client.s3.S3PresignedUrlClient;
+import com.gb.document.global.client.sqs.AnalysisRequestPublisher;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+/**
+ * 스프링 컨텍스트 로딩 sanity 테스트.
+ *
+ * <p>test 프로파일에서는 dev/!dev 어디에도 해당하지 않으므로 Mock/Real 클라이언트 빈이 자동 등록되지 않는다.
+ * Service가 의존하는 외부 클라이언트는 {@link MockitoBean}으로 채워 컨텍스트가 뜨도록 한다(CLAUDE.md §10).
+ */
 @SpringBootTest
+@ActiveProfiles("test")
 class DocumentServiceApplicationTests {
 
-	@Test
-	void contextLoads() {
-	}
+    @MockitoBean
+    S3PresignedUrlClient s3PresignedUrlClient;
 
+    @MockitoBean
+    AnalysisRequestPublisher analysisRequestPublisher;
+
+    @Test
+    void contextLoads() {
+    }
 }
