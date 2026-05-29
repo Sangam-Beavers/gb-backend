@@ -1,6 +1,7 @@
 package com.gb.wallet.domain.transaction.service;
 
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
+import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 
 public interface TransferService {
@@ -16,4 +17,10 @@ public interface TransferService {
      * wallet DB는 조회하지 않고 MemberClient만 사용한다.
      */
     ValidateMemberResponse validateMember(String email);
+
+    /**
+     * 지원 통화 목록 조회(KRW/USD/PHP/VND). CurrencyType enum이 SSOT라 DB/외부 호출 없이
+     * enum 순회로 응답을 만든다.
+     */
+    SupportedCurrenciesResponse getSupportedCurrencies();
 }

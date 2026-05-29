@@ -11,6 +11,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import com.gb.common.exception.BusinessException;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse.RecipientItem;
+import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
+import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse.CurrencyItem;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 import com.gb.wallet.domain.transaction.repository.ReceiverCurrencyProjection;
 import com.gb.wallet.domain.transaction.repository.RecentRecipientProjection;
@@ -169,6 +171,30 @@ class TransferServiceTest {
                 .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
 
         verifyNoInteractions(walletRepository, transactionRepository);
+    }
+
+    @Test
+    @DisplayName("getSupportedCurrencies: 4종 통화 모두 enum 정의대로 반환, DB/외부 호출 없음")
+    void getSupportedCurrencies_정상() {
+        SupportedCurrenciesResponse response = transferService.getSupportedCurrencies();
+
+        // 1) 4개, 코드 집합이 정확히 KRW/USD/PHP/VND
+        assertThat(response.getCurrencies())
+                .as("지원 통화 4종이 모두 포함")
+                .extracting(CurrencyItem::getCode)
+                .containsExactlyInAnyOrder("KRW", "USD", "PHP", "VND");
+
+        // 2) 각 항목의 code/name/symbol이 enum 정의와 1:1 일치
+        assertThat(response.getCurrencies())
+                .extracting(CurrencyItem::getCode, CurrencyItem::getName, CurrencyItem::getSymbol)
+                .containsExactlyInAnyOrder(
+                        tuple("KRW", "Korean Won",       "₩"),
+                        tuple("USD", "US Dollar",        "$"),
+                        tuple("PHP", "Philippine Peso",  "₱"),
+                        tuple("VND", "Vietnamese Dong",  "₫"));
+
+        // 3) 이 API는 DB/외부 안 본다는 설계를 코드로 못 박는다.
+        verifyNoInteractions(walletRepository, transactionRepository, memberClient);
     }
 
     // ----- helpers -----
