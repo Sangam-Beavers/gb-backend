@@ -3,6 +3,7 @@ package com.gb.wallet.domain.transaction.service.impl;
 import com.gb.common.exception.BusinessException;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse.RecipientItem;
+import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 import com.gb.wallet.domain.transaction.repository.ReceiverCurrencyProjection;
 import com.gb.wallet.domain.transaction.repository.RecentRecipientProjection;
 import com.gb.wallet.domain.transaction.repository.TransactionRepository;
@@ -12,6 +13,7 @@ import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.MemberInfo;
 import com.gb.wallet.global.common.enums.CurrencyType;
+import com.gb.wallet.global.exception.code.MemberErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -94,5 +96,12 @@ public class TransferServiceImpl implements TransferService {
                 .toList();
 
         return RecentRecipientsResponse.of(items);
+    }
+
+    @Override
+    public ValidateMemberResponse validateMember(String email) {
+        MemberInfo member = memberClient.findByEmail(email)
+                .orElseThrow(() -> new BusinessException(MemberErrorCode.MEMBER_NOT_FOUND));
+        return ValidateMemberResponse.from(member);
     }
 }

@@ -1,3 +1,7 @@
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
+
+    // 문서용(@Schema) 어노테이션만 compile 시점에 필요. 런타임은 소비 서비스의 springdoc 의존이 제공.
+    // common-response를 쓰지만 springdoc를 안 쓰는 소비자가 있다면 어노테이션은 그냥 노옵으로 무시됨.
+    compileOnly 'io.swagger.core.v3:swagger-annotations:2.2.22'
 }
