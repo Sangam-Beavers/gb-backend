@@ -1,6 +1,8 @@
 spring:
   application:
     name: member-service
+  jackson:
+    property-naming-strategy: SNAKE_CASE
 
 server:
   port: 8081
