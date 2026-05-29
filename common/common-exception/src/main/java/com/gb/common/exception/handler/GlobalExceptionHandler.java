@@ -74,10 +74,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ServletRequestBindingException.class)
     public ResponseEntity<ErrorResponse> handleBindingException(ServletRequestBindingException e) {
         ErrorCode errorCode = CommonErrorCode.INVALID_REQUEST;
-        log.warn("Request binding failed: code={}, message={}", errorCode.getCode(), e.getMessage());
+        String message = e.getMessage() != null ? e.getMessage() : errorCode.getMessage();
+        log.warn("Request binding failed: code={}, message={}", errorCode.getCode(), message);
         return ResponseEntity
                 .status(errorCode.getHttpStatus())
-                .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));
+                .body(ApiResponse.fail(errorCode.getCode(), message));
     }
 
     /** 처리되지 않은 모든 예외 → COMMON5000. 스택트레이스 포함 error 레벨 로깅. */
