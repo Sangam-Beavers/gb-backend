@@ -3,6 +3,8 @@ package com.gb.wallet.domain.transaction.service.impl;
 import com.gb.common.exception.BusinessException;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse.RecipientItem;
+import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
+import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse.CurrencyItem;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 import com.gb.wallet.domain.transaction.repository.ReceiverCurrencyProjection;
 import com.gb.wallet.domain.transaction.repository.RecentRecipientProjection;
@@ -16,6 +18,7 @@ import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.exception.code.MemberErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -103,5 +106,15 @@ public class TransferServiceImpl implements TransferService {
         MemberInfo member = memberClient.findByEmail(email)
                 .orElseThrow(() -> new BusinessException(MemberErrorCode.MEMBER_NOT_FOUND));
         return ValidateMemberResponse.from(member);
+    }
+
+    @Override
+    public SupportedCurrenciesResponse getSupportedCurrencies() {
+        // CurrencyType enum이 SSOT. DB/외부 호출 없이 enum 순회로 응답 구성.
+        // @Transactional이 굳이 필요 없는 순수 조회라 어노테이션을 붙이지 않는다 (클래스 레벨 readOnly도 영향 없음).
+        List<CurrencyItem> items = Arrays.stream(CurrencyType.values())
+                .map(CurrencyItem::from)
+                .toList();
+        return SupportedCurrenciesResponse.of(items);
     }
 }
