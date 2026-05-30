@@ -1,6 +1,7 @@
 package com.gb.wallet.domain.account.controller;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
@@ -16,13 +17,16 @@ import com.gb.common.exception.BusinessException;
 import com.gb.wallet.domain.account.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.account.dto.response.AccountListResponse;
 import com.gb.wallet.domain.account.dto.response.AccountResponse;
+import com.gb.wallet.domain.account.dto.response.ChargeResponse;
 import com.gb.wallet.domain.account.dto.response.SupportedBankListResponse;
 import com.gb.wallet.domain.account.dto.response.VerifyAccountResponse;
 import com.gb.wallet.domain.account.service.BankAccountService;
+import com.gb.wallet.domain.account.service.ChargeService;
 import com.gb.wallet.domain.account.service.HolderService;
 import com.gb.wallet.domain.account.service.SupportedBankService;
 import com.gb.wallet.global.client.dto.AccountToken;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -32,6 +36,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
 
 /**
  * {@link AccountController}의 HTTP wiring 검증 — URL/메서드, @Valid·@Validated, @RequestHeader,
@@ -56,8 +61,10 @@ class AccountControllerTest {
     @MockitoBean private BankAccountService bankAccountService;
     @MockitoBean private SupportedBankService supportedBankService;
     @MockitoBean private HolderService holderService;
+    @MockitoBean private ChargeService chargeService;
 
     private static final String USER_ID = "test-uuid-1234";
+    private static final String ACCT_ID = "acct-uuid";
 
     // --- POST /verify ---
 
@@ -275,7 +282,142 @@ class AccountControllerTest {
                 .andExpect(jsonPath("$.data.accounts.length()").value(0));
     }
 
+    // --- POST /{id}/charge ---
+
+    @Test
+    @DisplayName("POST /{id}/charge 201: 정상 충전 → 201 + ChargeResponse(snake_case), service 호출")
+    void charge_정상_201() throws Exception {
+        given(chargeService.charge(eq(USER_ID), eq(ACCT_ID), eq("idem-1"), any(), anyString()))
+                .willReturn(stubChargeResponse());
+
+        performValidCharge()
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.public_id").value("charge-uuid"))
+                .andExpect(jsonPath("$.data.account_public_id").value(ACCT_ID))
+                .andExpect(jsonPath("$.data.amount").value("1530000.0000"))
+                .andExpect(jsonPath("$.data.currency_code").value("KRW"))
+                .andExpect(jsonPath("$.data.wallet_balance").value("5430000.0000"))
+                .andExpect(jsonPath("$.data.status").value("COMPLETED"));
+
+        verify(chargeService).charge(eq(USER_ID), eq(ACCT_ID), eq("idem-1"), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("POST /{id}/charge 400: X-User-Public-Id 헤더 누락 → COMMON4001, service 미호출")
+    void charge_userHeader_누락() throws Exception {
+        mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
+                        .header("Idempotency-Key", "idem-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("amount", "1530000"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(chargeService);
+    }
+
+    @Test
+    @DisplayName("POST /{id}/charge 400: Idempotency-Key 헤더 누락 → COMMON4001, service 미호출")
+    void charge_idempotencyHeader_누락() throws Exception {
+        mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
+                        .header("X-User-Public-Id", USER_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("amount", "1530000"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(chargeService);
+    }
+
+    @Test
+    @DisplayName("POST /{id}/charge 400: amount 0/음수/형식 오류/누락 → COMMON4001, service 미호출")
+    void charge_amount_검증_실패() throws Exception {
+        for (String bad : List.of("0", "-100", "1.23456")) {
+            mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
+                            .header("X-User-Public-Id", USER_ID)
+                            .header("Idempotency-Key", "idem-1")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(Map.of("amount", bad))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("COMMON4001"));
+        }
+        // amount 필드 누락(빈 객체)
+        mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
+                        .header("X-User-Public-Id", USER_ID)
+                        .header("Idempotency-Key", "idem-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(chargeService);
+    }
+
+    @Test
+    @DisplayName("POST /{id}/charge 403: service가 ACCOUNT4006 던지면 → 403 + code")
+    void charge_service_ACCOUNT4006_403() throws Exception {
+        willThrow(new BusinessException(AccountErrorCode.UNVERIFIED_ACCOUNT))
+                .given(chargeService).charge(anyString(), anyString(), anyString(), any(), anyString());
+
+        performValidCharge()
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ACCOUNT4006"));
+    }
+
+    @Test
+    @DisplayName("POST /{id}/charge 422: service가 ACCOUNT4007(한도 초과) 던지면 → 422 + code")
+    void charge_service_ACCOUNT4007_422() throws Exception {
+        willThrow(new BusinessException(AccountErrorCode.CHARGE_LIMIT_EXCEEDED))
+                .given(chargeService).charge(anyString(), anyString(), anyString(), any(), anyString());
+
+        performValidCharge()
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("ACCOUNT4007"));
+    }
+
+    @Test
+    @DisplayName("POST /{id}/charge 404: service가 ACCOUNT4001 던지면 → 404 + code")
+    void charge_service_ACCOUNT4001_404() throws Exception {
+        willThrow(new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND))
+                .given(chargeService).charge(anyString(), anyString(), anyString(), any(), anyString());
+
+        performValidCharge()
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("ACCOUNT4001"));
+    }
+
+    @Test
+    @DisplayName("POST /{id}/charge 503: service가 COMMON5031(Mock 은행 장애) 던지면 → 503 + code")
+    void charge_service_COMMON5031_503() throws Exception {
+        willThrow(new BusinessException(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE))
+                .given(chargeService).charge(anyString(), anyString(), anyString(), any(), anyString());
+
+        performValidCharge()
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("COMMON5031"));
+    }
+
     // ----- helpers -----
+
+    private ResultActions performValidCharge() throws Exception {
+        return mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
+                .header("X-User-Public-Id", USER_ID)
+                .header("Idempotency-Key", "idem-1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(Map.of("amount", "1530000"))));
+    }
+
+    private ChargeResponse stubChargeResponse() {
+        return ChargeResponse.builder()
+                .publicId("charge-uuid")
+                .accountPublicId(ACCT_ID)
+                .amount("1530000.0000")
+                .currencyCode("KRW")
+                .walletBalance("5430000.0000")
+                .status("COMPLETED")
+                .createdAt("2026-05-30T04:15:30Z")
+                .build();
+    }
 
     private AccountResponse stubAccountResponse() {
         return AccountResponse.builder()
