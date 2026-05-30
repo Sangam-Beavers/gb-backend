@@ -14,6 +14,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param uploadBucket             Pre-signed PUT URL이 가리킬 S3 버킷.
  * @param uploadUrlExpiresSeconds  Pre-signed URL 유효시간(초). 기본 600(10분).
  * @param awsRegion                AWS 리전.
+ * @param consumerEnabled          결과 수신 Consumer 활성화. dev=false, stage/prod=true.
+ *                                 false면 {@code AnalysisResultListener}가 빈 등록 자체를 건너뛴다.
+ * @param consumerQueueName        결과 수신 큐 이름 — stage는 {@code gb-analysis-results-stage},
+ *                                 prod는 {@code gb-analysis-results-prod}. dev는 빈 값(consumerEnabled=false).
+ *                                 큐 URL이 아니라 <b>이름</b>이다(spring-cloud-aws가 URL을 resolve).
  */
 @ConfigurationProperties(prefix = "gb.analysis")
 public record AnalysisProperties(
@@ -22,7 +27,9 @@ public record AnalysisProperties(
         String requestQueueUrl,
         String uploadBucket,
         int uploadUrlExpiresSeconds,
-        String awsRegion
+        String awsRegion,
+        boolean consumerEnabled,
+        String consumerQueueName
 ) {
     /** production 계열(stage/prod)에서만 result_queue_arn을 S3 메타데이터에 주입한다. */
     public boolean isProductionSource() {
