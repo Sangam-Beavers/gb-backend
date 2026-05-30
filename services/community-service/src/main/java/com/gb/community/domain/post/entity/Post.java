@@ -10,6 +10,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
@@ -107,5 +108,44 @@ public class Post extends BaseSoftDeleteEntity {
      */
     public void increaseCommentCount() {
         this.commentCount += 1;
+    }
+
+    /**
+     * 게시글 작성용 정적 팩토리 (CLAUDE.md §4 — Request → Entity 변환은 정적 메서드).
+     *
+     * <p>{@code publicId}(UUID)는 서버가 생성하고, {@code language}는 인증/locale 연동 전이라 일단 "ko"로 고정한다.
+     * TODO: 인증/locale 연동 후 작성자 언어를 채우도록 교체(작업 지시서 확정 사항 2). 카운터 기본값(0)은 빌더가 채운다.
+     *
+     * <p>요청 DTO를 직접 import하지 않고 파싱된 값만 받는다 — category(String) → enum 변환·검증은
+     * 서비스 책임이고, 엔티티가 dto/검증 예외에 의존하지 않도록 분리한다.
+     */
+    public static Post of(String userPublicId, PostCategory category, String title, String content) {
+        return Post.builder()
+                .publicId(UUID.randomUUID().toString())
+                .userPublicId(userPublicId)
+                .category(category)
+                .language("ko") // 빌더 필수값. 인증/locale 연동 전이라 고정(확정 사항 2). TODO 동일.
+                .title(title)
+                .content(content)
+                .build();
+    }
+
+    /**
+     * 게시글 부분 수정(PATCH) 도메인 메서드. {@code null} 인자는 "변경 없음"으로 보고 기존값을 유지한다.
+     *
+     * <p>{@code @Setter} 금지(CLAUDE.md §4)라 수정도 의미 있는 도메인 메서드로만 노출한다.
+     * 빈 문자열을 "유지"로 볼지 "빈 값 설정"으로 볼지의 PATCH 해석은 서비스에서 처리하고
+     * (blank → null 정규화), 여기서는 null 여부만 본다.
+     */
+    public void update(PostCategory category, String title, String content) {
+        if (category != null) {
+            this.category = category;
+        }
+        if (title != null) {
+            this.title = title;
+        }
+        if (content != null) {
+            this.content = content;
+        }
     }
 }
