@@ -2,6 +2,8 @@ package com.gb.document.domain.document.repository;
 
 import com.gb.document.domain.document.entity.Document;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 /**
@@ -18,4 +20,10 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
      * ChatController가 호출 후 {@code DocumentErrorCode.DOCUMENT_NOT_FOUND}로 던진다.
      */
     Optional<Document> findByPublicId(String publicId);
+
+    /**
+     * 특정 사용자의 분석 요청 목록을 페이지로 조회한다. 정렬은 호출 측 {@link Pageable}에서 지정.
+     * (보통 createdAt DESC — 최신 업로드부터.)
+     */
+    Page<Document> findAllByUserPublicId(String userPublicId, Pageable pageable);
 }

@@ -18,6 +18,13 @@ dependencies {
     implementation platform('software.amazon.awssdk:bom:2.31.0')
     implementation 'software.amazon.awssdk:auth'
     implementation 'software.amazon.awssdk:http-client-spi'
+    // 분석 요청용 S3 Pre-signed PUT URL 발급 + Lambda 재트리거(SQS publish).
+    // SQS Consumer(결과 수신)는 다음 단계 — 지금은 retry publish 용도로만 사용.
+    implementation 'software.amazon.awssdk:s3'
+    implementation 'software.amazon.awssdk:sqs'
 
     runtimeOnly 'com.mysql:mysql-connector-j'
+
+    // 테스트 전용 인메모리 DB(application-test.yml에서 MODE=MySQL로 사용).
+    testRuntimeOnly 'com.h2database:h2'
 }

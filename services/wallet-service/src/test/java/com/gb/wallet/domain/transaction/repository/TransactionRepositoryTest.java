@@ -195,6 +195,31 @@ class TransactionRepositoryTest {
                         tuple(BANK_ACCOUNT_B, T_B,     "50.0000",     CurrencyType.USD, "Nguyen"));
     }
 
+    @Test
+    @DisplayName("findByIdempotencyKey: 멱등성 키로 거래 단건 조회, 없으면 empty")
+    void findByIdempotencyKey_조회() {
+        Transaction charge = Transaction.builder()
+                .publicId(UUID.randomUUID().toString())
+                .wallet(sender)
+                .type(TransactionType.CHARGE)
+                .amount(new BigDecimal("500000"))
+                .currencyCode(CurrencyType.KRW)
+                .fee(BigDecimal.ZERO)
+                .status(TransactionStatus.COMPLETED)
+                .idempotencyKey("known-key-123")
+                .build();
+        em.persist(charge);
+        em.flush();
+        em.clear();
+
+        assertThat(transactionRepository.findByIdempotencyKey("known-key-123"))
+                .isPresent()
+                .get()
+                .extracting(Transaction::getPublicId)
+                .isEqualTo(charge.getPublicId());
+        assertThat(transactionRepository.findByIdempotencyKey("no-such-key")).isEmpty();
+    }
+
     // ----- helpers -----
 
     private Wallet persistWallet(String userPublicId) {

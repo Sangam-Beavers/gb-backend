@@ -36,7 +36,23 @@
 | --- | --- | --- | --- |
 | `public_id` | string | N | 문서 UUID. 이후 상태·결과 조회 키 |
 | `upload_url` | string | N | S3 Pre-signed URL. 클라이언트가 PUT으로 직접 업로드 |
+| `upload_headers` | object(map) | N | **PUT 업로드 시 그대로 함께 보내야 하는 헤더(이름→값).** 서명에 포함되어 있어 누락/변경 시 S3가 403으로 거부하고 메타데이터(source/document_id/result_queue_arn)가 오브젝트에 박히지 않는다. 예: `{"Content-Type":"application/octet-stream","x-amz-meta-source":"production","x-amz-meta-document_id":"…"}` |
 | `expires_at` | string | N | URL 만료 시각 (ISO 8601 UTC Z) |
+
+> ⚠️ **업로드 시 `upload_headers`를 반드시 그대로 전송**해야 한다. AWS SDK v2 presigner는 S3 오브젝트
+> 메타데이터를 서명 헤더(`X-Amz-SignedHeaders`)에 굽기 때문에, 이 헤더들을 이름·값 그대로 PUT에 실어야
+> 서명이 일치한다. 백엔드가 정한 메타데이터 값을 클라이언트가 임의로 바꾸면 안 된다(서명 불일치 → 403).
+> `Host`는 HTTP 클라이언트가 자동 설정하므로 `upload_headers`에 포함하지 않는다.
+>
+> 업로드 예시:
+> ```
+> PUT {upload_url}
+> Content-Type: application/octet-stream
+> x-amz-meta-source: production
+> x-amz-meta-document_id: 550e8400-…
+> x-amz-meta-result_queue_arn: arn:aws:sqs:…   # production 계열에서만 존재
+> <binary file body>
+> ```
 
 **Error**
 | HTTP | code | message |

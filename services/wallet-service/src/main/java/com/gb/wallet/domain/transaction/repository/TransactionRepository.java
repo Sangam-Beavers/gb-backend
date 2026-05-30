@@ -3,12 +3,20 @@ package com.gb.wallet.domain.transaction.repository;
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface TransactionRepository extends JpaRepository<Transaction, Long> {
+
+    /**
+     * 멱등성 키로 기존 거래를 조회한다. {@code idempotency_key}는 UNIQUE라 최대 1건이다.
+     * 동일 키 재요청 시 새 거래를 만들지 않고 첫 거래(의 결과)를 재반환하기 위한 진입점이며,
+     * 동시 요청 race에서 UNIQUE 위반 후 첫 거래를 재조회하는 데도 쓰인다(ChargeServiceImpl §5-1).
+     */
+    Optional<Transaction> findByIdempotencyKey(String idempotencyKey);
 
     /**
      * 내가 송신자인 INTERNAL_TRANSFER(COMPLETED) 중, 수신자(receiver wallet)별로 가장 최근 송금
