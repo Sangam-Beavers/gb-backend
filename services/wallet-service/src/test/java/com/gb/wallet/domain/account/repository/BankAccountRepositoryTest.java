@@ -102,6 +102,32 @@ class BankAccountRepositoryTest {
         assertThat(countUnknown).as("없는 사용자").isZero();
     }
 
+    @Test
+    @DisplayName("findByPublicIdAndUserPublicIdAndIsActiveTrue: 본인+활성+존재일 때만 반환(타인/없음은 empty)")
+    void findChargeTarget_본인_활성만() {
+        BankAccount acct = persistAccount(USER_A, kbBank, ACCOUNT_NUMBER, true, true);
+        em.flush();
+        em.clear();
+
+        assertThat(repository.findByPublicIdAndUserPublicIdAndIsActiveTrue(acct.getPublicId(), USER_A))
+                .as("본인+활성").isPresent();
+        assertThat(repository.findByPublicIdAndUserPublicIdAndIsActiveTrue(acct.getPublicId(), USER_B))
+                .as("타인 계좌").isEmpty();
+        assertThat(repository.findByPublicIdAndUserPublicIdAndIsActiveTrue("no-such-public-id", USER_A))
+                .as("없는 계좌").isEmpty();
+    }
+
+    @Test
+    @DisplayName("findByPublicIdAndUserPublicIdAndIsActiveTrue: 비활성(soft-delete) 계좌는 제외")
+    void findChargeTarget_비활성_제외() {
+        BankAccount inactive = persistAccount(USER_A, kbBank, ACCOUNT_NUMBER, true, false);
+        em.flush();
+        em.clear();
+
+        assertThat(repository.findByPublicIdAndUserPublicIdAndIsActiveTrue(inactive.getPublicId(), USER_A))
+                .as("비활성 계좌").isEmpty();
+    }
+
     // ----- helpers -----
 
     private Bank persistBank(String code, String name) {

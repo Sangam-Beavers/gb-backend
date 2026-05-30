@@ -3,6 +3,7 @@ package com.gb.wallet.global.client;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
@@ -12,7 +13,9 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.gb.common.exception.BusinessException;
 import com.gb.wallet.global.client.dto.AccountHolder;
 import com.gb.wallet.global.client.dto.AccountToken;
+import com.gb.wallet.global.client.dto.WithdrawalResult;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
+import java.math.BigDecimal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,6 +33,7 @@ import org.springframework.web.client.RestClient;
 class MockBankClientTest {
 
     private static final String BASE_URL = "http://mock-bank.test";
+    private static final String WITHDRAW_PATH = "/api/v1/bank/transfers/withdrawal";
 
     private MockBankClient client;
     private MockRestServiceServer server;
@@ -99,12 +103,107 @@ class MockBankClientTest {
     }
 
     @Test
-    @DisplayName("withdraw/payout은 이번 PR에서 미구현 → UnsupportedOperationException")
-    void unimplementedMethods_throwUnsupported() {
-        assertThatThrownBy(() -> client.withdraw("tok", java.math.BigDecimal.ONE, "KRW", "k"))
+    @DisplayName("payout은 이번 PR에서 미구현 → UnsupportedOperationException (withdraw는 아래에서 실동작 검증)")
+    void payout_unimplemented_throwsUnsupported() {
+        assertThatThrownBy(() -> client.payout("004", "12345", BigDecimal.ONE, "VND", "k"))
                 .isInstanceOf(UnsupportedOperationException.class);
-        assertThatThrownBy(() -> client.payout("004", "12345", java.math.BigDecimal.ONE, "VND", "k"))
-                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    // --- withdraw (충전 출금) ---
+
+    @Test
+    @DisplayName("withdraw 200: data → WithdrawalResult 매핑 + 요청 본문(account_token/amount/currency_code) 검증")
+    void withdraw_success() {
+        server.expect(requestTo(BASE_URL + WITHDRAW_PATH))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().json(
+                        "{\"account_token\":\"tok-abc\",\"amount\":\"1530000.0000\",\"currency_code\":\"KRW\"}"))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"success\":true,\"data\":{\"transaction_id\":\"mock-tx-1\","
+                                + "\"status\":\"COMPLETED\",\"amount\":\"1530000.0000\","
+                                + "\"currency_code\":\"KRW\",\"balance_after\":\"8470000.0000\"},\"message\":\"ok\"}"));
+
+        WithdrawalResult result = client.withdraw("tok-abc", new BigDecimal("1530000"), "KRW", "idem-1");
+
+        assertThat(result.transactionId()).isEqualTo("mock-tx-1");
+        assertThat(result.status()).isEqualTo("COMPLETED");
+        assertThat(result.amount()).isEqualByComparingTo("1530000");
+        assertThat(result.currencyCode()).isEqualTo("KRW");
+        assertThat(result.balanceAfter()).isEqualByComparingTo("8470000");
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("withdraw: Idempotency-Key 헤더가 Mock 은행으로 그대로 forward된다(§5-2)")
+    void withdraw_idempotencyKey_header_forwarded() {
+        server.expect(requestTo(BASE_URL + WITHDRAW_PATH))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Idempotency-Key", "idem-key-xyz"))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"success\":true,\"data\":{\"transaction_id\":\"t\",\"status\":\"COMPLETED\","
+                                + "\"amount\":\"100.0000\",\"currency_code\":\"KRW\",\"balance_after\":\"0.0000\"}}"));
+
+        client.withdraw("tok", new BigDecimal("100"), "KRW", "idem-key-xyz");
+
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("withdraw 400 BANK4002(출금 잔액부족) → BusinessException(ACCOUNT4003)")
+    void withdraw_bank4002_mappedToAccount4003() {
+        server.expect(requestTo(BASE_URL + WITHDRAW_PATH))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK4002\",\"message\":\"출금 잔액 부족\"}"));
+
+        assertThatThrownBy(() -> client.withdraw("tok", new BigDecimal("1000"), "KRW", "k"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.INSUFFICIENT_LINKED_ACCOUNT_BALANCE);
+    }
+
+    @Test
+    @DisplayName("withdraw 401 BANK4010(유효하지 않은 토큰) → BusinessException(ACCOUNT4006)")
+    void withdraw_bank4010_mappedToAccount4006() {
+        server.expect(requestTo(BASE_URL + WITHDRAW_PATH))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK4010\",\"message\":\"유효하지 않은 토큰\"}"));
+
+        assertThatThrownBy(() -> client.withdraw("bad-tok", new BigDecimal("1000"), "KRW", "k"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.UNVERIFIED_ACCOUNT);
+    }
+
+    @Test
+    @DisplayName("withdraw 404 BANK4040(계좌 없음) → BusinessException(ACCOUNT4001)")
+    void withdraw_bank4040_mappedToAccount4001() {
+        server.expect(requestTo(BASE_URL + WITHDRAW_PATH))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK4040\",\"message\":\"존재하지 않는 계좌\"}"));
+
+        assertThatThrownBy(() -> client.withdraw("tok", new BigDecimal("1000"), "KRW", "k"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.ACCOUNT_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("withdraw 5xx → BusinessException(COMMON5031)")
+    void withdraw_serverError_mappedToCommon5031() {
+        server.expect(requestTo(BASE_URL + WITHDRAW_PATH))
+                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK5000\",\"message\":\"Mock 내부 오류\"}"));
+
+        assertThatThrownBy(() -> client.withdraw("tok", new BigDecimal("1000"), "KRW", "k"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
     }
 
     @Test
