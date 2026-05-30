@@ -19,6 +19,11 @@ spring:
       mode: never
   jackson:
     property-naming-strategy: SNAKE_CASE
+  # 테스트는 SQS Consumer 비활성화 — Listener 빈 등록 자체를 막아 컨테이너 부팅 차단.
+  cloud:
+    aws:
+      sqs:
+        enabled: false
 
 # 챗봇 Lambda 설정 — 테스트에서는 실제 호출 없음. @Value 해석용 더미값.
 chatbot:
@@ -36,3 +41,5 @@ gb:
     upload-bucket: gb-document-uploads-test
     upload-url-expires-seconds: 600
     aws-region: ap-northeast-2
+    consumer-enabled: false
+    consumer-queue-name: ""

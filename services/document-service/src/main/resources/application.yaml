@@ -7,6 +7,20 @@ spring:
   # CLAUDE.md §5: JSON 필드는 snake_case. DTO 필드는 camelCase로 두고 전역 변환에 의존.
   jackson:
     property-naming-strategy: SNAKE_CASE
+  # spring-cloud-aws (3.4.2) 기본 리전 정적 지정 — 환경 무관하게 부팅 시 RegionProviderChain이
+  # 예외 던지지 않게 한다. 자격증명은 DefaultCredentialsProvider 체인을 그대로 사용(IRSA/EC2/env).
+  # AwsClientConfig가 같은 값으로 AwsRegionProvider 빈을 만들면 spring-cloud-aws가 그 빈을 우선 사용.
+  #
+  # sqs.enabled — SqsAutoConfiguration 활성 조건. matchIfMissing=true이므로 명시 안 하면 활성화된다.
+  # gb.analysis.consumer-enabled와 항상 같이 켜고 꺼야 정합이라(SqsAsyncClient 없이 우리
+  # ContainerFactory를 띄울 수 없음) 같은 환경변수로 묶는다. dev 기본값 false → 신규 개발자가
+  # application-dev.yml(gitignore) 없이 띄워도 자격증명 chain이 부팅 시 호출되지 않는다. routing §3.
+  cloud:
+    aws:
+      region:
+        static: ${GB_ANALYSIS_AWS_REGION:ap-northeast-2}
+      sqs:
+        enabled: ${GB_ANALYSIS_CONSUMER_ENABLED:false}
 
 server:
   port: 8083
@@ -32,6 +46,8 @@ chatbot:
 # - result-queue-arn: production 계열에서만 S3 메타데이터에 주입. 환경별로 다른 큐를 가리킨다.
 # - request-queue-url: retry 시 Lambda A를 재트리거할 요청 큐. 운영(!dev)에서 비어 있으면 retry 시 예외.
 # - upload-bucket: Pre-signed PUT URL이 가리킬 S3 버킷.
+# - consumer-enabled / consumer-queue-name: 결과 수신 Consumer(routing §3). dev=false(미기동),
+#   stage/prod=true + 환경별 자기 큐 이름. 코드 동일, 큐 이름만 환경 분리(데이터 오염 경로 없음).
 gb:
   analysis:
     source: ${GB_ANALYSIS_SOURCE:development}
@@ -40,3 +56,5 @@ gb:
     upload-bucket: ${GB_ANALYSIS_UPLOAD_BUCKET:gb-document-uploads-dev}
     upload-url-expires-seconds: ${GB_ANALYSIS_UPLOAD_URL_EXPIRES_SECONDS:600}
     aws-region: ${GB_ANALYSIS_AWS_REGION:ap-northeast-2}
+    consumer-enabled: ${GB_ANALYSIS_CONSUMER_ENABLED:false}
+    consumer-queue-name: ${GB_ANALYSIS_CONSUMER_QUEUE_NAME:}

@@ -108,7 +108,9 @@ class DocumentSubmissionServiceImplTest {
                 "",
                 "gb-document-uploads-prod",
                 600,
-                "ap-northeast-2"));
+                "ap-northeast-2",
+                false,
+                ""));
 
         SubmitRequest req = new SubmitRequest(AnalysisDocumentType.PAYSLIP, "payslip.pdf");
         given(s3PresignedUrlClient.issueUploadUrl(anyString(), anyString(), anyMap(), any(Duration.class)))
@@ -254,6 +256,7 @@ class DocumentSubmissionServiceImplTest {
         // dev 기본(source=development, queue ARN 빈 값)
         Map<String, String> ignored = new HashMap<>();
         return new AnalysisProperties(
-                "development", resultQueueArn, "", "gb-document-uploads-dev", 600, "ap-northeast-2");
+                "development", resultQueueArn, "", "gb-document-uploads-dev", 600, "ap-northeast-2",
+                false, "");
     }
 }

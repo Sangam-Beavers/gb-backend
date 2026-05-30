@@ -113,4 +113,33 @@ public class DocumentResult extends BaseEntity {
         this.failedReason = failedReason;
         this.completedAt = completedAt;
     }
+
+    /**
+     * Consumer가 동일 submission의 결과를 재수신했을 때 호출 — at-least-once 멱등 처리, retry 성공 시
+     * 갱신용. submission 1:1 관계는 불변, 나머지 필드만 교체. {@code @Setter} 금지 규약(CLAUDE.md §4)을
+     * 지키기 위한 도메인 메서드 형태로 제공한다.
+     */
+    public void applyAnalysisResult(AnalysisDocumentType analysisDocumentType,
+                                    ProcessingStatus processingStatus,
+                                    RiskLevel overallRiskLevel,
+                                    BigDecimal ocrConfidence,
+                                    WageSummary wageSummary,
+                                    List<RiskItem> riskItems,
+                                    String translatedText,
+                                    String translatedLang,
+                                    String maskedFileUrl,
+                                    String failedReason,
+                                    LocalDateTime completedAt) {
+        this.analysisDocumentType = analysisDocumentType;
+        this.processingStatus = processingStatus;
+        this.overallRiskLevel = overallRiskLevel;
+        this.ocrConfidence = ocrConfidence;
+        this.wageSummary = wageSummary;
+        this.riskItems = riskItems;
+        this.translatedText = translatedText;
+        this.translatedLang = translatedLang;
+        this.maskedFileUrl = maskedFileUrl;
+        this.failedReason = failedReason;
+        this.completedAt = completedAt;
+    }
 }
