@@ -199,14 +199,29 @@ public class ChargeServiceImpl implements ChargeService {
     /**
      * 이미 처리된 거래로부터 첫 응답을 재구성한다(멱등성 재반환).
      *
-     * <p>보안: {@code idempotency_key}는 전역 UNIQUE라 타인이 같은 키로 남의 응답을 훔쳐볼 수 있으므로,
-     * 키의 소유자(거래의 지갑 주인)와 요청자가 다르면 ACCOUNT4001로 차단한다(존재 여부 미노출).
+     * <p>{@code idempotency_key}는 전역 UNIQUE(유형·사용자·계좌 무관)라, 같은 키로 다른 사용자/유형/계좌의
+     * 거래가 잡힐 수 있다. 이 충전 요청의 응답으로 재현해도 되는 거래인지 다음을 확인하고, 아니면
+     * ACCOUNT4001로 차단한다(존재 여부 미노출):
+     * <ul>
+     *   <li>키 소유자(거래 지갑 주인) == 요청자 — 타인이 남의 응답을 훔쳐보지 못하게</li>
+     *   <li>거래 유형 == CHARGE — 송금/환전 등 다른 유형을 충전 응답으로 재현하지 않게</li>
+     *   <li>거래의 출금 계좌 == 요청 계좌 — 같은 키를 다른 계좌로 재사용해 엉뚱한 계좌 응답이 나가지 않게.
+     *       {@code Transaction}은 계좌의 {@code public_id}가 없고 {@code bankAccountId}(내부 id)만 들고 있어,
+     *       그 id로 계좌를 풀어 {@code public_id}를 비교한다.</li>
+     * </ul>
      *
      * <p>{@code wallet_balance}는 "충전 후 지갑 잔액"이라 <em>현재</em> 잔액이 아니라 최초 처리 당시의
      * {@code after_balance}(audit_log)를 돌려준다 — 두 번째 요청 시점엔 다른 거래로 잔액이 변했을 수 있다.
      */
     private ChargeResponse rebuildFromPrior(Transaction prior, String accountPublicId, String userPublicId) {
-        if (!prior.getWallet().getUserPublicId().equals(userPublicId)) {
+        if (!prior.getWallet().getUserPublicId().equals(userPublicId)
+                || prior.getType() != TransactionType.CHARGE) {
+            throw new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND);
+        }
+        // CHARGE는 출금 계좌 FK(bankAccountId)가 항상 있으므로 없으면 정합성이 깨진 비정상 상태.
+        BankAccount priorAccount = bankAccountRepository.findById(prior.getBankAccountId())
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
+        if (!priorAccount.getPublicId().equals(accountPublicId)) {
             throw new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND);
         }
         TransactionAuditLog log = auditLogRepository

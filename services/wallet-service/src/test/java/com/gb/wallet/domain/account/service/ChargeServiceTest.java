@@ -326,6 +326,7 @@ class ChargeServiceTest {
         TransactionAuditLog priorLog = auditLog(prior, new BigDecimal("1500000")); // 당시 충전 후 잔액
 
         given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.of(prior));
+        given(bankAccountRepository.findById(1L)).willReturn(Optional.of(account(TOKEN))); // prior 출금 계좌(publicId=ACCT)
         given(auditLogRepository.findFirstByTransaction_IdOrderByIdAsc(50L))
                 .willReturn(Optional.of(priorLog));
 
@@ -336,7 +337,8 @@ class ChargeServiceTest {
         assertThat(response.getAmount()).isEqualTo("500000.0000");
         assertThat(response.getWalletBalance()).as("현재 잔액이 아닌 당시 after_balance").isEqualTo("1500000.0000");
 
-        verifyNoInteractions(bankClient, bankAccountRepository, walletRepository, walletBalanceRepository);
+        verify(bankAccountRepository).findById(1L); // prior 계좌 일치 검증을 위해 1회 조회
+        verifyNoInteractions(bankClient, walletRepository, walletBalanceRepository);
         verify(transactionRepository, never()).save(any());
         verify(auditLogRepository, never()).save(any());
     }
@@ -354,6 +356,48 @@ class ChargeServiceTest {
 
         verifyNoInteractions(bankClient, bankAccountRepository, walletRepository, walletBalanceRepository);
         verify(auditLogRepository, never()).findFirstByTransaction_IdOrderByIdAsc(any());
+    }
+
+    @Test
+    @DisplayName("멱등성: 같은 키를 다른 계좌로 재사용하면 ACCOUNT4001(엉뚱한 계좌 응답 차단)")
+    void doCharge_멱등성_다른계좌키_ACCOUNT4001() {
+        Transaction prior = priorTx(wallet(USER), new BigDecimal("500000")); // bankAccountId=1L
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.of(prior));
+        given(bankAccountRepository.findById(1L)).willReturn(Optional.of(account(TOKEN))); // publicId=ACCT
+
+        assertThatThrownBy(() ->
+                service.doCharge(USER, "other-acct", KEY, request(new BigDecimal("100")), IP))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.ACCOUNT_NOT_FOUND);
+
+        // 계좌 불일치라 응답 재구성(audit_log 조회)까지 가지 않는다.
+        verify(auditLogRepository, never()).findFirstByTransaction_IdOrderByIdAsc(any());
+        verifyNoInteractions(bankClient, walletRepository, walletBalanceRepository);
+    }
+
+    @Test
+    @DisplayName("멱등성: 같은 키가 충전이 아닌 거래(예: 송금)면 ACCOUNT4001(유형 불일치 차단)")
+    void doCharge_멱등성_충전아닌유형_ACCOUNT4001() {
+        Transaction prior = Transaction.builder()
+                .publicId("prior-transfer")
+                .wallet(wallet(USER))
+                .type(TransactionType.INTERNAL_TRANSFER) // CHARGE 아님
+                .amount(new BigDecimal("500000"))
+                .currencyCode(CurrencyType.KRW)
+                .status(TransactionStatus.COMPLETED)
+                .idempotencyKey(KEY)
+                .build();
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.of(prior));
+
+        assertThatThrownBy(() -> service.doCharge(USER, ACCT, KEY, request(new BigDecimal("100")), IP))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.ACCOUNT_NOT_FOUND);
+
+        // 유형 검증에서 막혀 계좌 조회·응답 재구성으로 가지 않는다.
+        verify(auditLogRepository, never()).findFirstByTransaction_IdOrderByIdAsc(any());
+        verifyNoInteractions(bankClient, bankAccountRepository, walletRepository, walletBalanceRepository);
     }
 
     @Test
