@@ -17,6 +17,12 @@ public interface WalletBalanceRepository extends JpaRepository<WalletBalance, Lo
     List<WalletBalance> findByWallet(Wallet wallet);
 
     /**
+     * (wallet, currency) 잔액 행 존재 여부(비-락 조회). 첫 충전 시 0원 행을 멱등 생성하기 전,
+     * 이미 있는지 가볍게 확인하는 용도다(WalletBalanceWriter#ensureBalanceRow).
+     */
+    boolean existsByWalletAndCurrencyCode(Wallet wallet, CurrencyType currencyCode);
+
+    /**
      * 잔액 갱신 직전, 동일 (wallet, currency) 행을 비관적 쓰기 잠금(SELECT … FOR UPDATE)으로 조회한다.
      * 같은 사용자가 동시에 충전·송금을 일으켜도 잔액 행을 한 번에 한 트랜잭션만 잡도록 직렬화해
      * lost update(읽고-쓰는 사이 다른 트랜잭션이 끼어드는 갱신 분실)를 막는다.

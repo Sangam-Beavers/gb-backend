@@ -258,10 +258,12 @@ class ChargeServiceIntegrationTest {
         assertThat(response.getAmount()).isEqualTo("500000.0000");
         assertThat(response.getWalletBalance()).as("현재 잔액이 아닌 당시 after_balance").isEqualTo("1500000.0000");
 
-        // 부수효과 없음: 거래·감사 로그는 첫 1건만(롤백). 잔액 행도 생성 안 됨.
+        // 부수효과 없음: 거래·감사 로그는 첫 1건만(증액 롤백). 단, 잔액 행은 WalletBalanceWriter가 별도
+        // 트랜잭션(REQUIRES_NEW)으로 0원 행을 보장하므로 남을 수 있고, 충전 증액은 롤백되므로 잔액은 0이어야 한다.
         assertThat(transactionRepository.findAll()).hasSize(1);
         assertThat(auditLogRepository.findAll()).hasSize(1);
-        assertThat(walletBalanceRepository.findByWallet(wallet)).isEmpty();
+        assertThat(walletBalanceRepository.findByWallet(wallet))
+                .allSatisfy(b -> assertThat(b.getBalance()).isEqualByComparingTo("0"));
 
         // doCharge 본문이 실제로 실행됐음(선검사로 빠지지 않음)을 withdraw 호출로 증명.
         verify(bankClient, times(1)).withdraw(anyString(), any(BigDecimal.class), anyString(), anyString());

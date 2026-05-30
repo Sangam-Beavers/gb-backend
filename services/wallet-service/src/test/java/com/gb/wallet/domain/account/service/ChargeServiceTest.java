@@ -24,6 +24,7 @@ import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.entity.WalletBalance;
 import com.gb.wallet.domain.wallet.repository.WalletBalanceRepository;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
+import com.gb.wallet.domain.wallet.service.WalletBalanceWriter;
 import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.dto.WithdrawalResult;
 import com.gb.wallet.global.common.enums.CurrencyType;
@@ -59,6 +60,7 @@ class ChargeServiceTest {
     @Mock private BankAccountRepository bankAccountRepository;
     @Mock private WalletRepository walletRepository;
     @Mock private WalletBalanceRepository walletBalanceRepository;
+    @Mock private WalletBalanceWriter walletBalanceWriter;
     @Mock private TransactionRepository transactionRepository;
     @Mock private TransactionAuditLogRepository auditLogRepository;
     @Mock private BankClient bankClient;
@@ -85,21 +87,21 @@ class ChargeServiceTest {
     // ===== doCharge — 정상 =====
 
     @Test
-    @DisplayName("정상 충전: 잔액 0(신규 행) → 충전 후 amount. transaction/audit_log 저장 + 응답 검증")
+    @DisplayName("정상 충전: 잔액 행 없으면 WalletBalanceWriter로 0원 행 보장 후 잠그고 amount만큼 증액")
     void doCharge_정상_신규잔액행() {
         BigDecimal amount = new BigDecimal("500000");
         Wallet wallet = wallet(USER);
         BankAccount account = account(TOKEN);
+        WalletBalance created = balance(wallet, BigDecimal.ZERO); // writer가 보장한 0원 행(재조회로 반환)
 
         given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.empty());
         given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(ACCT, USER))
                 .willReturn(Optional.of(account));
         given(walletRepository.findByUserPublicId(USER)).willReturn(Optional.of(wallet));
         given(bankClient.withdraw(TOKEN, amount, "KRW", KEY)).willReturn(completed(amount));
+        // 1차: 행 없음 → ensureBalanceRow 호출 → 2차: 보장된 0원 행을 잠가서 반환
         given(walletBalanceRepository.findForUpdateByWalletAndCurrency(wallet, CurrencyType.KRW))
-                .willReturn(Optional.empty());
-        given(walletBalanceRepository.save(any(WalletBalance.class)))
-                .willAnswer(inv -> inv.getArgument(0));
+                .willReturn(Optional.empty(), Optional.of(created));
         given(transactionRepository.save(any(Transaction.class))).willAnswer(inv -> {
             Transaction t = inv.getArgument(0);
             ReflectionTestUtils.setField(t, "id", 100L);
@@ -110,10 +112,10 @@ class ChargeServiceTest {
 
         ChargeResponse response = service.doCharge(USER, ACCT, KEY, request(amount), IP);
 
-        // 신규 0원 행이 생성되고 amount만큼 증액됐는지
-        ArgumentCaptor<WalletBalance> balCaptor = ArgumentCaptor.forClass(WalletBalance.class);
-        verify(walletBalanceRepository).save(balCaptor.capture());
-        assertThat(balCaptor.getValue().getBalance()).isEqualByComparingTo("500000");
+        // 행 생성은 writer에 위임(직접 save 아님), 보장된 행이 amount만큼 증액됐는지
+        verify(walletBalanceWriter).ensureBalanceRow(wallet, CurrencyType.KRW);
+        verify(walletBalanceRepository, never()).save(any());
+        assertThat(created.getBalance()).isEqualByComparingTo("500000");
 
         // 저장된 거래 검증
         ArgumentCaptor<Transaction> txCaptor = ArgumentCaptor.forClass(Transaction.class);

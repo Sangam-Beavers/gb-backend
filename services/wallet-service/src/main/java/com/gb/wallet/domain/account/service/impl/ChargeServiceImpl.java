@@ -15,6 +15,7 @@ import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.entity.WalletBalance;
 import com.gb.wallet.domain.wallet.repository.WalletBalanceRepository;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
+import com.gb.wallet.domain.wallet.service.WalletBalanceWriter;
 import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.dto.WithdrawalResult;
 import com.gb.wallet.global.common.enums.CurrencyType;
@@ -54,6 +55,7 @@ public class ChargeServiceImpl implements ChargeService {
     private final BankAccountRepository bankAccountRepository;
     private final WalletRepository walletRepository;
     private final WalletBalanceRepository walletBalanceRepository;
+    private final WalletBalanceWriter walletBalanceWriter;
     private final TransactionRepository transactionRepository;
     private final TransactionAuditLogRepository auditLogRepository;
     private final BankClient bankClient;
@@ -135,14 +137,21 @@ public class ChargeServiceImpl implements ChargeService {
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
 
-        // (7) 잔액 행을 비관적 락으로 조회. 없으면(첫 KRW 충전) 0 잔액 행을 새로 만든다(§5-5).
+        // (7) 잔액 행을 비관적 락으로 조회. 없으면(첫 KRW 충전) 먼저 0원 행을 보장한 뒤 다시 잠근다(§5-5).
+        //     존재하지 않는 행은 FOR UPDATE로 잠글 수 없어, 여기서 단순 save하면 동시 첫 충전(서로 다른 키)에서
+        //     uk_wallet_balances_wallet_currency 위반이 메인 트랜잭션을 오염시키고 charge() 래퍼의
+        //     DataIntegrityViolationException catch(멱등성 race 복구)로 잘못 흘러가 COMMON5000이 된다.
+        //     행 보장을 별도 트랜잭션(WalletBalanceWriter, REQUIRES_NEW)으로 분리해 위반을 거기서 흡수하고,
+        //     본 트랜잭션은 항상 존재하는 행을 잠근다 — 그 catch는 이제 idempotency_key 위반만 본다.
         WalletBalance balance = walletBalanceRepository
                 .findForUpdateByWalletAndCurrency(wallet, CHARGE_CURRENCY)
-                .orElseGet(() -> walletBalanceRepository.save(WalletBalance.builder()
-                        .wallet(wallet)
-                        .currencyCode(CHARGE_CURRENCY)
-                        .balance(BigDecimal.ZERO)
-                        .build()));
+                .orElseGet(() -> {
+                    walletBalanceWriter.ensureBalanceRow(wallet, CHARGE_CURRENCY);
+                    return walletBalanceRepository
+                            .findForUpdateByWalletAndCurrency(wallet, CHARGE_CURRENCY)
+                            // 행 보장 직후라 비어 있을 수 없다 — 비면 정합성이 깨진 비정상 상태.
+                            .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
+                });
 
         BigDecimal beforeBalance = balance.getBalance();
         balance.addBalance(amount); // 영속 상태 → dirty checking으로 UPDATE
