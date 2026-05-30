@@ -8,118 +8,89 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.gb.common.exception.BusinessException;
-import com.gb.member.domain.member.dto.request.LoginRequest;
-import com.gb.member.domain.member.dto.response.LoginResponse;
+import com.gb.member.domain.member.dto.request.SignupRequest;
+import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
-import com.gb.member.global.exception.code.AuthErrorCode;
-import com.gb.member.global.jwt.JwtUtil;
-import java.util.Collections;
-import java.util.Optional;
-import org.junit.jupiter.api.BeforeEach;
+import com.gb.member.global.client.IdpUserClient;
+import com.gb.member.global.exception.code.MemberErrorCode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authentication.BadCredentialsException;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.userdetails.UsernameNotFoundException;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /**
- * Spring Security 표준 인증 흐름으로 전환된 {@code login()}에 대한 단위 테스트.
+ * 방식 B(검증 전용)의 {@code signup()} 단위 테스트.
  *
- * <p>실제 {@code AuthenticationManager}는 mock하고, 성공/실패 경로마다 우리 서비스가
- * 약속한 응답(LoginResponse)과 에러(AUTH4001)를 만들어내는지만 검증한다. BCrypt 검증·DB 조회 등
- * 의 실동작은 통합 테스트 영역.
+ * <p>로그인은 프론트가 IdP와 직접(Authorization Code flow) 수행하므로 백엔드 서비스엔 login()이 없다.
+ * 외부 IdP 회원 등록은 {@link IdpUserClient}를 mock해 대체한다. 가입이 IdP에 사용자를 등록하고 받은
+ * sub를 authProviderId에 저장하는지, 비밀번호를 저장하지 않는지, 중복을 막는지만 검증한다.
  */
 @ExtendWith(MockitoExtension.class)
 class MemberServiceImplTest {
 
     @Mock private MemberRepository memberRepository;
-    @Mock private PasswordEncoder passwordEncoder;
-    @Mock private JwtUtil jwtUtil;
-    @Mock private AuthenticationManager authenticationManager;
+    @Mock private IdpUserClient idpUserClient;
 
     @InjectMocks private MemberServiceImpl memberService;
 
-    private LoginRequest request;
-
-    @BeforeEach
-    void setUp() {
-        request = new LoginRequest();
-        ReflectionTestUtils.setField(request, "email", "user@example.com");
-        ReflectionTestUtils.setField(request, "password", "P@ssw0rd!");
-    }
-
     @Test
-    @DisplayName("인증 성공 시 JWT 액세스 토큰을 담은 LoginResponse를 반환한다")
-    void login_성공() {
+    @DisplayName("회원가입은 IdP에 사용자를 등록하고 받은 sub를 authProviderId에 저장한 회원을 만든다(비번 미저장)")
+    void signup_성공_IdP등록_비밀번호_미저장() {
         // given
-        Member member = Member.builder()
-                .email("user@example.com")
-                .password("encoded")
-                .name("홍길동")
-                .nickname("gildong")
-                .nationality("KR")
-                .language("ko")
-                .build();
-        ReflectionTestUtils.setField(member, "id", 42L);
+        SignupRequest request = new SignupRequest();
+        ReflectionTestUtils.setField(request, "email", "new@example.com");
+        ReflectionTestUtils.setField(request, "password", "P@ssw0rd!");
+        ReflectionTestUtils.setField(request, "name", "홍길동");
+        ReflectionTestUtils.setField(request, "nickname", "gildong");
+        ReflectionTestUtils.setField(request, "nationality", "VN");
+        ReflectionTestUtils.setField(request, "language", "vi");
 
-        Authentication authResult = new UsernamePasswordAuthenticationToken(
-                "user@example.com", null, Collections.emptyList());
-        when(authenticationManager.authenticate(any(UsernamePasswordAuthenticationToken.class)))
-                .thenReturn(authResult);
-        when(memberRepository.findByEmail("user@example.com")).thenReturn(Optional.of(member));
-        when(jwtUtil.generateAccessToken(42L, "user@example.com")).thenReturn("issued.jwt.token");
-        when(jwtUtil.getAccessTokenExpirationSeconds()).thenReturn(3600L);
+        when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
+        when(memberRepository.existsByNickname("gildong")).thenReturn(false);
+        // IdP가 사용자를 만들고 식별자(sub=uuid)를 돌려준다.
+        when(idpUserClient.provisionUser("new@example.com", "홍길동", "P@ssw0rd!"))
+                .thenReturn("idp-sub-uuid-9999");
+        when(memberRepository.save(any(Member.class))).thenAnswer(invocation -> {
+            Member m = invocation.getArgument(0);
+            ReflectionTestUtils.setField(m, "publicId", "11111111-1111-1111-1111-111111111111");
+            return m;
+        });
 
         // when
-        LoginResponse response = memberService.login(request);
+        SignupResponse response = memberService.signup(request);
 
         // then
-        assertThat(response.getAccessToken()).isEqualTo("issued.jwt.token");
-        assertThat(response.getTokenType()).isEqualTo("Bearer");
-        assertThat(response.getExpiresIn()).isEqualTo(3600L);
+        assertThat(response.getPublicId()).isEqualTo("11111111-1111-1111-1111-111111111111");
+        assertThat(response.getEmail()).isEqualTo("new@example.com");
+        assertThat(response.getNickname()).isEqualTo("gildong");
+        // IdP가 준 sub가 회원의 authProviderId로 저장돼야 한다.
+        ArgumentCaptor<Member> saved = ArgumentCaptor.forClass(Member.class);
+        verify(memberRepository).save(saved.capture());
+        assertThat(saved.getValue().getAuthProviderId()).isEqualTo("idp-sub-uuid-9999");
     }
 
     @Test
-    @DisplayName("비밀번호 불일치(BadCredentialsException)는 AUTH4001로 통일 변환된다")
-    void login_비밀번호불일치_AUTH4001() {
+    @DisplayName("이메일 중복이면 MEMBER4002로 거절하고 저장하지 않는다")
+    void signup_이메일중복_MEMBER4002() {
         // given
-        when(authenticationManager.authenticate(any(UsernamePasswordAuthenticationToken.class)))
-                .thenThrow(new BadCredentialsException("bad credentials"));
+        SignupRequest request = new SignupRequest();
+        ReflectionTestUtils.setField(request, "email", "dup@example.com");
+        ReflectionTestUtils.setField(request, "nickname", "gildong");
+        when(memberRepository.existsByEmail("dup@example.com")).thenReturn(true);
 
         // when / then
-        assertThatThrownBy(() -> memberService.login(request))
+        assertThatThrownBy(() -> memberService.signup(request))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
-                .isEqualTo(AuthErrorCode.INVALID_CREDENTIALS);
+                .isEqualTo(MemberErrorCode.EMAIL_ALREADY_EXISTS);
 
-        // 인증 실패 시 토큰 발급/추가 조회는 일어나지 않아야 한다.
-        verify(memberRepository, never()).findByEmail(any());
-        verify(jwtUtil, never()).generateAccessToken(any(), any());
-    }
-
-    @Test
-    @DisplayName("존재하지 않는 이메일(UsernameNotFoundException)도 AUTH4001로 통일 변환된다")
-    void login_이메일없음_AUTH4001() {
-        // given — enumeration 방지: 비밀번호 불일치와 동일한 응답
-        when(authenticationManager.authenticate(any(UsernamePasswordAuthenticationToken.class)))
-                .thenThrow(new UsernameNotFoundException("not found"));
-
-        // when / then
-        assertThatThrownBy(() -> memberService.login(request))
-                .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
-                .isEqualTo(AuthErrorCode.INVALID_CREDENTIALS);
-
-        verify(memberRepository, never()).findByEmail(any());
-        verify(jwtUtil, never()).generateAccessToken(any(), any());
+        verify(memberRepository, never()).save(any());
+        // 중복이면 IdP에도 사용자를 만들지 않는다(로컬 검증이 먼저).
+        verify(idpUserClient, never()).provisionUser(any(), any(), any());
     }
 }

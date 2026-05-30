@@ -5,6 +5,8 @@ dependencies {
 
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-security'
+    // 방식 B: 외부 IdP가 발급한 JWT를 검증만 하는 "검표원"(Resource Server). issuer-uri로 JWKS 검증.
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
@@ -12,10 +14,8 @@ dependencies {
     implementation 'org.springframework.kafka:spring-kafka'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.14'
 
-    // JWT 액세스 토큰 발급/검증. jjwt 0.12.x는 api/impl/jackson 3분리 구조.
-    implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
-    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
-    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
-
     runtimeOnly 'com.mysql:mysql-connector-j'
+
+    // 테스트는 인메모리 H2(MySQL 호환 모드)로 돈다 — 개발기 DB는 만지지 않는다(CLAUDE §10).
+    testRuntimeOnly 'com.h2database:h2'
 }
