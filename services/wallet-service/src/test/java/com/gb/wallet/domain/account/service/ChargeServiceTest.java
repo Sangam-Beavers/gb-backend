@@ -315,6 +315,27 @@ class ChargeServiceTest {
         verifyNoInteractions(auditLogRepository);
     }
 
+    @Test
+    @DisplayName("Mock이 null 응답을 반환해도 NPE 없이 COMMON5031(방어)")
+    void doCharge_mock_null응답_COMMON5031() {
+        BigDecimal amount = new BigDecimal("100");
+        Wallet wallet = wallet(USER);
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.empty());
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(ACCT, USER))
+                .willReturn(Optional.of(account(TOKEN)));
+        given(walletRepository.findByUserPublicId(USER)).willReturn(Optional.of(wallet));
+        given(bankClient.withdraw(TOKEN, amount, "KRW", KEY)).willReturn(null);
+
+        assertThatThrownBy(() -> service.doCharge(USER, ACCT, KEY, request(amount), IP))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
+
+        verify(walletBalanceRepository, never()).findForUpdateByWalletAndCurrency(any(), any());
+        verify(transactionRepository, never()).save(any());
+        verifyNoInteractions(auditLogRepository);
+    }
+
     // ===== doCharge — 멱등성 선검사(이미 처리된 키) =====
 
     @Test

@@ -132,8 +132,9 @@ public class ChargeServiceImpl implements ChargeService {
         //     idempotencyKey를 그대로 forward — Mock도 같은 키로 첫 응답을 재반환한다(§5-2).
         WithdrawalResult mockResult = bankClient.withdraw(
                 account.getMockAccountToken(), amount, CHARGE_CURRENCY.name(), idempotencyKey);
-        // 방어 — Mock이 COMPLETED가 아닌 상태를 200으로 보내는 비정상 케이스는 일시 장애로 본다.
-        if (!COMPLETED_STATUS.equals(mockResult.status())) {
+        // 방어 — 응답이 null이거나 COMPLETED가 아닌 비정상 케이스는 일시 장애(503)로 본다. 현재 구현체
+        //     (MockBankClient)는 null 대신 예외를 던지지만, 향후 구현체가 null을 줘도 NPE→500이 아니라 503으로 매핑한다.
+        if (mockResult == null || !COMPLETED_STATUS.equals(mockResult.status())) {
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
 
