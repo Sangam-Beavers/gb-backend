@@ -106,7 +106,7 @@ public void onAnalysisResult(
     // 1) document_submissions 조회 (msg.documentPublicId 기준, attribute 값과 일치 검증)
     // 2) document_results UPSERT (submission_id UNIQUE로 멱등)
     // 3) document_submissions.status 동기화 (COMPLETED/FAILED, PARTIAL→COMPLETED)
-    // 4) S3 원본 삭제 트리거(별 작업)
+    // (S3 원본 삭제는 Consumer 책임 아님 — Lambda B가 결과 발행 후 자기 버킷의 원본을 삭제. ai-pipeline.md §6·§8)
 }
 
 // 컨테이너 옵션에서 어떤 attribute를 ReceiveMessage로 요청할지 명시.

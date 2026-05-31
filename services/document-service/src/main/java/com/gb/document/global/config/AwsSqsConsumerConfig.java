@@ -20,10 +20,16 @@ import software.amazon.awssdk.services.sqs.SqsAsyncClient;
  * {@code source}, {@code document_public_id})를 명시 요청한다. 빈 이름을
  * {@code defaultSqsListenerContainerFactory}로 두면 auto-config가 만드는 동명의 빈을 대체한다.
  *
- * <p>리스너에서는 {@code @Header(SqsHeaders.SQS_MA_HEADER_PREFIX + name)}으로 attribute를 읽는다 —
- * spring-cloud-aws가 SQS attribute를 메시지 헤더로 매핑할 때 접두사 {@code Sqs_MA_}를 붙이기 때문.
+ * <p>리스너에서는 {@code @Header("source")}, {@code @Header("document_public_id")}처럼 attribute 키를
+ * <b>그대로</b> 헤더 키로 읽는다 — spring-cloud-aws 3.x {@code SqsHeaderMapper}는 <b>사용자 정의</b>
+ * message attribute를 매핑할 때 접두사를 붙이지 않고 키를 그대로 헤더 키로 쓴다
+ * ({@code SqsHeaderMapper#getMessageAttributesAsHeaders} — {@code Map.Entry::getKey} 그대로). 접두사
+ * {@code SqsHeaders.MessageSystemAttributes.SQS_MSA_HEADER_PREFIX}({@code "Sqs_Msa_"})는 <b>시스템
+ * attribute</b>(SenderId, SentTimestamp, ApproximateReceiveCount 등)에만 붙는다. 이 매핑 규칙은 라이브러리
+ * 실동작에 의존하므로 {@code SqsHeaderMappingTest}로 회귀를 잠근다(스키마 §1 "회귀 테스트로 잠근다").
  *
- * <p>관련 SSOT: {@code docs/document-analysis/result-queue-routing.md} §3.
+ * <p>관련 SSOT: {@code docs/document-analysis/result-queue-routing.md} §3,
+ * {@code result-json-schema-agreement.md} §1.
  */
 @Configuration
 @ConditionalOnProperty(name = "gb.analysis.consumer-enabled", havingValue = "true")
