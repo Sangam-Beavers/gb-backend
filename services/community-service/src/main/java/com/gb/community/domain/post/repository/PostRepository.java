@@ -6,6 +6,7 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -59,4 +60,24 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     Page<Post> search(@Param("category") PostCategory category,
                        @Param("keyword") String keyword,
                        Pageable pageable);
+
+    /**
+     * 좋아요 수 캐시({@code like_count}) 원자적 +1 (관심글 저장 시).
+     *
+     * <p>{@code like_count}는 likes 테이블 집계의 denormalized 캐시다. 엔티티 read-modify-write는
+     * 동시 좋아요에서 lost update가 날 수 있어, DB에서 원자적으로 증가시킨다(읽고-쓰기 경합 방지).
+     * 벌크 UPDATE라 영속성 컨텍스트를 우회하므로, 같은 트랜잭션에서 로드해 둔 Post 인스턴스의
+     * {@code likeCount}는 갱신되지 않는다(응답 수치는 호출 측에서 보정).
+     */
+    @Modifying
+    @Query("UPDATE Post p SET p.likeCount = p.likeCount + 1 WHERE p.id = :id")
+    void incrementLikeCount(@Param("id") Long id);
+
+    /**
+     * 좋아요 수 캐시({@code like_count}) 원자적 -1 (관심글 취소 시).
+     * {@code like_count > 0} 가드로 음수로 내려가지 않게 막는다(취소 멱등 처리와 함께 정합 유지).
+     */
+    @Modifying
+    @Query("UPDATE Post p SET p.likeCount = p.likeCount - 1 WHERE p.id = :id AND p.likeCount > 0")
+    void decrementLikeCount(@Param("id") Long id);
 }
