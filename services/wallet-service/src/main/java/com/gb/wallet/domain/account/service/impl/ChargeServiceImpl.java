@@ -21,6 +21,7 @@ import com.gb.wallet.global.client.dto.WithdrawalResult;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
+import com.gb.wallet.global.config.ChargeProperties;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import java.math.BigDecimal;
@@ -46,12 +47,6 @@ public class ChargeServiceImpl implements ChargeService {
     /** Mock 은행이 정상 처리했을 때 돌려주는 상태값. */
     private static final String COMPLETED_STATUS = "COMPLETED";
 
-    /**
-     * 단일 거래 충전 한도(명세 §12 ACCOUNT4007). 운영 정책 확정 전 임시값 1천만원.
-     * TODO: 운영 정책 확정 후 사용자/일/월 누적 한도를 포함한 정책 객체 또는 외부 설정으로 분리한다.
-     */
-    private static final BigDecimal SINGLE_CHARGE_LIMIT = new BigDecimal("10000000");
-
     private final BankAccountRepository bankAccountRepository;
     private final WalletRepository walletRepository;
     private final WalletBalanceRepository walletBalanceRepository;
@@ -59,6 +54,7 @@ public class ChargeServiceImpl implements ChargeService {
     private final TransactionRepository transactionRepository;
     private final TransactionAuditLogRepository auditLogRepository;
     private final BankClient bankClient;
+    private final ChargeProperties chargeProperties;
 
     /**
      * self-injection: {@code @Transactional}이 적용되려면 {@link #doCharge}/{@link #readPrior}를 AOP
@@ -119,7 +115,7 @@ public class ChargeServiceImpl implements ChargeService {
 
         // (4) 한도 검증 — 초과면 ACCOUNT4007. 음수/0/형식 오류는 컨트롤러 @Valid 단계에서 COMMON4001로 이미 차단됨.
         BigDecimal amount = request.getAmount();
-        if (amount.compareTo(SINGLE_CHARGE_LIMIT) > 0) {
+        if (amount.compareTo(chargeProperties.singleLimit()) > 0) {
             throw new BusinessException(AccountErrorCode.CHARGE_LIMIT_EXCEEDED);
         }
 

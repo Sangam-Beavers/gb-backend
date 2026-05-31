@@ -31,6 +31,7 @@ import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.common.enums.WalletStatus;
+import com.gb.wallet.global.config.ChargeProperties;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import java.math.BigDecimal;
@@ -82,6 +83,10 @@ class ChargeServiceTest {
         // self-proxy 위임을 검증하려면 self 목을 직접 박아야 한다. doCharge 직접 호출 테스트는 self를
         // 참조하지 않으므로 영향 없음.
         ReflectionTestUtils.setField(service, "self", self);
+        // chargeProperties는 대응 @Mock이 없어 @InjectMocks 생성자 주입 시 null로 들어간다 → 한도 비교에서
+        // NPE. mock이 아닌 실제 객체로 기본 한도(1천만원)를 박아 기존 동작을 유지한다(동작 불변 검증 목적).
+        ReflectionTestUtils.setField(service, "chargeProperties",
+                new ChargeProperties(new BigDecimal("10000000")));
     }
 
     // ===== doCharge — 정상 =====
@@ -248,6 +253,25 @@ class ChargeServiceTest {
 
         assertThatThrownBy(() ->
                 service.doCharge(USER, ACCT, KEY, request(new BigDecimal("10000000.0001")), IP))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.CHARGE_LIMIT_EXCEEDED);
+
+        verifyNoInteractions(bankClient, walletRepository, walletBalanceRepository, auditLogRepository);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("외부화 검증: 설정 한도가 1000이면 1001 충전은 ACCOUNT4007 — 설정값이 실제 한도로 쓰임")
+    void doCharge_설정한도_적용_초과시_ACCOUNT4007() {
+        // 상수였다면 불가능했던 케이스: 한도를 1000으로 외부 주입하면 1001이 초과로 막혀야 한다.
+        ReflectionTestUtils.setField(service, "chargeProperties",
+                new ChargeProperties(new BigDecimal("1000")));
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.empty());
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(ACCT, USER))
+                .willReturn(Optional.of(account(TOKEN)));
+
+        assertThatThrownBy(() -> service.doCharge(USER, ACCT, KEY, request(new BigDecimal("1001")), IP))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(AccountErrorCode.CHARGE_LIMIT_EXCEEDED);
