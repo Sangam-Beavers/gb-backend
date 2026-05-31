@@ -1,5 +1,6 @@
 package com.gb.wallet.domain.account.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -30,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -301,6 +303,38 @@ class AccountControllerTest {
                 .andExpect(jsonPath("$.data.status").value("COMPLETED"));
 
         verify(chargeService).charge(eq(USER_ID), eq(ACCT_ID), eq("idem-1"), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("POST /{id}/charge - X-Forwarded-For가 있으면 맨 앞 IP를 clientIp로 service에 전달")
+    void charge_forwardsClientIpFromXff() throws Exception {
+        given(chargeService.charge(eq(USER_ID), eq(ACCT_ID), eq("idem-1"), any(), anyString()))
+                .willReturn(stubChargeResponse());
+
+        mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
+                        .header("X-User-Public-Id", USER_ID)
+                        .header("Idempotency-Key", "idem-1")
+                        .header("X-Forwarded-For", "203.0.113.7, 10.0.0.1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("amount", "1530000"))))
+                .andExpect(status().isCreated());
+
+        ArgumentCaptor<String> ipCaptor = ArgumentCaptor.forClass(String.class);
+        verify(chargeService).charge(eq(USER_ID), eq(ACCT_ID), eq("idem-1"), any(), ipCaptor.capture());
+        assertThat(ipCaptor.getValue()).isEqualTo("203.0.113.7");
+    }
+
+    @Test
+    @DisplayName("POST /{id}/charge - X-Forwarded-For가 없으면 getRemoteAddr()(127.0.0.1)로 fallback")
+    void charge_fallbackToRemoteAddrWhenNoXff() throws Exception {
+        given(chargeService.charge(eq(USER_ID), eq(ACCT_ID), eq("idem-1"), any(), anyString()))
+                .willReturn(stubChargeResponse());
+
+        performValidCharge().andExpect(status().isCreated());
+
+        ArgumentCaptor<String> ipCaptor = ArgumentCaptor.forClass(String.class);
+        verify(chargeService).charge(eq(USER_ID), eq(ACCT_ID), eq("idem-1"), any(), ipCaptor.capture());
+        assertThat(ipCaptor.getValue()).isEqualTo("127.0.0.1");
     }
 
     @Test
