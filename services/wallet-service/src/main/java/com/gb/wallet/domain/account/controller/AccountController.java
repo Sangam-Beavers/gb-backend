@@ -15,6 +15,7 @@ import com.gb.wallet.domain.account.service.BankAccountService;
 import com.gb.wallet.domain.account.service.ChargeService;
 import com.gb.wallet.domain.account.service.HolderService;
 import com.gb.wallet.domain.account.service.SupportedBankService;
+import com.gb.wallet.global.common.util.ClientIpResolver;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -251,9 +252,9 @@ public class AccountController {
             @PathVariable("id") @NotBlank @Size(max = 36) String accountPublicId,
             @Valid @RequestBody ChargeRequest request,
             HttpServletRequest httpRequest) {
-        // getRemoteAddr()는 로컬/dev에선 충분. 운영(리버스 프록시 뒤)에선 X-Forwarded-For 처리 필요.
-        // TODO: 운영 배포 시 X-Forwarded-For 기반 클라이언트 IP 추출로 교체(후속 이슈).
+        // 프록시/LB 뒤에서는 X-Forwarded-For의 최초 클라이언트 IP를 기록한다(신뢰 프록시 전제, audit 참고용).
+        String clientIp = ClientIpResolver.resolve(httpRequest);
         return ApiResponse.success(chargeService.charge(
-                userPublicId, accountPublicId, idempotencyKey, request, httpRequest.getRemoteAddr()));
+                userPublicId, accountPublicId, idempotencyKey, request, clientIp));
     }
 }
