@@ -2,6 +2,7 @@ package com.gb.member.domain.member.service.impl;
 
 import com.gb.common.exception.BusinessException;
 import com.gb.member.domain.member.dto.request.SignupRequest;
+import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
@@ -44,5 +45,20 @@ public class MemberServiceImpl implements MemberService {
         Member savedMember = memberRepository.save(member);
 
         return SignupResponse.from(savedMember);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public CheckAvailabilityResponse checkEmail(String email) {
+        // 존재하면 사용 불가(available=false), 없으면 사용 가능(true)
+        boolean available = !memberRepository.existsByEmail(email);
+        return CheckAvailabilityResponse.of(available);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public CheckAvailabilityResponse checkNickname(String nickname) {
+        boolean available = !memberRepository.existsByNickname(nickname);
+        return CheckAvailabilityResponse.of(available);
     }
 }
