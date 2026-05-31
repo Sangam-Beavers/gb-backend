@@ -13,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Profile;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -134,7 +135,9 @@ public class DevDataInitializer implements ApplicationRunner {
             return;
         }
 
-        List<Post> posts = postRepository.findAll();
+        // 삽입(시드) 순서로 정렬해 가져온다. dialog[]가 글 순서에 위치 결합돼 있어, posts와 별도 run으로
+        // 댓글만 시드할 때(위 주석 참고) findAll()의 비결정적 스캔 순서로 글-댓글 짝이 어긋나지 않게 한다.
+        List<Post> posts = postRepository.findAll(Sort.by(Sort.Direction.ASC, "id"));
         if (posts.isEmpty()) {
             log.info("[dev-seed] 커뮤니티 글 0개 — comments 시드 스킵");
             return;
