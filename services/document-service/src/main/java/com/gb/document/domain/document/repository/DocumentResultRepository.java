@@ -13,6 +13,12 @@ public interface DocumentResultRepository extends JpaRepository<DocumentResult, 
     /** 결과 상세 조회 — submission.public_id로 검색. */
     Optional<DocumentResult> findBySubmission_PublicId(String publicId);
 
+    /**
+     * Consumer 멱등성 처리용 — submission_id UNIQUE이라 같은 submission의 결과가 1건만 존재.
+     * 동일 메시지 재수신(at-least-once) 또는 retry 후 성공 시 UPDATE 분기 진입에 사용.
+     */
+    Optional<DocumentResult> findBySubmission_Id(Long submissionId);
+
     /** 목록 화면에서 risk_level 표시용. submission id IN (...) batch 조회. */
     List<DocumentResult> findAllBySubmission_IdIn(List<Long> submissionIds);
 }

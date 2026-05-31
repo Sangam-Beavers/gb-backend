@@ -59,38 +59,77 @@ Lambda B는 `source=production`이면 메타데이터의 `result_queue_arn`으�
 
 Consumer 코드는 환경 무관하게 동일하고, 구독 큐 이름만 프로필로 주입한다.
 
+**수신 라이브러리 결정(2026-05-30):** `spring-cloud-aws-starter-sqs` 3.x + `@SqsListener`. 컨테이너가
+폴링 스레드·visibility timeout 연장·ack-on-success를 책임진다. 리스너가 예외를 던지면 컨테이너가
+`deleteMessage`를 호출하지 않으므로, 메시지는 visibility timeout 이후 재수신되고 `maxReceiveCount`
+초과 시 DLQ로 자동 이동한다. (raw SDK 폴링은 검토했으나 ack 시맨틱을 직접 구현하는 부담이 커
+배제 — `docs/document-analysis/result-json-schema-agreement.md` §1 참조.)
+
+**페이로드 위치 결정(2026-05-30):** v1.1 JSON은 **SQS 메시지 본문 그대로**, 라우팅 메타(`source`,
+`document_public_id`)는 **SQS MessageAttributes**(envelope JSON 아님). 본문 == 스키마 SSOT가 글자
+그대로 유지된다. 자세히는 `result-json-schema-agreement.md` §1 경고문.
+
 ```yaml
 # application-stage.yml
 gb:
   analysis:
+    consumer-enabled: true
     consumer-queue-name: gb-analysis-results-stage
 
 # application-prod.yml
 gb:
   analysis:
+    consumer-enabled: true
     consumer-queue-name: gb-analysis-results-prod
 
-# application-dev.yml  → Consumer 미기동(아래 enabled=false)
+# application-dev.yml  → Consumer 미기동
 gb:
   analysis:
+    consumer-enabled: false
     consumer-queue-name: ""
 ```
 
 ```java
 // 환경별 큐 이름만 주입받아 구독. 로직은 동일.
+// body는 v1.1 결과 JSON 그대로 → Jackson이 DTO로 역직렬화.
+// source / document_public_id는 SQS MessageAttributes에서 @Header로 수신.
+// spring-cloud-aws 3.x SqsHeaderMapper는 사용자 message attribute를 헤더로 매핑할 때 접두사를
+// 붙이지 않고 attribute 키를 그대로 헤더 키로 쓴다(시스템 attribute만 "Sqs_Msa_" 접두사가 붙음).
+// 따라서 @Header("source"), @Header("document_public_id")로 직접 받는다. @SqsListener 어노테이션에는
+// messageAttributeNames 속성이 없으므로 SqsContainerOptions 레벨(아래 팩토리 빈)에서 명시 요청.
 @SqsListener("${gb.analysis.consumer-queue-name}")
-public void onAnalysisResult(AnalysisResultMessage msg) {
-    // 1) document_submissions.status 업데이트 (COMPLETED / FAILED / PARTIAL)
-    // 2) COMPLETED 면 document_results INSERT
-    // 3) S3 원본 삭제 트리거
+public void onAnalysisResult(
+        AnalysisResultMessage msg,                                  // body
+        @Header("source") String source,                            // attribute (prefix 없음)
+        @Header("document_public_id") String routingId              // attribute (prefix 없음)
+) {
+    // 1) document_submissions 조회 (msg.documentPublicId 기준, attribute 값과 일치 검증)
+    // 2) document_results UPSERT (submission_id UNIQUE로 멱등)
+    // 3) document_submissions.status 동기화 (COMPLETED/FAILED, PARTIAL→COMPLETED)
+    // 4) S3 원본 삭제 트리거(별 작업)
+}
+
+// 컨테이너 옵션에서 어떤 attribute를 ReceiveMessage로 요청할지 명시.
+// auto-config의 동명 빈을 대체한다(빈 이름: defaultSqsListenerContainerFactory).
+@Bean
+SqsMessageListenerContainerFactory<Object> defaultSqsListenerContainerFactory(
+        SqsAsyncClient sqsAsyncClient) {
+    return SqsMessageListenerContainerFactory.builder()
+            .sqsAsyncClient(sqsAsyncClient)
+            .configure(opts -> opts.messageAttributeNames(List.of("source", "document_public_id")))
+            .build();
 }
 ```
 
-dev는 Consumer를 기동하지 않는다(예: `@ConditionalOnProperty("gb.analysis.consumer-enabled")` =
+dev는 Consumer를 기동하지 않는다(`@ConditionalOnProperty("gb.analysis.consumer-enabled")` =
 stage·prod만 true). dev 백엔드는 온프렘 MySQL을 **조회만** 한다.
 
 > stage 큐와 prod 큐는 물리적으로 다른 리소스이므로, 한 환경 Consumer가 다른 환경
 > 메시지를 받는 것이 구조적으로 불가능하다. 환경 간 데이터 오염 경로가 없다.
+
+> ⚠️ {@code SqsContainerOptions.messageAttributeNames}를 명시하지 않으면 spring-cloud-aws는
+> {@code ReceiveMessage} 호출 시 attribute 리스트를 보내지 않아 attribute가 누락된 채 도착한다.
+> 회귀 테스트로 두 헤더 주입을 검증한다.
 
 ---
 

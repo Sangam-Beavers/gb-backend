@@ -16,6 +16,7 @@
     ④ `overall_risk_level` `NONE` 제거 → `LOW/MEDIUM/HIGH` + nullable(위험 없음=`null`)
     ⑤ §3-2 연동 규칙도 위 ④에 맞춰 `risk_items=[]`일 때 `overall_risk_level=null`로 변경
   - 2026-05-29 — v1.1 DB 매핑 정정. `processing_status` 매핑을 `document_submissions.status`에서 `document_results.processing_status`로 정정(v1.0의 매핑 오류). `submissions.status`는 사용자 진행 상태(`ANALYZING/COMPLETED/FAILED`)로 분리 유지. database.md DDL 갱신 완료(`document_results.analysis_document_type` 신규, `ocr_confidence` `DECIMAL(3,2)`, `s3_masked_key` → `masked_file_url`, `translated_lang` 신규).
+  - 2026-05-30 — Consumer 수신 라이브러리/페이로드 위치 확정. §1 경고문에 MessageAttributes 단일안 + 라이브러리 결정 추가(`spring-cloud-aws @SqsListener`).
 
 ---
 
@@ -25,7 +26,18 @@
 
 이 문서가 SSOT다. Lambda B 코드와 Consumer 코드 모두 이 스키마를 기준으로 작성한다.
 
-> ⚠️ **`source` 필드 위치 명시**: `source`(`development` / `production`)는 인프라 계열 분기용이라 **결과 JSON 본문에 포함하지 않는다**. SQS 메시지 attribute 또는 envelope JSON 레벨에서만 다룬다 — Consumer는 envelope에서 읽고 본문 스키마에는 노출되지 않는다.
+> ⚠️ **`source` 필드 위치 명시(2026-05-30 확정)**: `source`(`development` / `production`)는 인프라 계열 분기용이라 **결과 JSON 본문에 포함하지 않는다**. **SQS MessageAttributes 단일안**으로 결정 — envelope JSON은 채택하지 않는다(본문 == 스키마 SSOT 유지). Consumer는 `@Header("source")`로 읽고 본문 스키마에는 노출되지 않는다.
+>
+> **MessageAttributes 규약 (Lambda B ↔ Consumer 합의):**
+>
+> | attribute key | DataType | 값 | 비고 |
+> | --- | --- | --- | --- |
+> | `source` | String | `development` / `production` | 라우팅·필터·메트릭의 SoT. body에 중복 노출 금지. |
+> | `document_public_id` | String | UUID | body `document_public_id`와 **반드시 동일값**. Consumer는 본문 기준으로 영속화, attribute는 라우팅/메트릭 기준. 불일치 시 ERROR 로그 + DLQ 유도. |
+>
+> Lambda B는 `SendMessage` 시 두 attribute를 반드시 채우고, Consumer는 `ReceiveMessage`에 `MessageAttributeNames=["source","document_public_id"]`(또는 `["All"]`)을 반드시 지정한다. spring-cloud-aws 3.x에선 `@SqsListener` 어노테이션 속성이 아니라 `SqsContainerOptions.messageAttributeNames` 빌더 옵션으로 설정한다(별도 `SqsMessageListenerContainerFactory` 빈). 리스너 메서드에선 `@Header("source")`, `@Header("document_public_id")`처럼 **attribute 키를 그대로** 헤더로 읽는다 — `SqsHeaderMapper`(3.x)는 사용자 message attribute를 매핑할 때 접두사를 붙이지 않고 키를 그대로 헤더 키로 쓴다(시스템 attribute만 `Sqs_Msa_` 접두사가 붙음). 회귀 테스트로 잠근다.
+>
+> 수신 라이브러리는 `spring-cloud-aws @SqsListener` 사용(2026-05-30 확정). raw SDK 폴링은 ack-on-success 시맨틱을 직접 구현해야 하는 부담으로 배제. 상세: `result-queue-routing.md` §3.
 
 ---
 

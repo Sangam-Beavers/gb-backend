@@ -103,7 +103,9 @@ class S3PresignMetadataSignatureTest {
                 "",
                 "gb-document-uploads-prod",
                 600,
-                "ap-northeast-2");
+                "ap-northeast-2",
+                false,
+                "");
         RealS3PresignedUrlClient client = new RealS3PresignedUrlClient(presigner, props);
         Map<String, String> metadata = Map.of(
                 "source", "production",
