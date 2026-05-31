@@ -80,4 +80,15 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     @Modifying
     @Query("UPDATE Post p SET p.likeCount = p.likeCount - 1 WHERE p.id = :id AND p.likeCount > 0")
     void decrementLikeCount(@Param("id") Long id);
+
+    /**
+     * like_count 캐시의 현재 저장값 단건 조회.
+     *
+     * <p>{@link #incrementLikeCount}/{@link #decrementLikeCount} 같은 벌크 UPDATE 직후, 같은 트랜잭션에서
+     * 갱신된 실제 like_count를 응답에 싣기 위해 쓴다. 스칼라 프로젝션이라 1차 캐시의 stale 엔티티가 아니라
+     * DB 최신값을 읽으므로(동시 좋아요/취소로 인한 표시 수치 오차 제거), 엔티티 재로딩(findById)으로는
+     * 1차 캐시의 옛 likeCount가 나와 효과가 없다.
+     */
+    @Query("SELECT p.likeCount FROM Post p WHERE p.id = :id")
+    Optional<Integer> findLikeCountById(@Param("id") Long id);
 }

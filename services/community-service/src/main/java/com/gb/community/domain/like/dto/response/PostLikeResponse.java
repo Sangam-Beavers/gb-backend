@@ -10,8 +10,9 @@ import lombok.Getter;
  * 현재 {@code liked} 여부)만 반환한다. 식별자는 {@code public_id}만 노출(내부 id 비노출),
  * 필드명 snake_case 변환은 전역 설정에 위임한다.
  *
- * <p>{@code likeCount}는 like_count 캐시를 원자적으로 증감(±1)한 뒤의 값이다. 좋아요 저장은 +1 후 값,
- * 취소는 -1 후 값(음수 방지). 동시 요청이 있으면 약간의 stale이 있을 수 있는 표시용 수치다.
+ * <p>{@code likeCount}는 like_count 캐시를 원자적으로 증감(±1)한 뒤 같은 트랜잭션에서 DB로 재조회한
+ * 실제 저장값이다(저장=증가 후, 취소=감소 후, 음수 방지). 재조회하므로 동시 좋아요/취소가 있어도
+ * 응답은 그 시점의 실제 저장값을 반영한다.
  */
 @Getter
 public class PostLikeResponse {

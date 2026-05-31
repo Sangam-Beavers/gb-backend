@@ -86,8 +86,11 @@ public class LikeServiceImpl implements LikeService {
         }
 
         postRepository.incrementLikeCount(post.getId());
-        // 벌크 UPDATE는 영속성 컨텍스트를 우회하므로 post.likeCount는 로드 시점 값 → +1로 보정해 응답.
-        return PostLikeResponse.of(post.getPublicId(), post.getLikeCount() + 1, true);
+        // 벌크 UPDATE 직후 같은 트랜잭션에서 like_count를 재조회해 실제 저장값을 응답한다(동시 좋아요로
+        // 인한 표시 오차 제거 — post.likeCount는 로드 시점 값이라 stale). 재조회가 비면(이론상 불가) +1 폴백.
+        int likeCount = postRepository.findLikeCountById(post.getId())
+                .orElse(post.getLikeCount() + 1);
+        return PostLikeResponse.of(post.getPublicId(), likeCount, true);
     }
 
     @Override
@@ -104,8 +107,11 @@ public class LikeServiceImpl implements LikeService {
 
         likeRepository.delete(existing.get());
         postRepository.decrementLikeCount(post.getId()); // DB는 like_count > 0 가드(음수 방지)
-        // 로드 시점 값 -1로 보정(음수 방지).
-        return PostLikeResponse.of(post.getPublicId(), Math.max(0, post.getLikeCount() - 1), false);
+        // 벌크 UPDATE 직후 재조회해 실제 저장값을 응답한다(동시 요청 표시 오차 제거). 재조회가 비면
+        // (이론상 불가) 로드 시점 -1로 폴백하되 음수 방지.
+        int likeCount = postRepository.findLikeCountById(post.getId())
+                .orElse(Math.max(0, post.getLikeCount() - 1));
+        return PostLikeResponse.of(post.getPublicId(), likeCount, false);
     }
 
     // ----- helpers -----

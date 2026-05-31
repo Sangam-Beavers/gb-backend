@@ -43,8 +43,8 @@ import org.springframework.data.domain.PageRequest;
 /**
  * {@link LikeServiceImpl} 단위 테스트(Mockito). DB·Spring 컨텍스트 없이 조합/검증/예외/멱등을 본다.
  *
- * <p>like_count는 벌크 UPDATE(increment/decrement)로 DB에서만 바뀌므로, 응답 수치는 로드 시점 값 ±1로
- * 보정된다 — 그 보정과 증감 호출 여부(verify)를 검증한다.
+ * <p>like_count는 벌크 UPDATE(increment/decrement)로 DB에서만 바뀌므로, 응답 수치는 벌크 UPDATE 직후
+ * 재조회한 실제 저장값이다 — 그 재조회 반영과 증감 호출 여부(verify)를 검증한다.
  */
 @ExtendWith(MockitoExtension.class)
 class LikeServiceTest {
@@ -64,17 +64,19 @@ class LikeServiceTest {
     // ----- like -----
 
     @Test
-    @DisplayName("좋아요 성공: Like 저장 + like_count +1, 응답 liked=true·보정된 like_count")
+    @DisplayName("좋아요 성공: Like 저장 + like_count +1, 응답은 재조회한 실제 저장값(동시 좋아요로 DB가 앞서가도 반영)")
     void like_정상() {
         Post post = post(USER, 5);
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(likeRepository.existsByUserPublicIdAndTargetTypeAndTargetId(
                 USER, LikeTargetType.POST, POST_ID)).willReturn(false);
+        // 로드 시점 likeCount=5라 in-memory 보정은 6이지만, 동시 좋아요로 DB가 8까지 오른 상황을 가정.
+        given(postRepository.findLikeCountById(POST_ID)).willReturn(Optional.of(8));
 
         PostLikeResponse res = service.like(USER, PID);
 
         assertThat(res.getPostPublicId()).isEqualTo(post.getPublicId());
-        assertThat(res.getLikeCount()).isEqualTo(6); // 로드 시점 5 + 1
+        assertThat(res.getLikeCount()).isEqualTo(8); // in-memory +1(=6)이 아니라 재조회한 실제 저장값
         assertThat(res.isLiked()).isTrue();
         verify(likeRepository).saveAndFlush(any(Like.class));
         verify(postRepository).incrementLikeCount(POST_ID);
@@ -132,17 +134,19 @@ class LikeServiceTest {
     // ----- unlike -----
 
     @Test
-    @DisplayName("취소 성공: like 삭제 + like_count -1, 응답 liked=false·보정된 like_count")
+    @DisplayName("취소 성공: like 삭제 + like_count -1, 응답은 재조회한 실제 저장값")
     void unlike_정상() {
         Post post = post(USER, 3);
         Like like = Like.ofPost(USER, POST_ID);
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(likeRepository.findByUserPublicIdAndTargetTypeAndTargetId(
                 USER, LikeTargetType.POST, POST_ID)).willReturn(Optional.of(like));
+        // 로드 시점 likeCount=3이라 in-memory 보정은 2지만, 동시 요청으로 DB가 4인 상황을 가정.
+        given(postRepository.findLikeCountById(POST_ID)).willReturn(Optional.of(4));
 
         PostLikeResponse res = service.unlike(USER, PID);
 
-        assertThat(res.getLikeCount()).isEqualTo(2); // 3 - 1
+        assertThat(res.getLikeCount()).isEqualTo(4); // in-memory -1(=2)이 아니라 재조회한 실제 저장값
         assertThat(res.isLiked()).isFalse();
         verify(likeRepository).delete(like);
         verify(postRepository).decrementLikeCount(POST_ID);
