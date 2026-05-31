@@ -8,6 +8,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.gb.document.domain.document.entity.AnalysisDocumentType;
 import com.gb.document.domain.document.entity.Document;
@@ -27,6 +28,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -147,6 +149,96 @@ class AnalysisResultIngestServiceImplTest {
                 .hasMessageContaining("schema_version");
     }
 
+    @Test
+    @DisplayName("B 위반: risk_items 비었는데 overall=HIGH → 예외 + DB 미접근 (DLQ)")
+    void risk연동_빈배열인데_overall있으면_예외() {
+        AnalysisResultMessage msg = msg(
+                ProcessingStatus.COMPLETED, RiskLevel.HIGH, List.of(),
+                new BigDecimal("0.9"), AnalysisDocumentType.LABOR_CONTRACT);
+
+        assertThatThrownBy(() -> service.ingest(msg))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("risk 연동");
+
+        verifyNoInteractions(documentRepository, documentResultRepository);
+    }
+
+    @Test
+    @DisplayName("B 위반: overall이 max(risk_items)와 불일치(items=[HIGH,MEDIUM], overall=LOW) → 예외 (DLQ)")
+    void risk연동_overall이_max와_불일치하면_예외() {
+        AnalysisResultMessage msg = msg(
+                ProcessingStatus.COMPLETED, RiskLevel.LOW,
+                List.of(new RiskItem(RiskLevel.HIGH, "제8조", "x"),
+                        new RiskItem(RiskLevel.MEDIUM, "제9조", "y")),
+                new BigDecimal("0.9"), AnalysisDocumentType.LABOR_CONTRACT);
+
+        assertThatThrownBy(() -> service.ingest(msg))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("risk 연동");
+
+        verifyNoInteractions(documentRepository, documentResultRepository);
+    }
+
+    @Test
+    @DisplayName("B 정상: risk_items=[] + overall=null → 저장 진행")
+    void risk연동_빈배열_overall_null이면_정상저장() {
+        Document submission = analyzingDoc();
+        given(documentRepository.findByPublicId(DOC_PUBLIC_ID)).willReturn(Optional.of(submission));
+        given(documentResultRepository.findBySubmission_Id(any())).willReturn(Optional.empty());
+
+        service.ingest(msg(ProcessingStatus.COMPLETED, null, List.of(),
+                new BigDecimal("0.9"), AnalysisDocumentType.LABOR_CONTRACT));
+
+        verify(documentResultRepository).save(any(DocumentResult.class));
+    }
+
+    @Test
+    @DisplayName("C 위반: 필수 필드(analysis_document_type) null → 예외 + DB 미접근 (DLQ)")
+    void 필수필드_누락이면_예외() {
+        AnalysisResultMessage msg = msg(
+                ProcessingStatus.COMPLETED, RiskLevel.HIGH,
+                List.of(new RiskItem(RiskLevel.HIGH, "제8조", "x")),
+                new BigDecimal("0.9"), null);
+
+        assertThatThrownBy(() -> service.ingest(msg))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("analysis_document_type");
+
+        verifyNoInteractions(documentRepository, documentResultRepository);
+    }
+
+    @Test
+    @DisplayName("A: ocr_confidence > 1 → 1.00으로 clamp 후 저장(예외 없음)")
+    void ocr_상한초과는_clamp되어_저장() {
+        Document submission = analyzingDoc();
+        given(documentRepository.findByPublicId(DOC_PUBLIC_ID)).willReturn(Optional.of(submission));
+        given(documentResultRepository.findBySubmission_Id(any())).willReturn(Optional.empty());
+
+        service.ingest(msg(ProcessingStatus.COMPLETED, RiskLevel.HIGH,
+                List.of(new RiskItem(RiskLevel.HIGH, "제8조", "x")),
+                new BigDecimal("1.5"), AnalysisDocumentType.LABOR_CONTRACT));
+
+        ArgumentCaptor<DocumentResult> captor = ArgumentCaptor.forClass(DocumentResult.class);
+        verify(documentResultRepository).save(captor.capture());
+        assertThat(captor.getValue().getOcrConfidence()).isEqualByComparingTo(BigDecimal.ONE);
+    }
+
+    @Test
+    @DisplayName("A: ocr_confidence < 0 → 0.00으로 clamp 후 저장(예외 없음)")
+    void ocr_하한미만은_clamp되어_저장() {
+        Document submission = analyzingDoc();
+        given(documentRepository.findByPublicId(DOC_PUBLIC_ID)).willReturn(Optional.of(submission));
+        given(documentResultRepository.findBySubmission_Id(any())).willReturn(Optional.empty());
+
+        service.ingest(msg(ProcessingStatus.COMPLETED, RiskLevel.HIGH,
+                List.of(new RiskItem(RiskLevel.HIGH, "제8조", "x")),
+                new BigDecimal("-0.1"), AnalysisDocumentType.LABOR_CONTRACT));
+
+        ArgumentCaptor<DocumentResult> captor = ArgumentCaptor.forClass(DocumentResult.class);
+        verify(documentResultRepository).save(captor.capture());
+        assertThat(captor.getValue().getOcrConfidence()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
     // ---- helpers ----
 
     private Document analyzingDoc() {
@@ -168,11 +260,20 @@ class AnalysisResultIngestServiceImplTest {
                 overall,
                 new BigDecimal("0.92"),
                 wage(),
-                riskItems(),
+                riskItemsFor(overall),
                 "번역 전문",
                 "ko",
                 "s3://gb-document-masked-test/2026-05-29/x.png",
                 failedReason,
+                Instant.parse("2026-05-29T09:00:00Z"));
+    }
+
+    private AnalysisResultMessage msg(ProcessingStatus status, RiskLevel overall,
+            List<RiskItem> items, BigDecimal ocr, AnalysisDocumentType docType) {
+        return new AnalysisResultMessage(
+                "1.1", DOC_PUBLIC_ID, docType, status, overall, ocr,
+                wage(), items, "번역 전문", "ko",
+                "s3://gb-document-masked-test/2026-05-29/x.png", null,
                 Instant.parse("2026-05-29T09:00:00Z"));
     }
 
@@ -182,6 +283,11 @@ class AnalysisResultIngestServiceImplTest {
                 new BigDecimal("2000000"),
                 new BigDecimal("9620"),
                 List.of(new WageSummary.Deduction("national_pension", new BigDecimal("90000"))));
+    }
+
+    /** 연동 규칙(§3-2)을 만족하도록 overall에 맞춰 risk_items를 구성한다(null→빈 배열). */
+    private List<RiskItem> riskItemsFor(RiskLevel overall) {
+        return overall == null ? List.of() : List.of(new RiskItem(overall, "제8조", "최저임금 미달"));
     }
 
     private List<RiskItem> riskItems() {
