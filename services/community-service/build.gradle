@@ -10,7 +10,12 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.kafka:spring-kafka'
-    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
+    // CLAUDE.md §5 / §12 표준 버전 2.8.14로 정렬(기존 스켈레톤 2.3.0 → 2.8.14, wallet·member-service와 동일).
+    // 2.8.15~2.8.17은 swagger-initializer.js 경로 패턴 회귀 버그로 기동 실패 → 2.8.14가 2.8 계열 마지막 정상 버전.
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.14'
 
     runtimeOnly 'com.mysql:mysql-connector-j'
+
+    // 테스트 전용 인메모리 DB. spring-boot-starter-test는 루트 build.gradle subprojects에서 이미 적용됨.
+    testRuntimeOnly 'com.h2database:h2'
 }

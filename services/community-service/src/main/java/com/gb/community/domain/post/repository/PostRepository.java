@@ -1,19 +1,94 @@
 package com.gb.community.domain.post.repository;
 
 import com.gb.community.domain.post.entity.Post;
+import com.gb.community.domain.post.entity.PostCategory;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 /**
- * Post 엔티티 Repository — <b>최소 스켈레톤</b>.
+ * Post 엔티티 Repository.
  *
- * <p>본 PR 범위는 시드 데이터 작성 + ddl-auto 트리거용. 실제 CRUD API에 필요한
- * 검색·페이지네이션 메서드는 커뮤팀이 본격 작업 시점에 추가한다.
+ * <p>게시글 CRUD에 필요한 검색·페이지네이션·단건 조회 메서드를 제공한다. 모든 조회는
+ * soft delete된 row({@code deleted_at IS NOT NULL})를 제외한다(CLAUDE.md §4, database.md §5).
  *
  * <p>챗봇 MCP2는 이 Repository를 호출하지 않고 mcp_reader 계정으로 MySQL을
- * 직접 SELECT한다 (ai-chatbot-mcp.md §9).
+ * 직접 SELECT한다 (ai-chatbot-mcp.md §9) — 그 경로와는 무관.
  */
 public interface PostRepository extends JpaRepository<Post, Long> {
 
+    /**
+     * 스켈레톤부터 있던 단건 조회. soft delete된 글도 잡히므로 CRUD 흐름에서는 쓰지 않는다.
+     * (삭제건 제외가 필요하면 {@link #findByPublicIdAndDeletedAtIsNull}을 쓴다.)
+     */
     Optional<Post> findByPublicId(String publicId);
+
+    /** 활성(미삭제) 게시글 단건 조회. 단건 조회/수정/삭제 흐름에서 사용한다. */
+    Optional<Post> findByPublicIdAndDeletedAtIsNull(String publicId);
+
+    /**
+     * 게시글 목록·검색. 활성(미삭제) 글만 대상으로 한다.
+     *
+     * <ul>
+     *   <li>{@code category} — null이면 전체 카테고리, 값 있으면 해당 카테고리만.</li>
+     *   <li>{@code keyword} — null/빈 문자열이면 검색 안 함(전체), 있으면 제목·본문 부분일치(LIKE).</li>
+     *   <li>정렬·페이지는 {@link Pageable}로 받는다(서비스에서 sort 파라미터를 Sort로 변환).</li>
+     * </ul>
+     *
+     * <p>count 쿼리는 Spring Data가 본 쿼리에서 자동 파생한다.
+     *
+     * <p>{@code keyword}는 LIKE 메타문자(%, _)를 와일드카드가 아닌 literal로 매칭해야 하므로
+     * {@code ESCAPE '|'}를 지정한다. 호출 측(서비스)이 {@code | % _}를 이스케이프한 값을 넘긴다.
+     *
+     * <p>이스케이프 문자로 백슬래시(\) 대신 파이프(|)를 쓴 이유: Hibernate가 {@code ESCAPE '\'}를
+     * SQL에 {@code escape '\'}(작은따옴표 안 백슬래시 1개)로 렌더링하는데, MySQL은 문자열 리터럴에서
+     * 백슬래시를 이스케이프로 처리(기본값)해 리터럴이 깨진다(H2 MySQL 모드는 통과해 가려짐). 파이프는
+     * 어떤 DB의 문자열 리터럴에서도 특수문자가 아니라 H2/MySQL 모두에서 동일하게 안전하다.
+     */
+    @Query("""
+            SELECT p FROM Post p
+            WHERE p.deletedAt IS NULL
+              AND (:category IS NULL OR p.category = :category)
+              AND (:keyword IS NULL
+                   OR p.title LIKE CONCAT('%', :keyword, '%') ESCAPE '|'
+                   OR p.content LIKE CONCAT('%', :keyword, '%') ESCAPE '|')
+            """)
+    Page<Post> search(@Param("category") PostCategory category,
+                       @Param("keyword") String keyword,
+                       Pageable pageable);
+
+    /**
+     * 좋아요 수 캐시({@code like_count}) 원자적 +1 (관심글 저장 시).
+     *
+     * <p>{@code like_count}는 likes 테이블 집계의 denormalized 캐시다. 엔티티 read-modify-write는
+     * 동시 좋아요에서 lost update가 날 수 있어, DB에서 원자적으로 증가시킨다(읽고-쓰기 경합 방지).
+     * 벌크 UPDATE라 영속성 컨텍스트를 우회하므로, 같은 트랜잭션에서 로드해 둔 Post 인스턴스의
+     * {@code likeCount}는 갱신되지 않는다(응답 수치는 호출 측에서 보정).
+     */
+    @Modifying
+    @Query("UPDATE Post p SET p.likeCount = p.likeCount + 1 WHERE p.id = :id")
+    void incrementLikeCount(@Param("id") Long id);
+
+    /**
+     * 좋아요 수 캐시({@code like_count}) 원자적 -1 (관심글 취소 시).
+     * {@code like_count > 0} 가드로 음수로 내려가지 않게 막는다(취소 멱등 처리와 함께 정합 유지).
+     */
+    @Modifying
+    @Query("UPDATE Post p SET p.likeCount = p.likeCount - 1 WHERE p.id = :id AND p.likeCount > 0")
+    void decrementLikeCount(@Param("id") Long id);
+
+    /**
+     * like_count 캐시의 현재 저장값 단건 조회.
+     *
+     * <p>{@link #incrementLikeCount}/{@link #decrementLikeCount} 같은 벌크 UPDATE 직후, 같은 트랜잭션에서
+     * 갱신된 실제 like_count를 응답에 싣기 위해 쓴다. 스칼라 프로젝션이라 1차 캐시의 stale 엔티티가 아니라
+     * DB 최신값을 읽으므로(동시 좋아요/취소로 인한 표시 수치 오차 제거), 엔티티 재로딩(findById)으로는
+     * 1차 캐시의 옛 likeCount가 나와 효과가 없다.
+     */
+    @Query("SELECT p.likeCount FROM Post p WHERE p.id = :id")
+    Optional<Integer> findLikeCountById(@Param("id") Long id);
 }

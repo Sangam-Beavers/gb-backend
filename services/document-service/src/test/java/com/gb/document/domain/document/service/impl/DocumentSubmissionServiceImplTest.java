@@ -75,8 +75,10 @@ class DocumentSubmissionServiceImplTest {
     void submit_정상() {
         SubmitRequest req = new SubmitRequest(AnalysisDocumentType.LABOR_CONTRACT, "contract.pdf");
         Instant exp = Instant.parse("2026-05-29T10:00:00Z");
+        Map<String, String> headers = Map.of(
+                "Content-Type", "application/octet-stream", "x-amz-meta-source", "development");
         given(s3PresignedUrlClient.issueUploadUrl(anyString(), anyString(), anyMap(), any(Duration.class)))
-                .willReturn(new IssueUrlResult("https://mock/url", exp));
+                .willReturn(new IssueUrlResult("https://mock/url", headers, exp));
 
         SubmissionResponse res = service.submit(OWNER, req);
 
@@ -90,6 +92,8 @@ class DocumentSubmissionServiceImplTest {
         assertThat(metadata).doesNotContainKey("result_queue_arn");
         assertThat(res.getStatus()).isEqualTo("ANALYZING");
         assertThat(res.getUploadUrl()).isEqualTo("https://mock/url");
+        // 업로더가 PUT 시 그대로 보내야 하는 서명 헤더가 응답에 그대로 실린다.
+        assertThat(res.getUploadHeaders()).isEqualTo(headers);
         assertThat(res.getExpiresAt()).isEqualTo("2026-05-29T10:00:00Z");
     }
 
@@ -104,11 +108,13 @@ class DocumentSubmissionServiceImplTest {
                 "",
                 "gb-document-uploads-prod",
                 600,
-                "ap-northeast-2"));
+                "ap-northeast-2",
+                false,
+                ""));
 
         SubmitRequest req = new SubmitRequest(AnalysisDocumentType.PAYSLIP, "payslip.pdf");
         given(s3PresignedUrlClient.issueUploadUrl(anyString(), anyString(), anyMap(), any(Duration.class)))
-                .willReturn(new IssueUrlResult("u", Instant.now()));
+                .willReturn(new IssueUrlResult("u", Map.of(), Instant.now()));
 
         service.submit(OWNER, req);
 
@@ -250,6 +256,7 @@ class DocumentSubmissionServiceImplTest {
         // dev 기본(source=development, queue ARN 빈 값)
         Map<String, String> ignored = new HashMap<>();
         return new AnalysisProperties(
-                "development", resultQueueArn, "", "gb-document-uploads-dev", 600, "ap-northeast-2");
+                "development", resultQueueArn, "", "gb-document-uploads-dev", 600, "ap-northeast-2",
+                false, "");
     }
 }

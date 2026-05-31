@@ -155,7 +155,8 @@ Lambda B → 계정 A 환경별 SQS 큐(크로스 계정) 발행 → 해당 환�
   · stage 요청 → gb-analysis-results-stage → stage 백엔드 → stage Aurora
   · prod  요청 → gb-analysis-results-prod  → prod  백엔드 → prod  Aurora
   발행 대상 큐는 백엔드가 S3 메타데이터에 심은 result_queue_arn으로 결정(Lambda는 그 큐로만 발행)
-  COMPLETED: document_submissions UPDATE(COMPLETED) + document_results INSERT + S3 원본 삭제
+  COMPLETED: (Consumer) document_submissions UPDATE(COMPLETED) + document_results INSERT
+             (Lambda B) 결과 발행 후 S3 원본 삭제 — Consumer는 원본을 참조하지 않음(크로스계정 S3 권한 불필요)
   FAILED:    document_submissions UPDATE(FAILED) + S3 원본 유지(재분석) → 7일 수명주기 삭제
 ```
 
@@ -206,7 +207,7 @@ backend mysql_back
 | --- | --- | --- |
 | 1. 수집 최소화 | 사용자가 **백엔드 미경유**로 S3 직접 업로드(Pre-signed URL) | 운영 서버가 원본 개인정보를 보관하지 않음 |
 | 2. 처리 중 마스킹 | Lambda A에서 Claude VLM 단일 호출로 추출+마스킹 동시, 원본 이미지 메모리 소멸 | LLM/로그에 원본 PII 미노출 |
-| 3. 사후 삭제 | 해당 환경 DB 저장 확인 후 S3 원본 삭제(실패 시 7일 수명주기 자동 삭제) | 원본 잔존 최소화 |
+| 3. 사후 삭제 | Lambda B가 마스킹본 생성·결과 발행 후 S3 원본 삭제(production 경로는 Consumer의 DB 저장 확인 전 삭제이므로 실패 시 7일 수명주기가 백업) | 원본 잔존 최소화 |
 
 근거: 개인정보보호법 제16조(최소 수집).
 
@@ -239,6 +240,7 @@ backend mysql_back
 이 파이프라인 자체는 계정 B(AI 담당) 소관이고, **백엔드(공통 코드, 환경별 동일)** 가 구현할 접점은 다음뿐이다.
 
 1. `POST /api/v1/documents` — `document_submissions` INSERT + 계정 B S3 Pre-signed URL 발급. **이때 현재 환경의 `source`(production/development)를 결정해 S3 오브젝트 메타데이터에 심는다.** Lambda가 이 값으로 결과 경로를 분기한다.
+   - ⚠️ **메타데이터는 Pre-signed URL의 서명 헤더(`X-Amz-SignedHeaders`)에 포함**된다(SDK v2 presigner 동작). 따라서 백엔드는 응답에 `upload_headers`(Content-Type + `x-amz-meta-*`)를 함께 내려주고, **클라이언트는 PUT 업로드 시 이 헤더를 이름·값 그대로 전송**해야 메타데이터가 오브젝트에 박힌다(누락/변경 시 403, 분기 자체가 깨짐). 상세: `api-spec.md` §1.
 2. **결과 수신부 (환경에 따라 본인 것만 동작, 환경별 큐 구독)**
    - **운영기(prod):** SQS Consumer — `gb-analysis-results-prod` 큐만 구독. 결과 수신 → `document_submissions.status` 업데이트 + `document_results` INSERT + S3 원본 삭제 트리거.
    - **스테이징(stage):** SQS Consumer — `gb-analysis-results-stage` 큐만 구독(코드는 prod와 동일, 큐 이름만 프로필로 분리) → stage Aurora에 저장.

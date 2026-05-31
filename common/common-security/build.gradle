@@ -1,5 +1,18 @@
 dependencies {
+    // 응답/예외 포맷을 사용 서비스와 통일하기 위해 두 공통 모듈을 함께 가져간다.
+    implementation project(':common:common-exception')
+    implementation project(':common:common-response')
+
+    // 검표원(Resource Server) 본체. starter-security가 spring-security-web/-config을(SecurityFilterChain
+    // DSL, AuthenticationEntryPoint 등), oauth2-resource-server가 issuer-uri 기반 JWT(RS256/JWKS) 검증을 제공한다.
+    // 토큰 발급은 외부 IdP(Authentik/Cognito)가 하고 우리는 검증만 하므로 자체 발급용 jjwt는 두지 않는다.
     implementation 'org.springframework.boot:spring-boot-starter-security'
     implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
-    implementation project(':common:common-exception')
+
+    // EntryPoint가 ErrorResponse를 JSON으로 직렬화할 때 ObjectMapper가 필요하다.
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+
+    // EntryPoint가 HttpServletRequest/Response를 다루므로 서블릿 API가 컴파일 시점에 필요하다.
+    // (이 모듈은 starter-web을 두지 않으므로 명시한다. 런타임엔 사용 서비스의 톰캣이 제공.)
+    compileOnly 'jakarta.servlet:jakarta.servlet-api'
 }

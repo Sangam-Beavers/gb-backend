@@ -58,4 +58,19 @@ public class WalletBalance extends BaseEntity {
         this.currencyCode = currencyCode;
         this.balance = balance != null ? balance : BigDecimal.ZERO;
     }
+
+    /**
+     * 잔액을 {@code delta}만큼 증액한다(충전 등). {@code @Setter} 대신 의도가 드러나는 도메인 메서드로
+     * 노출해 불변성 규칙(CLAUDE.md §4)을 지킨다. 영속 상태에서 호출하면 dirty checking으로 UPDATE된다.
+     *
+     * <p>{@code delta}가 null이거나 0 이하면 {@link IllegalArgumentException}을 던진다. 이는 외부 입력
+     * 검증이 아니라 <em>내부 불변식 방어</em>다 — 호출 측(Service)이 이미 양수로 검증한 값을 받는다는 가정이며,
+     * 위반 시 프로그래밍 오류이므로 비즈니스 예외(BusinessException) 대상이 아니다(CLAUDE.md §6 본문).
+     */
+    public void addBalance(BigDecimal delta) {
+        if (delta == null || delta.signum() <= 0) {
+            throw new IllegalArgumentException("증액 금액은 양수여야 합니다: " + delta);
+        }
+        this.balance = this.balance.add(delta);
+    }
 }

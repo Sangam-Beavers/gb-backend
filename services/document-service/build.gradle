@@ -14,12 +14,19 @@ dependencies {
 
     // R1 PoC — Lambda Function URL을 IAM(SigV4)로 서명해 호출하기 위한 AWS SDK v2 auth 모듈.
     // HTTP 자체는 Java 17 java.net.http.HttpClient로 처리하고, 여기서는 서명 유틸만 사용한다.
-    // BOM으로 버전 통일(다른 AWS 모듈 추가 시에도 동일 BOM 사용).
+    //
+    // BOM 순서: spring-cloud-aws BOM(아래)이 AWS SDK 버전을 관리(3.4.2 = AWS SDK 2.31.x).
+    // awssdk:bom을 먼저 선언 후 spring-cloud-aws BOM이 뒤따라 적용된다.
     implementation platform('software.amazon.awssdk:bom:2.31.0')
+    // SQS Consumer(@SqsListener) — Spring Boot 3.5 호환 라인은 3.4.x (3.4.0이 Boot 3.5.0으로 업그레이드).
+    // 3.4.2가 3.4 계열 최신 패치(2025-12-01). 컨테이너가 폴링/visibility 연장/ack-on-success를 책임진다.
+    // 상세: docs/document-analysis/result-queue-routing.md §3, result-json-schema-agreement.md §1.
+    implementation platform('io.awspring.cloud:spring-cloud-aws-dependencies:3.4.2')
+    implementation 'io.awspring.cloud:spring-cloud-aws-starter-sqs'
     implementation 'software.amazon.awssdk:auth'
     implementation 'software.amazon.awssdk:http-client-spi'
-    // 분석 요청용 S3 Pre-signed PUT URL 발급 + Lambda 재트리거(SQS publish).
-    // SQS Consumer(결과 수신)는 다음 단계 — 지금은 retry publish 용도로만 사용.
+    // 분석 요청용 S3 Pre-signed PUT URL 발급 + Lambda 재트리거(SQS publish — 동기 SqsClient).
+    // 결과 수신은 위 starter-sqs(@SqsListener)가 SqsAsyncClient를 auto-config로 만들어 처리.
     implementation 'software.amazon.awssdk:s3'
     implementation 'software.amazon.awssdk:sqs'
 

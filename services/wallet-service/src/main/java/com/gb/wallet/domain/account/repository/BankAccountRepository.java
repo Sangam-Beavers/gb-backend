@@ -3,10 +3,22 @@ package com.gb.wallet.domain.account.repository;
 import com.gb.wallet.domain.account.entity.BankAccount;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface BankAccountRepository extends JpaRepository<BankAccount, Long> {
+
+    /**
+     * 충전 대상 계좌를 조회한다 — public_id + 본인 소유(user_public_id) + 활성(is_active) 세 조건을 모두
+     * 만족할 때만 반환한다. 셋 중 하나라도 어긋나면(미존재/타인 계좌/비활성) {@code empty}이며, 호출 측은
+     * 어떤 사유든 구분 없이 ACCOUNT4001로 변환한다(타인 계좌 존재 여부 등 정보 누설 방지).
+     *
+     * <p>{@code @EntityGraph(bank)}는 같은 도메인의 다른 계좌 finder들과 동일한 컨벤션을 따른다 —
+     * bank 참조가 LAZY라 호출 측에서 접근 시 N+1이 나지 않도록 즉시 페치한다.
+     */
+    @EntityGraph(attributePaths = "bank")
+    Optional<BankAccount> findByPublicIdAndUserPublicIdAndIsActiveTrue(String publicId, String userPublicId);
 
     /**
      * 요청 회원의 활성 계좌 목록을 주 계좌 우선, 최신 등록순으로 반환한다.

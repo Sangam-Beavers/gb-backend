@@ -12,6 +12,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.Lob;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
@@ -32,6 +33,11 @@ import lombok.NoArgsConstructor;
  *
  * <p>Post 참조: 같은 community 스키마 내부라 {@link ManyToOne}(LAZY, 단방향) 매핑
  * (CLAUDE.md §4 Entity 규칙).
+ *
+ * <p>{@code public_id}(UUID): 댓글의 대외 식별자. 댓글 목록/작성 응답이 댓글을 {@code public_id}로
+ * 노출하므로(api-spec §6·§7, CLAUDE.md §5 — 내부 id 노출 금지) posts와 동일하게 보유한다.
+ * database.md §5 comments 표에는 컬럼이 누락돼 있으나, 같은 문서 §0·§6 공통 규약("외부 노출 식별자는
+ * public_id (UUID, VARCHAR(36))")과 api-spec이 SSOT다 — 표의 누락은 보강 대상이라 Post와 일관되게 추가.
  */
 @Entity
 @Getter
@@ -42,6 +48,10 @@ public class Comment extends BaseSoftDeleteEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    /** 외부 노출용 식별자 (UUID). conventions §0 — 내부 id는 응답/URL에 노출 금지. (Post.publicId와 동일 규칙) */
+    @Column(name = "public_id", length = 36, nullable = false, unique = true)
+    private String publicId;
 
     /** 동일 스키마 내부 참조 — JPA 객체 매핑 OK (CLAUDE.md §4). */
     @ManyToOne(fetch = FetchType.LAZY)
@@ -71,7 +81,11 @@ public class Comment extends BaseSoftDeleteEntity {
     private Integer likeCount;
 
     @Builder
-    private Comment(Post post, String userPublicId, Long parentId, String content) {
+    private Comment(String publicId, Post post, String userPublicId, Long parentId, String content) {
+        // publicId가 없으면 UUID 자동 생성. Post는 of() 팩토리에서 생성하지만(빌더는 명시 요구),
+        // 댓글은 본 PR이 읽기 전용이라 create 팩토리가 없고 빌더를 직접 쓰는 호출(시드/테스트)이 많아
+        // NOT NULL 불변식을 빌더에서 보장한다. create API 도입 시 of() 추가 시점에 정책 재정렬.
+        this.publicId = (publicId != null) ? publicId : UUID.randomUUID().toString();
         this.post = post;
         this.userPublicId = userPublicId;
         this.parentId = parentId;
