@@ -1,0 +1,36 @@
+# 테스트 전용 프로파일. @ActiveProfiles("test")로 활성화.
+# 인메모리 H2(MySQL 호환 모드)로 돈다 — 개발기 DB는 절대 만지지 않는다(CLAUDE §10).
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: create-drop          # 테스트마다 스키마 생성/삭제
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: true
+    show-sql: true
+  sql:
+    init:
+      mode: never
+  jackson:
+    # main과 동일한 전역 규칙(응답 JSON 검증 시 대비).
+    property-naming-strategy: SNAKE_CASE
+
+# 방식 B(검표원) 보안 설정은 issuer-uri로 외부 IdP의 JWKS를 부팅 시 받아온다.
+# 테스트에선 실제 IdP가 없으므로 issuer-uri를 두지 않고, 컨텍스트 테스트가 JwtDecoder를
+# @MockitoBean으로 대체한다(외부 의존 차단 — CLAUDE §10).
+
+# RealIdpAuthClient(@Component)가 @Value로 이 키들을 주입받으므로 컨텍스트 로딩 시 필요하다.
+# 테스트는 실제 IdP를 호출하지 않으므로 더미 값이면 충분하다(외부 호출 없음).
+auth:
+  idp:
+    token-uri: http://localhost/dummy/token
+    client-id: test-client
+    client-secret: test-secret
+    api-base-uri: http://localhost/dummy/api/v3
+    admin-token: test-admin-token
