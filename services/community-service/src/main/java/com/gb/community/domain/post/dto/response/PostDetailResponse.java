@@ -34,7 +34,7 @@ public class PostDetailResponse {
     @Schema(description = "본문(전체)", example = "베트남에서 온 외국인입니다. 같은 경험 있는 분 계시면 알려주세요.")
     private final String content;
 
-    // posts 스키마에 이미지 컬럼이 없고 post_images 테이블 미정 → 항상 빈 배열로 반환(작업 지시서 확정 사항 1).
+    // posts 스키마에 이미지 컬럼이 없고 post_images 테이블 미정 → 항상 빈 배열로 반환한다.
     // TODO: post_images 테이블 확정 시 실제 URL 목록으로 교체.
     @Schema(description = "이미지 URL 목록(현재 미저장 — 항상 빈 배열)", example = "[]")
     private final List<String> imageUrls;
@@ -45,7 +45,7 @@ public class PostDetailResponse {
     @Schema(description = "작성자 인증 배지 여부", example = "true")
     private final boolean authorIsVerified;
 
-    // author_temperature: 명세 타입은 number지만 등급 문자열을 그대로 싣는다(작업 지시서 확정 사항 3). TODO 동일.
+    // author_temperature: 명세 타입은 number지만 등급 문자열을 그대로 싣는다. TODO 동일.
     @Schema(description = "작성자 이웃 온도 등급(명세 number와 불일치 — 등급 문자열 전달, TODO)",
             example = "GREEN", allowableValues = {"RED", "YELLOW", "GREEN", "PURPLE", "BLUE"})
     private final String authorTemperature;
@@ -87,7 +87,7 @@ public class PostDetailResponse {
                 .category(post.getCategory().name())
                 .title(post.getTitle())
                 .content(post.getContent())
-                .imageUrls(List.of()) // 미저장 — 항상 빈 배열(확정 사항 1)
+                .imageUrls(List.of()) // 미저장 — 항상 빈 배열
                 .authorNickname(author.nickname())
                 .authorIsVerified(author.isVerified())
                 .authorTemperature(author.temperatureGrade())

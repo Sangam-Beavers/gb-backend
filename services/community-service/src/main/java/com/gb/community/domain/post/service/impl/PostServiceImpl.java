@@ -72,7 +72,7 @@ public class PostServiceImpl implements PostService {
             // @NotBlank가 1차로 막지만, 방어적으로 한 번 더 — 카테고리는 작성 시 필수.
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
-        // image_urls는 받기만 하고 영속화하지 않는다(확정 사항 1). language는 "ko" 고정(Post.of, 확정 사항 2).
+        // image_urls는 받기만 하고 영속화하지 않는다. language는 "ko" 고정(Post.of).
         Post saved = postRepository.save(
                 Post.of(requesterUserPublicId, category, request.getTitle(), request.getContent()));
         return PostDetailResponse.from(saved, memberClient.getMember(requesterUserPublicId));
@@ -137,7 +137,7 @@ public class PostServiceImpl implements PostService {
      *   <li>latest(기본) — 최신순(createdAt desc)</li>
      *   <li>popular — 좋아요순(likeCount desc), 동률은 최신순</li>
      *   <li>accuracy — 키워드 검색 정확도순. 전문검색 미도입이라 현재는 키워드 유무와 무관하게 최신순과
-     *       동일하게 정렬한다(키워드 없는 accuracy도 사실상 latest와 동치, 작업 지시서 Step 4).
+     *       동일하게 정렬한다(키워드 없는 accuracy도 사실상 latest와 동치).
      *       TODO: 관련도 랭킹 도입 시 교체.</li>
      * </ul>
      * 그 외 값은 COMMON4001. id를 마지막 tie-breaker로 둬 정렬을 결정적으로 만든다(노출 X, 정렬 키로만 사용).

@@ -38,9 +38,9 @@ public class PostCreateRequest {
 
     /**
      * 사전 업로드된 이미지 URL 목록(선택). 현재 posts 스키마에 이미지 컬럼이 없고 post_images 테이블이
-     * 미정(팀 확정 사항)이라 <b>받기만 하고 영속화하지 않는다</b>. 응답의 image_urls는 항상 빈 배열로 나간다.
+     * 미정이라 <b>받기만 하고 영속화하지 않는다</b>. 응답의 image_urls는 항상 빈 배열로 나간다.
      *
-     * <p>TODO: post_images 테이블 확정 시 저장 로직 추가(작업 지시서 확정 사항 1).
+     * <p>TODO: post_images 테이블 확정 시 저장 로직 추가.
      */
     @Schema(description = "사전 업로드된 이미지 URL 목록(현재 미저장)",
             example = "[\"https://cdn.example.com/a.jpg\"]")

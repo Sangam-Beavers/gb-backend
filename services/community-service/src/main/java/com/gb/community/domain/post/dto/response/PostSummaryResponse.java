@@ -39,7 +39,7 @@ public class PostSummaryResponse {
     private final String authorNickname;
 
     // author_temperature: 명세 타입은 number지만 member 도메인 온도는 문자열 등급(temperature_grade)이다.
-    // 임의 숫자 매핑을 만들지 않고 등급 문자열을 그대로 싣는다(작업 지시서 확정 사항 3).
+    // 임의 숫자 매핑을 만들지 않고 등급 문자열을 그대로 싣는다.
     // TODO: member 온도 점수(number) 연동 시 숫자형으로 교체.
     @Schema(description = "작성자 이웃 온도 등급(명세 number와 불일치 — 등급 문자열 전달, TODO)",
             example = "GREEN", allowableValues = {"RED", "YELLOW", "GREEN", "PURPLE", "BLUE"})
