@@ -145,6 +145,25 @@ class PostRepositoryTest {
     }
 
     @Test
+    @DisplayName("키워드 LIKE 이스케이프: '%'를 와일드카드가 아닌 literal로 매칭(ESCAPE 절)")
+    void search_키워드_퍼센트_literal_매칭() {
+        Post pA = persistPost(U1, PostCategory.LIFE_INFO, "100% 환급 보장", "내용", T6, 0, false);
+        Post pB = persistPost(U2, PostCategory.LIFE_INFO, "1000원 행사 안내", "내용", T6, 0, false);
+        em.flush();
+        em.clear();
+
+        // 서비스가 넘기는 이스케이프 형태("100|%", ESCAPE '|') — literal '%'만 매칭하므로 pA만. (이스케이프 없으면 pB도 매칭)
+        Page<Post> literal = postRepository.search(null, "100|%", PageRequest.of(0, 20, LATEST));
+        assertThat(literal.getContent()).extracting(Post::getPublicId)
+                .containsExactly(pA.getPublicId());
+
+        // 일반 부분일치("100")는 둘 다 매칭 — 정상 검색 회귀 방지.
+        Page<Post> plain = postRepository.search(null, "100", PageRequest.of(0, 20, LATEST));
+        assertThat(plain.getContent()).extracting(Post::getPublicId)
+                .contains(pA.getPublicId(), pB.getPublicId());
+    }
+
+    @Test
     @DisplayName("페이지네이션: size=2, 최신순 — page0=[p4,p3], page1=[p2,p1], total=4/2페이지")
     void search_페이지네이션() {
         Page<Post> page0 = postRepository.search(null, null, PageRequest.of(0, 2, LATEST));

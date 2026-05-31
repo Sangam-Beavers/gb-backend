@@ -265,6 +265,19 @@ class PostServiceTest {
     }
 
     @Test
+    @DisplayName("목록 검색: 키워드의 LIKE 메타문자(%, _)를 이스케이프해 repository에 전달")
+    void getPosts_키워드_이스케이프() {
+        ArgumentCaptor<String> keywordCaptor = ArgumentCaptor.forClass(String.class);
+        given(postRepository.search(any(), keywordCaptor.capture(), any()))
+                .willReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
+
+        service.getPosts(null, "50%_test", "latest", 0, 20);
+
+        // % → |%, _ → |_ (파이프 이스케이프)로 변환돼 넘어가야 한다.
+        assertThat(keywordCaptor.getValue()).isEqualTo("50|%|_test");
+    }
+
+    @Test
     @DisplayName("목록: 잘못된 sort → COMMON4001, repository·member 호출 없음")
     void getPosts_잘못된_sort() {
         assertThatThrownBy(() -> service.getPosts(null, null, "weird", 0, 20))

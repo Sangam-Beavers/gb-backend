@@ -39,14 +39,22 @@ public interface PostRepository extends JpaRepository<Post, Long> {
      * </ul>
      *
      * <p>count 쿼리는 Spring Data가 본 쿼리에서 자동 파생한다.
+     *
+     * <p>{@code keyword}는 LIKE 메타문자(%, _)를 와일드카드가 아닌 literal로 매칭해야 하므로
+     * {@code ESCAPE '|'}를 지정한다. 호출 측(서비스)이 {@code | % _}를 이스케이프한 값을 넘긴다.
+     *
+     * <p>이스케이프 문자로 백슬래시(\) 대신 파이프(|)를 쓴 이유: Hibernate가 {@code ESCAPE '\'}를
+     * SQL에 {@code escape '\'}(작은따옴표 안 백슬래시 1개)로 렌더링하는데, MySQL은 문자열 리터럴에서
+     * 백슬래시를 이스케이프로 처리(기본값)해 리터럴이 깨진다(H2 MySQL 모드는 통과해 가려짐). 파이프는
+     * 어떤 DB의 문자열 리터럴에서도 특수문자가 아니라 H2/MySQL 모두에서 동일하게 안전하다.
      */
     @Query("""
             SELECT p FROM Post p
             WHERE p.deletedAt IS NULL
               AND (:category IS NULL OR p.category = :category)
               AND (:keyword IS NULL
-                   OR p.title LIKE CONCAT('%', :keyword, '%')
-                   OR p.content LIKE CONCAT('%', :keyword, '%'))
+                   OR p.title LIKE CONCAT('%', :keyword, '%') ESCAPE '|'
+                   OR p.content LIKE CONCAT('%', :keyword, '%') ESCAPE '|')
             """)
     Page<Post> search(@Param("category") PostCategory category,
                        @Param("keyword") String keyword,

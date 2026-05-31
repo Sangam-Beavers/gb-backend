@@ -36,9 +36,9 @@ public class PostServiceImpl implements PostService {
 
     @Override
     public PostListResponse getPosts(String category, String keyword, String sort, int page, int size) {
-        PostCategory categoryFilter = parseCategory(category); // 잘못된 값 → COMMON4001
-        String keywordFilter = nullIfBlank(keyword);            // 빈 키워드면 검색 안 함(전체)
-        Pageable pageable = buildPageable(sort, page, size);    // 잘못된 sort → COMMON4001
+        PostCategory categoryFilter = parseCategory(category);   // 잘못된 값 → COMMON4001
+        String keywordFilter = escapeLikeKeyword(nullIfBlank(keyword)); // 빈 키워드면 null(전체), 아니면 LIKE 메타문자 이스케이프
+        Pageable pageable = buildPageable(sort, page, size);     // 잘못된 sort → COMMON4001
 
         Page<Post> result = postRepository.search(categoryFilter, keywordFilter, pageable);
         List<Post> posts = result.getContent();
@@ -155,5 +155,22 @@ public class PostServiceImpl implements PostService {
     /** 값이 null이거나 공백뿐이면 null, 아니면 원본 그대로. PATCH의 "변경 없음" 정규화에 사용. */
     private String nullIfBlank(String value) {
         return (value == null || value.isBlank()) ? null : value;
+    }
+
+    /**
+     * LIKE 검색용 키워드 이스케이프. 사용자가 입력한 {@code |, %, _}를 와일드카드가 아닌 literal로
+     * 매칭하도록 이스케이프한다({@code | → ||}, {@code % → |%}, {@code _ → |_}).
+     * 이스케이프 문자(|)를 가장 먼저 치환해야 뒤에서 붙인 이스케이프 파이프가 다시 중복 처리되지 않는다.
+     * Repository JPQL의 {@code LIKE ... ESCAPE '|'}와 짝을 이룬다(파이프를 쓰는 이유는 그쪽 주석 참고).
+     * null이면 그대로 null(검색 안 함).
+     */
+    private String escapeLikeKeyword(String keyword) {
+        if (keyword == null) {
+            return null;
+        }
+        return keyword
+                .replace("|", "||")
+                .replace("%", "|%")
+                .replace("_", "|_");
     }
 }
