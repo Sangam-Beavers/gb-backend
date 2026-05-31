@@ -66,7 +66,7 @@ public class ChargeServiceImpl implements ChargeService {
      * {@code @Lazy}로 빈 생성 시점의 자기참조 순환을 끊는다.
      *
      * <p><b>필드 주입을 쓴 이유:</b> 이 프로젝트엔 {@code lombok.config}가 없어 {@code @RequiredArgsConstructor}가
-     * 필드의 {@code @Lazy}를 생성자 파라미터로 복사하지 않는다(copyableAnnotations 미설정). 그래서 작업지시서의
+     * 필드의 {@code @Lazy}를 생성자 파라미터로 복사하지 않는다(copyableAnnotations 미설정). 그래서
      * {@code @Lazy private final ChargeService self} + 생성자 주입 형태는 자기참조 순환(BeanCurrentlyInCreationException)을
      * 일으킨다. 자기참조 한정으로 필드 주입({@code @Autowired @Lazy})을 쓰는 것이 표준적이고 안전하다.
      */
@@ -92,7 +92,6 @@ public class ChargeServiceImpl implements ChargeService {
             //   있다. 이 경우 현재 catch가 놓쳐 COMMON5031/5000으로 응답될 수 있다. Mock은 같은 키로 첫 응답을
             //   재반환하므로 외부 이중 차감은 없고(§5-2), 클라이언트 재시도로 정합성은 회복되지만, 운영 전환 시
             //   catch를 PessimisticLockingFailureException까지 넓히고 bounded retry를 더하는 것을 검토한다.
-            //   (본 PR은 작업지시서 §5-1이 명시한 DataIntegrityViolationException 경로를 그대로 따른다.)
             return self.readPrior(idempotencyKey, accountPublicId, userPublicId);
         }
     }

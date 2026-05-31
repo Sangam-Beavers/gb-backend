@@ -66,9 +66,9 @@ public class AccountController {
     })
     @GetMapping("/supported-banks")
     public ApiResponse<SupportedBankListResponse> getSupportedBanks(
-            // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
+            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            //       이 API는 사용자별 조회가 아니라 마스터 조회이므로 헤더 값 자체는 사용하지 않는다.
+            //       (마스터 조회라 헤더 값 자체는 사용하지 않음)
             @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId) {
         return ApiResponse.success(supportedBankService.getSupportedBanks());
     }
@@ -92,7 +92,7 @@ public class AccountController {
     })
     @GetMapping
     public ApiResponse<AccountListResponse> getMyAccounts(
-            // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
+            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
             @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId) {
         return ApiResponse.success(bankAccountService.getMyAccounts(userPublicId));
@@ -110,7 +110,7 @@ public class AccountController {
                     description = "조회 성공. data에 AccountHolderResponse(account_holder_name)가 담긴다."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "COMMON4001 - 요청 값이 올바르지 않습니다. / ACCOUNT4002 - 계좌 인증에 실패했습니다.",
+                    description = "COMMON4001 - 요청 값이 올바르지 않습니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
@@ -127,9 +127,9 @@ public class AccountController {
     })
     @GetMapping("/holder")
     public ApiResponse<AccountHolderResponse> getAccountHolder(
-            // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
+            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            //       이 API는 사용자별 조회가 아니라 외부 조회 위임이므로 헤더 값 자체는 사용하지 않는다.
+            //       (외부 조회 위임이라 헤더 값 자체는 사용하지 않음)
             @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
             @RequestParam("bankCode") @NotBlank @Size(max = 20) String bankCode,
             @RequestParam("accountNumber") @NotBlank @Size(max = 100) String accountNumber) {
@@ -166,9 +166,9 @@ public class AccountController {
     })
     @PostMapping("/verify")
     public ApiResponse<VerifyAccountResponse> verifyAccount(
-            // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
+            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            //       이 API는 외부 인증 위임이므로 헤더 값 자체는 사용하지 않는다.
+            //       (외부 인증 위임이라 헤더 값 자체는 사용하지 않음)
             @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
             @Valid @RequestBody VerifyAccountRequest request) {
         return ApiResponse.success(bankAccountService.verifyAccount(request));
@@ -199,7 +199,7 @@ public class AccountController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<AccountResponse> registerAccount(
-            // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
+            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
             //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
             @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
             @Valid @RequestBody RegisterAccountRequest request) {
@@ -244,8 +244,8 @@ public class AccountController {
     @PostMapping("/{id}/charge")
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<ChargeResponse> charge(
-            // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신(CLAUDE.md §9).
+            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
+            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
             @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
             @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 100) String idempotencyKey,
             @PathVariable("id") @NotBlank @Size(max = 36) String accountPublicId,

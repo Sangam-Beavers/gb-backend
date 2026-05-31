@@ -39,6 +39,8 @@ public class BankAccountServiceImpl implements BankAccountService {
 
     @Override
     public VerifyAccountResponse verifyAccount(VerifyAccountRequest request) {
+        // TODO: verify 호출 횟수 제한 미구현 — 초과 시 ACCOUNT4005(VERIFICATION_RATE_LIMITED) 반환 예정.
+        //       Redis 카운터 기반 rate limiting을 후속 이슈에서 도입(인프라 필요).
         // Mock 은행 실패는 BankErrorMapper가 BusinessException으로 변환해 던지므로 그대로 전파한다.
         AccountToken token = bankClient.verify(
                 request.getBankCode(), request.getAccountNumber(), request.getHolderName());
