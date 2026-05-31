@@ -7,20 +7,21 @@ import lombok.Getter;
 @Getter
 public class SignupResponse {
 
-    private final Long memberId;
+    // 대외 식별자(UUID). 내부 id(BIGINT)는 응답에 노출하지 않는다.
+    private final String publicId;
     private final String email;
     private final String nickname;
 
     @Builder
-    private SignupResponse(Long memberId, String email, String nickname) {
-        this.memberId = memberId;
+    private SignupResponse(String publicId, String email, String nickname) {
+        this.publicId = publicId;
         this.email = email;
         this.nickname = nickname;
     }
 
     public static SignupResponse from(Member member) {
         return SignupResponse.builder()
-                .memberId(member.getId())
+                .publicId(member.getPublicId())
                 .email(member.getEmail())
                 .nickname(member.getNickname())
                 .build();
