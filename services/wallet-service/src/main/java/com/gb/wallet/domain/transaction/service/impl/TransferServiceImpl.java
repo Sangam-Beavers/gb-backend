@@ -25,6 +25,7 @@ import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.MemberInfo;
 import com.gb.wallet.global.common.enums.CurrencyType;
+import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.common.util.AccountNumberMasker;
 import com.gb.wallet.global.exception.code.MemberErrorCode;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
@@ -33,10 +34,12 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -56,6 +59,10 @@ public class TransferServiceImpl implements TransferService {
     //       (docs/remittance/api-spec.md §4 참고). 정책 SSOT가 docs라 코드 상수 동기화 주의.
     private static final BigDecimal REMITTANCE_FEE_RATE = new BigDecimal("0.005");
     private static final int FEE_SCALE = 4;
+
+    /** 수수료 API가 허용하는 송금 유형. TransactionType 중 CHARGE/EXCHANGE는 거부. */
+    private static final Set<TransactionType> ALLOWED_TRANSFER_TYPES =
+            EnumSet.of(TransactionType.INTERNAL_TRANSFER, TransactionType.REMITTANCE);
 
     private final WalletRepository walletRepository;
     private final TransactionRepository transactionRepository;
@@ -211,19 +218,25 @@ public class TransferServiceImpl implements TransferService {
         CurrencyType currency = CurrencyType.fromCode(request.currencyCode())
                 .orElseThrow(() -> new BusinessException(TransferErrorCode.UNSUPPORTED_CURRENCY));
 
-        // 2) amount 파싱. @Pattern으로 형식 보장됨(양수 십진수, 소수 4자리 이내).
+        // 2) 송금 유형 도메인 검증 — INTERNAL_TRANSFER/REMITTANCE 외는 TRANSFER4003.
+        //    .filter로 CHARGE/EXCHANGE(다른 도메인 값)도 거부. currency 검증과 동일한 Optional 패턴.
+        TransactionType transferType = TransactionType.fromCode(request.transferType())
+                .filter(ALLOWED_TRANSFER_TYPES::contains)
+                .orElseThrow(() -> new BusinessException(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE));
+
+        // 3) amount 파싱. @Pattern으로 형식 보장됨(양수 십진수, 소수 4자리 이내).
         BigDecimal amount = new BigDecimal(request.amount());
 
-        // 3) 송금 방식별 수수료. @Pattern으로 값 보장됨이라 default 분기 불필요.
-        BigDecimal fee = switch (request.transferType()) {
-            case "INTERNAL_TRANSFER" -> BigDecimal.ZERO.setScale(FEE_SCALE, RoundingMode.HALF_UP);
-            case "REMITTANCE" -> amount.multiply(REMITTANCE_FEE_RATE)
+        // 4) 송금 방식별 수수료. ALLOWED_TRANSFER_TYPES 필터로 두 값만 통과돼 default는 실제로 도달 불가.
+        BigDecimal fee = switch (transferType) {
+            case INTERNAL_TRANSFER -> BigDecimal.ZERO.setScale(FEE_SCALE, RoundingMode.HALF_UP);
+            case REMITTANCE -> amount.multiply(REMITTANCE_FEE_RATE)
                     .setScale(FEE_SCALE, RoundingMode.HALF_UP);
-            // @Valid가 막아주지만 Java switch는 default를 요구 — 검증 우회 시 내부 오류로 떨어뜨림(→ COMMON5000).
-            default -> throw new IllegalStateException("Unsupported transferType: " + request.transferType());
+            // ALLOWED_TRANSFER_TYPES가 막아주지만 enum 전체 case를 망라하는 안전망 — 도달 시 도메인 에러로 일관 처리.
+            default -> throw new BusinessException(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE);
         };
 
-        // 4) total = amount + fee. add는 scale = max(scale)을 따르므로 명시 setScale로 4자리 고정.
+        // 5) total = amount + fee. add는 scale = max(scale)을 따르므로 명시 setScale로 4자리 고정.
         BigDecimal totalDeduct = amount.add(fee).setScale(FEE_SCALE, RoundingMode.HALF_UP);
 
         return TransferFeeResponse.of(fee, currency, totalDeduct);

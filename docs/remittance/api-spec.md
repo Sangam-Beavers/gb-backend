@@ -128,7 +128,7 @@
 | `fee_currency_code` | string | N | 수수료 통화 (송금 통화와 동일) |
 | `total_deduct_amount` | string | N | 총 차감 금액 (amount + fee, string 십진수, 소수점 4자리) |
 
-**Error**: 400 COMMON4001 (Body 검증 실패) / 400 TRANSFER4002 (미지원 통화) / 401 COMMON4011
+**Error**: 400 COMMON4001 (Body 검증 실패) / 400 TRANSFER4002 (미지원 통화) / 400 TRANSFER4003 (미지원 송금 유형) / 401 COMMON4011
 
 ### 수수료 정책 (임시 — 실제 정책 확정 시 교체)
 - `INTERNAL_TRANSFER`: 무료 (`fee = 0`)

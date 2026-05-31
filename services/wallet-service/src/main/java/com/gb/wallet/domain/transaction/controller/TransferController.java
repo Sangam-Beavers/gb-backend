@@ -59,6 +59,8 @@ public class TransferController {
             "{\"success\":false,\"code\":\"COMMON5031\",\"message\":\"일시적으로 처리할 수 없습니다.\"}";
     private static final String EX_TRANSFER4002 =
             "{\"success\":false,\"code\":\"TRANSFER4002\",\"message\":\"지원하지 않는 통화입니다.\"}";
+    private static final String EX_TRANSFER4003 =
+            "{\"success\":false,\"code\":\"TRANSFER4003\",\"message\":\"지원하지 않는 송금 유형입니다.\"}";
 
     private final TransferService transferService;
 
@@ -276,12 +278,14 @@ public class TransferController {
                     description = "계산 성공. 응답은 공통 ApiResponse로 감싸지며 data에 TransferFeeResponse가 담긴다."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "COMMON4001 - Body 검증 실패 / TRANSFER4002 - 미지원 통화. 같은 400이지만 비즈니스 코드가 다르다 (examples 참고).",
+                    description = "COMMON4001 - Body 검증 실패 / TRANSFER4002 - 미지원 통화 / TRANSFER4003 - 미지원 송금 유형. "
+                            + "같은 400이지만 비즈니스 코드가 다르다 (examples 드롭다운 참고).",
                     content = @Content(
                             schema = @Schema(implementation = ErrorResponse.class),
                             examples = {
                                     @ExampleObject(name = "COMMON4001", value = EX_COMMON4001),
-                                    @ExampleObject(name = "TRANSFER4002", value = EX_TRANSFER4002)
+                                    @ExampleObject(name = "TRANSFER4002", value = EX_TRANSFER4002),
+                                    @ExampleObject(name = "TRANSFER4003", value = EX_TRANSFER4003)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",

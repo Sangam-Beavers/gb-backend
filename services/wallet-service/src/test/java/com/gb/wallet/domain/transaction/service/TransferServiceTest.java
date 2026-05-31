@@ -354,6 +354,33 @@ class TransferServiceTest {
     }
 
     @Test
+    @DisplayName("getTransferFee 미지원 송금 유형(INVALID_TYPE) → BusinessException(TRANSFER4003)")
+    void getTransferFee_미지원_송금_유형() {
+        TransferFeeRequest req = new TransferFeeRequest("INVALID_TYPE", "KRW", "10000.0000");
+
+        assertThatThrownBy(() -> transferService.getTransferFee(req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE);
+
+        verifyExternalsNotTouched();
+    }
+
+    @Test
+    @DisplayName("getTransferFee CHARGE/EXCHANGE는 TransactionType엔 있지만 수수료 API 허용 외 → TRANSFER4003")
+    void getTransferFee_허용외_TransactionType_거부() {
+        // TransactionType.CHARGE는 valueOf로 매칭되지만 ALLOWED_TRANSFER_TYPES 필터로 거부돼야 한다.
+        TransferFeeRequest req = new TransferFeeRequest("CHARGE", "KRW", "10000.0000");
+
+        assertThatThrownBy(() -> transferService.getTransferFee(req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE);
+
+        verifyExternalsNotTouched();
+    }
+
+    @Test
     @DisplayName("getTransferFee 미지원 통화(EUR) → BusinessException(TRANSFER4002)")
     void getTransferFee_미지원_통화() {
         TransferFeeRequest req = new TransferFeeRequest("REMITTANCE", "EUR", "10000.0000");

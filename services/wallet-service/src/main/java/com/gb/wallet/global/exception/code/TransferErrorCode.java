@@ -15,7 +15,8 @@ import org.springframework.http.HttpStatus;
 @RequiredArgsConstructor
 public enum TransferErrorCode implements ErrorCode {
 
-    UNSUPPORTED_CURRENCY(HttpStatus.BAD_REQUEST, "TRANSFER4002", "지원하지 않는 통화입니다.");
+    UNSUPPORTED_CURRENCY(HttpStatus.BAD_REQUEST, "TRANSFER4002", "지원하지 않는 통화입니다."),
+    UNSUPPORTED_TRANSFER_TYPE(HttpStatus.BAD_REQUEST, "TRANSFER4003", "지원하지 않는 송금 유형입니다.");
 
     private final HttpStatus httpStatus; // @Getter가 getHttpStatus/getCode/getMessage 생성 → ErrorCode 충족
     private final String code;

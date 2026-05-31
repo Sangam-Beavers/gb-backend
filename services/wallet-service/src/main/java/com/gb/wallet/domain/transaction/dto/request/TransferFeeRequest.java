@@ -34,8 +34,8 @@ public record TransferFeeRequest(
         @Schema(description = "송금 방식", example = "REMITTANCE",
                 allowableValues = {"INTERNAL_TRANSFER", "REMITTANCE"})
         @NotBlank
-        @Pattern(regexp = "^(INTERNAL_TRANSFER|REMITTANCE)$",
-                message = "transfer_type must be INTERNAL_TRANSFER or REMITTANCE")
+        // enum 후보값 검증은 Bean Validation @Pattern으로 박지 않는다(CLAUDE.md §6 규칙).
+        // Service에서 TransactionType.fromCode + filter로 검증해 TRANSFER4003으로 매핑.
         String transferType,
 
         @Schema(description = "송금 통화 코드", example = "KRW")
