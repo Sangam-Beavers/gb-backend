@@ -16,3 +16,8 @@ management:
     web:
       exposure:
         include: health, info
+
+# 충전 정책(미지정 시 ChargeProperties 기본값으로 동작).
+wallet:
+  charge:
+    single-limit: 10000000   # 단일 거래 충전 한도(KRW). 초과 시 ACCOUNT4007(명세 §12)
