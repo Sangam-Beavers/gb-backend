@@ -31,6 +31,7 @@ import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.entity.WalletBalance;
 import com.gb.wallet.domain.wallet.repository.WalletBalanceRepository;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
+import com.gb.wallet.domain.wallet.service.WalletBalanceWriter;
 import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.MemberInfo;
@@ -88,6 +89,7 @@ public class TransferServiceImpl implements TransferService {
 
     private final WalletRepository walletRepository;
     private final WalletBalanceRepository walletBalanceRepository;
+    private final WalletBalanceWriter walletBalanceWriter;
     private final TransactionRepository transactionRepository;
     private final TransactionAuditLogRepository auditLogRepository;
     private final BankAccountRepository bankAccountRepository;
@@ -373,26 +375,38 @@ public class TransferServiceImpl implements TransferService {
 
         try {
             // (1) wallet 재조회 — execute()의 엔티티는 이 트랜잭션 컨텍스트 밖에서 로드돼 detached.
+            //     수신자 지갑은 상류 execute()의 findByUserPublicId로 이미 검증된 상태(없으면 거기서 WALLET4001).
             Wallet senderWallet = walletRepository.findById(senderWalletId)
                     .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
             Wallet receiverWallet = walletRepository.findById(receiverWalletId)
                     .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
 
-            // (2) 비관적 락 — wallet_id 오름차순으로 잡아 데드락 회피(분산 락 정책과 동일 방향).
-            //     첫 송금이라 잔액 행이 없으면 WALLET4001(지갑은 있어도 해당 통화 잔액이 0원으로
-            //     생성된 적 없음). 1단계는 송금 시점 자동 0원 행 생성 미지원 — 후속 PR에서 ensureBalanceRow 검토.
-            long lowerId = Math.min(senderWalletId, receiverWalletId);
-            WalletBalance lowerBalance = walletBalanceRepository
-                    .findForUpdateByWalletAndCurrency(
-                            senderWalletId.equals(lowerId) ? senderWallet : receiverWallet, currency)
-                    .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
-            WalletBalance higherBalance = walletBalanceRepository
-                    .findForUpdateByWalletAndCurrency(
-                            senderWalletId.equals(lowerId) ? receiverWallet : senderWallet, currency)
-                    .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+            // (2) 수신자 잔액 행 0원 보장 — REQUIRES_NEW로 독립 커밋(이미 있으면 no-op, 동시 생성 race 흡수).
+            //     이래야 (3)의 FOR UPDATE가 존재하지 않는 행을 잠그려다 실패하지 않는다.
+            //     송신자는 자동 생성하지 않는다 — 돈을 보내려면 잔액 행이 이미 있어야 정상.
+            walletBalanceWriter.ensureBalanceRow(receiverWallet, currency);
 
-            WalletBalance senderBalance = senderWalletId.equals(lowerId) ? lowerBalance : higherBalance;
-            WalletBalance receiverBalance = senderWalletId.equals(lowerId) ? higherBalance : lowerBalance;
+            // (3) 비관적 락 — wallet_id 오름차순으로 잡아 데드락 회피(분산 락 정책과 동일 방향).
+            //     락 SQL 발행 순서는 lower → higher 그대로 유지하고, 결과는 역할(sender/receiver)로 재매핑.
+            long lowerId = Math.min(senderWalletId, receiverWalletId);
+            boolean senderIsLower = senderWalletId.equals(lowerId);
+            Wallet lowerWallet = senderIsLower ? senderWallet : receiverWallet;
+            Wallet higherWallet = senderIsLower ? receiverWallet : senderWallet;
+
+            Optional<WalletBalance> lowerBalanceOpt = walletBalanceRepository
+                    .findForUpdateByWalletAndCurrency(lowerWallet, currency);
+            Optional<WalletBalance> higherBalanceOpt = walletBalanceRepository
+                    .findForUpdateByWalletAndCurrency(higherWallet, currency);
+
+            // (4) 역할별 부재 사유 분기 — id 순이 아니라 sender/receiver 역할로 에러 코드를 가른다.
+            //     송신자 행 없음 = 도메인 에러(돈이 있어야 보냄, WALLET4001).
+            //     수신자 행 없음 = ensure 직후라 정합성 깨진 비정상 상태 → COMMON5000 (ChargeServiceImpl 동일 정책).
+            Optional<WalletBalance> senderBalanceOpt = senderIsLower ? lowerBalanceOpt : higherBalanceOpt;
+            Optional<WalletBalance> receiverBalanceOpt = senderIsLower ? higherBalanceOpt : lowerBalanceOpt;
+            WalletBalance senderBalance = senderBalanceOpt
+                    .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+            WalletBalance receiverBalance = receiverBalanceOpt
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
 
             // (3) 금액 + 수수료 계산. INTERNAL_TRANSFER는 fee=0이라 totalDeduct == amount.
             BigDecimal amount = new BigDecimal(request.amount());
