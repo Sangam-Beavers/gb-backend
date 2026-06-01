@@ -40,6 +40,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -59,6 +60,8 @@ class ChargeServiceIntegrationTest {
 
     @MockitoBean private BankClient bankClient;
     @MockitoBean private MemberClient memberClient;
+    // 방식 B 보안 필터 체인(oauth2ResourceServer)이 요구하는 JwtDecoder를 가린다(실제 IdP 호출 차단 — 컨텍스트 로딩용).
+    @MockitoBean private JwtDecoder jwtDecoder;
 
     @Autowired private ChargeService chargeService;
     @Autowired private WalletRepository walletRepository;

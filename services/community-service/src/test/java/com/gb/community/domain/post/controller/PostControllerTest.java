@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -15,10 +16,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
+import com.gb.common.security.RestAuthenticationEntryPoint;
 import com.gb.community.domain.post.dto.response.PostDetailResponse;
 import com.gb.community.domain.post.dto.response.PostListResponse;
 import com.gb.community.domain.post.service.PostService;
+import com.gb.community.global.config.WebConfig;
 import com.gb.community.global.exception.code.CommunityErrorCode;
+import com.gb.community.global.security.CurrentUserPublicIdArgumentResolver;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -27,8 +31,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 /**
  * {@link PostController} HTTP wiring 검증 — URL/메서드, @Valid·@Validated, @RequestHeader,
@@ -40,8 +47,12 @@ import org.springframework.test.web.servlet.MockMvc;
 @WebMvcTest(PostController.class)
 @Import({
         com.gb.common.exception.handler.GlobalExceptionHandler.class,
-        com.gb.community.global.config.SecurityConfig.class
+        com.gb.community.global.config.SecurityConfig.class,
+        RestAuthenticationEntryPoint.class,
+        WebConfig.class,
+        CurrentUserPublicIdArgumentResolver.class
 })
+@ActiveProfiles("test")
 class PostControllerTest {
 
     @Autowired
@@ -53,8 +64,25 @@ class PostControllerTest {
     @MockitoBean
     private PostService postService;
 
+    // 방식 B 보안 필터 체인(oauth2ResourceServer)이 요구하는 JwtDecoder를 가린다(실제 IdP 호출 차단).
+    @MockitoBean
+    private JwtDecoder jwtDecoder;
+
     private static final String USER = "00000000-0000-0000-0000-000000000001";
     private static final String PID = "a1b2c3d4-0000-0000-0000-000000000001";
+
+    /** 인증된 요청용 JWT 주입(public_id claim = USER). 컨트롤러는 이 claim으로 작성자를 식별한다. */
+    private static RequestPostProcessor authedJwt() {
+        return jwt().jwt(j -> j.claim("public_id", USER));
+    }
+
+    /**
+     * 토큰은 유효하나 {@code public_id} claim이 없는 JWT(=IdP Property Mapping 누락 시나리오).
+     * CurrentUserPublicIdArgumentResolver가 AUTH4011로 fail-fast 하는 경로 검증용.
+     */
+    private static RequestPostProcessor jwtWithoutPublicId() {
+        return jwt().jwt(j -> j.claim("sub", "no-mapping"));
+    }
 
     // ----- POST /posts -----
 
@@ -64,7 +92,7 @@ class PostControllerTest {
         given(postService.createPost(eq(USER), any())).willReturn(stubDetail());
 
         mockMvc.perform(post("/api/v1/community/posts")
-                        .header("X-User-Public-Id", USER)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "category", "JOB",
@@ -89,7 +117,7 @@ class PostControllerTest {
     @DisplayName("POST 400: 필수값(title) 누락 → COMMON4001, service 미호출")
     void create_필수값_누락() throws Exception {
         mockMvc.perform(post("/api/v1/community/posts")
-                        .header("X-User-Public-Id", USER)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "category", "JOB",
@@ -101,16 +129,32 @@ class PostControllerTest {
     }
 
     @Test
-    @DisplayName("POST 400: X-User-Public-Id 헤더 누락 → COMMON4001, service 미호출")
-    void create_헤더_누락() throws Exception {
+    @DisplayName("POST 401: 토큰 없음 → AUTH4011, service 미호출")
+    void create_토큰_없음_401() throws Exception {
         mockMvc.perform(post("/api/v1/community/posts")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "category", "JOB",
                                 "title", "제목",
                                 "content", "본문"))))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("COMMON4001"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verifyNoInteractions(postService);
+    }
+
+    @Test
+    @DisplayName("POST 401: 토큰은 유효하나 public_id claim 누락 → AUTH4011(resolver fail-fast), service 미호출")
+    void create_publicIdClaim_누락_401() throws Exception {
+        mockMvc.perform(post("/api/v1/community/posts")
+                        .with(jwtWithoutPublicId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "category", "JOB",
+                                "title", "제목",
+                                "content", "본문"))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
 
         verifyNoInteractions(postService);
     }
@@ -123,7 +167,7 @@ class PostControllerTest {
         given(postService.getPost(PID)).willReturn(stubDetail());
 
         mockMvc.perform(get("/api/v1/community/posts/{id}", PID)
-                        .header("X-User-Public-Id", USER))
+                        .with(authedJwt()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.public_id").value(PID))
                 .andExpect(jsonPath("$.data.author_is_verified").value(true));
@@ -136,7 +180,7 @@ class PostControllerTest {
                 .willThrow(new BusinessException(CommunityErrorCode.POST_NOT_FOUND));
 
         mockMvc.perform(get("/api/v1/community/posts/{id}", PID)
-                        .header("X-User-Public-Id", USER))
+                        .with(authedJwt()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("COMMUNITY4001"));
     }
@@ -150,7 +194,7 @@ class PostControllerTest {
                 .willReturn(PostListResponse.of(List.of(), 0, 20, 0, 0));
 
         mockMvc.perform(get("/api/v1/community/posts")
-                        .header("X-User-Public-Id", USER))
+                        .with(authedJwt()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.posts").isArray())
@@ -161,7 +205,7 @@ class PostControllerTest {
     @DisplayName("GET 400: size 상한(100) 초과 → COMMON4001(@Max 위반), service 미호출")
     void getPosts_size_초과() throws Exception {
         mockMvc.perform(get("/api/v1/community/posts")
-                        .header("X-User-Public-Id", USER)
+                        .with(authedJwt())
                         .param("size", "101"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("COMMON4001"));
@@ -177,7 +221,7 @@ class PostControllerTest {
         given(postService.updatePost(eq(USER), eq(PID), any())).willReturn(stubDetail());
 
         mockMvc.perform(patch("/api/v1/community/posts/{id}", PID)
-                        .header("X-User-Public-Id", USER)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of("title", "수정"))))
                 .andExpect(status().isOk())
@@ -195,7 +239,7 @@ class PostControllerTest {
                 .willThrow(new BusinessException(CommonErrorCode.FORBIDDEN));
 
         mockMvc.perform(patch("/api/v1/community/posts/{id}", PID)
-                        .header("X-User-Public-Id", USER)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of("title", "수정"))))
                 .andExpect(status().isForbidden())
@@ -208,7 +252,7 @@ class PostControllerTest {
     @DisplayName("DELETE 200: 정상 삭제 → 200 + data:null, service 호출")
     void deletePost_정상() throws Exception {
         mockMvc.perform(delete("/api/v1/community/posts/{id}", PID)
-                        .header("X-User-Public-Id", USER))
+                        .with(authedJwt()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));
 

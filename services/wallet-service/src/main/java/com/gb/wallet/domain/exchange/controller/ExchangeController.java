@@ -8,6 +8,7 @@ import com.gb.wallet.domain.exchange.dto.response.ExchangeResponse;
 import com.gb.wallet.domain.exchange.dto.response.QuoteResponse;
 import com.gb.wallet.domain.exchange.dto.response.SupportedCurrenciesResponse;
 import com.gb.wallet.domain.exchange.service.ExchangeService;
+import com.gb.wallet.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -43,14 +44,11 @@ public class ExchangeController {
                     description = "조회 성공. data.currencies 로 지원 통화 목록 반환."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다.",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class)))
     })
-    public ApiResponse<SupportedCurrenciesResponse> getSupportedCurrencies(
-            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            @RequestHeader("X-User-Public-Id") String userPublicId) {
+    public ApiResponse<SupportedCurrenciesResponse> getSupportedCurrencies() {
         return ApiResponse.success(exchangeService.getSupportedCurrencies());
     }
 
@@ -67,13 +65,12 @@ public class ExchangeController {
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "401", description = "COMMON4011 - 인증 정보가 유효하지 않습니다.",
+                    responseCode = "401", description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ApiResponse<QuoteResponse> createQuote(
-            // TODO: 인증 구현 후 JWT에서 userPublicId 추출로 교체.
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @Valid @RequestBody QuoteRequest request) {
         return ApiResponse.success(exchangeService.createQuote(userPublicId, request));
     }
@@ -92,7 +89,7 @@ public class ExchangeController {
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "401", description = "COMMON4011 - 인증 정보가 유효하지 않습니다.",
+                    responseCode = "401", description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -101,8 +98,7 @@ public class ExchangeController {
                             schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ApiResponse<ExchangeResponse> execute(
-            // TODO: 인증 구현 후 JWT에서 userPublicId 추출로 교체.
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody ExchangeExecuteRequest request) {
         return ApiResponse.success(exchangeService.execute(userPublicId, idempotencyKey, request));
@@ -116,7 +112,7 @@ public class ExchangeController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200", description = "조회 성공."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "401", description = "COMMON4011 - 인증 정보가 유효하지 않습니다.",
+                    responseCode = "401", description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -129,8 +125,7 @@ public class ExchangeController {
                             schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ApiResponse<ExchangeResponse> getExchange(
-            // TODO: 인증 구현 후 JWT에서 userPublicId 추출로 교체.
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @PathVariable("id") String exchangePublicId) {
         return ApiResponse.success(exchangeService.getExchange(userPublicId, exchangePublicId));
     }

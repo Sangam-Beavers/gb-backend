@@ -177,7 +177,7 @@ com.gb.{서비스}/
   - 형식: `{DOMAIN}{4자리}` (예: `WALLET4001`, `WALLET4002`).
   - 같은 의미면 코드 하나로 통일. 번호는 한번 부여하면 재사용·재배치 금지.
   - 서버 측 잘못은 도메인 코드 신설 대신 `COMMON5000` 사용.
-  - 인증 실패(JWT 누락/무효)는 `COMMON4011`, 권한 없음은 `COMMON4031` 재사용.
+  - 인증 실패(JWT 누락/무효)는 `AUTH4011`(common-security `RestAuthenticationEntryPoint`가 처리), 권한 없음은 `COMMON4031` 재사용.
   - "없는 회원"처럼 명확한 도메인 대상이 있으면 도메인 코드(MEMBER4001 등)를 쓰고, 마땅한 도메인
     코드가 없을 때만 `COMMON4041`(리소스 없음)을 폴백으로 쓴다.
 - 던져진 예외는 common의 `GlobalExceptionHandler`가 위 실패 Envelope로 변환한다.
@@ -232,7 +232,7 @@ com.gb.{서비스}/
 - **AI 후속 질문 챗봇(계정 B):** `document-service`에 `POST /api/v1/documents/{id}/chat` 1개만 **추가**한다.
   컨트롤러는 ① 권한 검증(본인 문서인지) ② 첫 대화면 MySQL에서 분석요약 추출 ③ 챗봇 Lambda Function URL 호출(IAM 서명)
   ④ `SseEmitter`로 토큰 스트림 중계만 한다. **로직은 Lambda(계정 B)에 있고 본체는 검증·중계만.**
-  대화기록은 계정 B DynamoDB에 저장되며 본체 MySQL 스키마는 건드리지 않는다. 신규 에러코드 없이 `COMMON4011/4031`, `DOCUMENT4001` 재사용.
+  대화기록은 계정 B DynamoDB에 저장되며 본체 MySQL 스키마는 건드리지 않는다. 신규 에러코드 없이 `AUTH4011`(인증)·`COMMON4031`(권한)·`DOCUMENT4001` 재사용.
   **SSE는 Spring MVC `SseEmitter`로 구현(WebFlux 도입 금지 — tech-stack §2).** 상세: `docs/document-analysis/ai-chatbot-mcp.md`.
 
   > ⚠️ 챗봇 컨트롤러도 본인 식별이 필요하므로 다른 API와 동일하게 §9의 `@RequestHeader("X-User-Public-Id")` + TODO 임시처리를 따른다. "백엔드 2차 인가"는 최종 목표 표현이고 현재 구현은 헤더 방식이다.
@@ -248,16 +248,28 @@ com.gb.{서비스}/
 
 ---
 
-## 9. 인증 (현재 미구현 — 임시 처리)
+## 9. 인증 (OAuth2 Resource Server — 방식 B)
 
-- 인증(Authentik/OIDC)은 아직 구현 전이다. `common-security`는 보류.
-- 인증된 사용자 식별자(`userPublicId`)가 필요한 곳은 **임시로 헤더 수신** + TODO 표시:
+- 인증은 외부 IdP(개발=Authentik, 운영/스테이징=Cognito)가 토큰을 발급하고, 각 서비스는
+  `common-security`의 검표원(OAuth2 Resource Server)으로 **검증만** 한다. `SecurityConfig`에서
+  `oauth2ResourceServer(jwt)` + 공개경로(`/swagger-ui/**`, `/v3/api-docs/**`, `/actuator/**`)만 permitAll,
+  나머지는 `authenticated()`. 검증 실패는 `RestAuthenticationEntryPoint`가 **AUTH4011**로 응답한다.
+  `issuer-uri`는 환경변수 `AUTH_ISSUER_URI`로 주입(env yml; 커밋되는 `application.yaml`엔 넣지 않음).
+- 본인 식별자(`userPublicId`)는 토큰 custom claim **`public_id`**(UUID)에서 추출한다. 토큰 `sub`↔`public_id`
+  매핑은 회원가입 시 IdP attribute(`attributes.public_id`)로 해결됨(커밋 `4d8a770`). 컨트롤러는
+  서비스별 `global/security`의 ArgumentResolver로 `@CurrentUserPublicId String userPublicId`를 받는다.
+  claim 누락 시 조용히 통과시키지 말고 AUTH4011로 fail-fast:
   ```java
-  // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
-  //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
+  @CurrentUserPublicId String userPublicId   // = jwt.getClaimAsString("public_id")
+  ```
+  값을 쓰지 않는 엔드포인트(목록·마스터 조회 등)는 파라미터를 생략하고 `authenticated()`로만 보호한다.
+- **적용 현황:** member · wallet · community = 적용 완료. **document-service만 아직 헤더 임시처리**
+  (`@RequestHeader("X-User-Public-Id")` + 아래 TODO)이며, 동일 패턴으로 후속 전환 예정:
+  ```java
+  // TODO: 인증 전환 후 JWT claim(public_id) 추출(@CurrentUserPublicId)로 교체.
+  //       현재는 헤더(X-User-Public-Id)로 임시 수신.
   @RequestHeader("X-User-Public-Id") String userPublicId
   ```
-- 인증 확정 시 이 부분만 토큰 추출로 교체한다.
 
 ---
 

@@ -12,6 +12,7 @@ import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferFeeResponse;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 import com.gb.wallet.domain.transaction.service.TransferService;
+import com.gb.wallet.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -49,8 +50,8 @@ public class TransferController {
     //  ErrorResponse.@Schema에 박힌 단일 디폴트(WALLET4001)로 표시됨.)
     private static final String EX_COMMON4001 =
             "{\"success\":false,\"code\":\"COMMON4001\",\"message\":\"요청 값이 올바르지 않습니다.\"}";
-    private static final String EX_COMMON4011 =
-            "{\"success\":false,\"code\":\"COMMON4011\",\"message\":\"인증 정보가 유효하지 않습니다.\"}";
+    private static final String EX_AUTH4011 =
+            "{\"success\":false,\"code\":\"AUTH4011\",\"message\":\"인증이 필요합니다.\"}";
     private static final String EX_COMMON5000 =
             "{\"success\":false,\"code\":\"COMMON5000\",\"message\":\"서버 오류가 발생했습니다.\"}";
     private static final String EX_WALLET4001 =
@@ -79,7 +80,7 @@ public class TransferController {
             summary = "최근 송금 앱 사용자 조회",
             description = "내가 송신자였던 앱 내부 송금(INTERNAL_TRANSFER, COMPLETED) 기록에서 "
                     + "수신자별 가장 최근 송금 1건씩, 최근순으로 최대 10명을 반환한다. "
-                    + "인증 미구현 상태라 현재는 X-User-Public-Id 헤더로 사용자를 식별한다.")
+                    + "사용자는 JWT의 public_id claim으로 식별한다.")
     // responseCode는 HTTP 상태, description에 비즈니스 코드 명시 (잔액 조회 컨트롤러와 동일 규칙).
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -100,9 +101,7 @@ public class TransferController {
     })
     @GetMapping("/recent-recipients/members")
     public ApiResponse<RecentRecipientsResponse> getRecentInternalRecipients(
-            // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId를 추출하도록 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            @RequestHeader("X-User-Public-Id") String userPublicId) {
+            @CurrentUserPublicId String userPublicId) {
         return ApiResponse.success(transferService.getRecentInternalRecipients(userPublicId));
     }
 
@@ -124,10 +123,10 @@ public class TransferController {
                             examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(
                             schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "MEMBER4001 - 존재하지 않는 회원(해당 이메일의 앱 사용자 없음).",
@@ -143,8 +142,6 @@ public class TransferController {
     })
     @GetMapping("/validate-member")
     public ApiResponse<ValidateMemberResponse> validateMember(
-            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더.
-            @RequestHeader("X-User-Public-Id") String userPublicId,
             @RequestParam @NotBlank @Email String email) {
         return ApiResponse.success(transferService.validateMember(email));
     }
@@ -161,10 +158,10 @@ public class TransferController {
                     description = "조회 성공. 응답은 공통 ApiResponse로 감싸지며 data에 SupportedCurrenciesResponse가 담긴다."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(
                             schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
@@ -173,9 +170,7 @@ public class TransferController {
                             examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000)))
     })
     @GetMapping("/supported-currencies")
-    public ApiResponse<SupportedCurrenciesResponse> getSupportedCurrencies(
-            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더 (이 API는 본인 식별을 쓰지 않지만 인증 API라 헤더는 받아둠).
-            @RequestHeader("X-User-Public-Id") String userPublicId) {
+    public ApiResponse<SupportedCurrenciesResponse> getSupportedCurrencies() {
         return ApiResponse.success(transferService.getSupportedCurrencies());
     }
 
@@ -185,7 +180,7 @@ public class TransferController {
             description = "내가 송신자였던 타행 송금(REMITTANCE, COMPLETED) 기록에서 "
                     + "bank_account별 가장 최근 송금 1건씩, 최근순으로 size건(기본 10, 1~50)을 반환한다. "
                     + "wallet 도메인 내부 DB만 조회하며 외부 호출 없음. "
-                    + "인증 미구현 상태라 현재는 X-User-Public-Id 헤더로 사용자를 식별한다.")
+                    + "사용자는 JWT의 public_id claim으로 식별한다.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -198,10 +193,10 @@ public class TransferController {
                             examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(
                             schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "WALLET4001 - 존재하지 않는 지갑(해당 사용자의 지갑 없음).",
@@ -217,8 +212,7 @@ public class TransferController {
     })
     @GetMapping("/recent-accounts")
     public ApiResponse<RecentAccountsResponse> getRecentRemittanceAccounts(
-            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더.
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @RequestParam(defaultValue = "10") @Min(1) @Max(50) Integer size) {
         return ApiResponse.success(transferService.getRecentRemittanceAccounts(userPublicId, size));
     }
@@ -230,7 +224,7 @@ public class TransferController {
                     + "wallet DB는 조회하지 않으며 BankClient.inquiry만 호출. "
                     + "Mock 은행 에러는 BankErrorMapper(§13-4)가 본체 코드로 변환한다 "
                     + "— BANK4040→ACCOUNT4001(404), BANK4004→COMMON4001(400), 네트워크/알 수 없는 코드→COMMON5031(503). "
-                    + "인증 미구현 상태라 현재는 X-User-Public-Id 헤더로 사용자를 식별한다.")
+                    + "사용자는 JWT의 public_id claim으로 식별한다.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -243,10 +237,10 @@ public class TransferController {
                             examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(
                             schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "ACCOUNT4001 - 존재하지 않는 계좌(외부 Mock 은행 BANK4040 매핑).",
@@ -268,8 +262,6 @@ public class TransferController {
     })
     @GetMapping("/account-holder")
     public ApiResponse<AccountHolderResponse> getAccountHolder(
-            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더 (이 API는 본인 식별을 쓰지 않지만 인증 API라 헤더는 받아둠).
-            @RequestHeader("X-User-Public-Id") String userPublicId,
             @RequestParam @NotBlank String bankCode,
             @RequestParam @NotBlank String accountNumber) {
         return ApiResponse.success(transferService.getAccountHolder(bankCode, accountNumber));
@@ -281,7 +273,7 @@ public class TransferController {
             description = "송금 화면에서 입력한 방식·통화·금액으로 수수료를 계산해 반환한다. "
                     + "정책(docs/remittance/api-spec.md §4): INTERNAL_TRANSFER=0, REMITTANCE=amount×0.5%(HALF_UP 4자리). "
                     + "DB·외부 호출 없는 순수 계산. 미지원 통화(KRW/USD/PHP/VND 외)는 TRANSFER4002. "
-                    + "인증 미구현 상태라 현재는 X-User-Public-Id 헤더로 사용자를 식별한다.")
+                    + "사용자는 JWT의 public_id claim으로 식별한다.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -299,10 +291,10 @@ public class TransferController {
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(
                             schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
@@ -312,8 +304,6 @@ public class TransferController {
     })
     @PostMapping("/fee")
     public ApiResponse<TransferFeeResponse> getTransferFee(
-            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더.
-            @RequestHeader("X-User-Public-Id") String userPublicId,
             @Valid @RequestBody TransferFeeRequest request) {
         return ApiResponse.success(transferService.getTransferFee(request));
     }
@@ -325,7 +315,7 @@ public class TransferController {
                     + "currency_code != receive_currency_code면 TRANSFER4005. REMITTANCE는 후속 PR에서 추가. "
                     + "Idempotency-Key 헤더로 멱등성 보장(3-layer: Redis 캐시 → DB UNIQUE → race 시 첫 결과 재조회). "
                     + "두 wallet에 대한 분산 락(wallet_id 오름차순 MultiLock) + DB 비관적 락으로 동시성 보호. "
-                    + "인증 미구현 상태라 현재는 X-User-Public-Id 헤더로 사용자를 식별한다.")
+                    + "사용자는 JWT의 public_id claim으로 식별한다.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -348,10 +338,10 @@ public class TransferController {
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(
                             schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "WALLET4001 - 존재하지 않는 지갑 (송신자 또는 수신자 지갑·해당 통화 잔액 행 없음).",
@@ -374,8 +364,7 @@ public class TransferController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<TransferExecuteResponse> executeTransfer(
-            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더.
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody TransferExecuteRequest request) {
         TransferExecuteResponse response = transferService.execute(userPublicId, idempotencyKey, request);

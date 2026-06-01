@@ -86,7 +86,7 @@
 - **리소스명은 복수 명사**: `/members`, `/wallets`, `/transfers`
 - **식별자는 `public_id`(UUID)**. 내부 순번 `id` 직접 노출 금지.
   - ✅ `/api/v1/transfers/a1b2c3d4-...`  ❌ `/api/v1/transfers/1042`
-- **회원 참조도 `user_public_id`(UUID)** — member 도메인 밖에서 회원을 가리킬 때. (현재 인증 미구현이라 본인 식별자는 헤더로 임시 수신 — 아래 §14 참고)
+- **회원 참조도 `user_public_id`(UUID)** — member 도메인 밖에서 회원을 가리킬 때. (본인 식별은 토큰 claim `public_id`로 추출 — 아래 §14 참고. document-service만 헤더 임시 수신 잔존)
 - 응답 필드에서 식별자는 `public_id`로 명명. 벤더 접두사(`tx-`, `ex_`, `qt_` 등) 붙이지 않는다.
 - **통화 필드는 `_code` 접미사**: `currency_code`, `from_currency_code`, `to_currency_code`, `receive_currency_code`, `fee_currency_code`
 - **시각은 ISO 8601 UTC `Z`**: `"2026-05-25T12:00:00Z"`
@@ -153,7 +153,7 @@
 | --- | --- | --- |
 | `COMMON4001` | 400 | 요청 값이 올바르지 않습니다. |
 | `COMMON4002` | 400 | 필수 입력 항목이 누락되었습니다. |
-| `COMMON4011` | 401 | 인증 정보가 유효하지 않습니다. |
+| `COMMON4011` | 401 | 인증 정보가 유효하지 않습니다. (토큰 검증 실패는 `AUTH4011`로 통일 — 아래 AUTH 표. 본 코드는 호환 유지) |
 | `COMMON4031` | 403 | 접근 권한이 없습니다. |
 | `COMMON4041` | 404 | 존재하지 않는 리소스입니다. (도메인 코드가 없을 때 공통 사용) |
 | `COMMON4091` | 409 | 이미 존재하는 리소스입니다. (멱등성 키 중복 시에는 에러 없이 첫 응답 재반환) |
@@ -172,6 +172,7 @@
 | `AUTH4005` | 401 | 만료된 리프레시 토큰입니다. 다시 로그인해 주세요. |
 | `AUTH4006` | 401 | Google 인증에 실패했습니다. (소셜 로그인 전용) |
 | `AUTH4007` | 401 | (예약) 유효하지 않은 리프레시 토큰 — 인증 구현 시 AUTH4004에서 분리. 그 전까지 미사용 |
+| `AUTH4011` | 401 | 인증이 필요합니다. (토큰 누락·위조·만료 등 요청 인증 실패 통합 코드 — Resource Server `RestAuthenticationEntryPoint`) |
 
 > **AUTH4005 중복 해소(확정):** 본래 `AUTH4005`가 "Google 인증 실패"와 "리프레시 토큰 만료" 양쪽에 쓰였다. 리프레시 토큰 계열(`AUTH4004` 무효 / `AUTH4005` 만료)이 시드 번호(`AUTH4001~4003`) 다음 번호를 의도적으로 먼저 점유했으므로 **고정**하고, 나중에 끌어다 쓴 **Google 인증 실패를 신규 `AUTH4006`으로 분리**한다. (한 번 확정한 번호는 재배치 금지)
 >
@@ -327,24 +328,28 @@ com.gb.common
 - [ ] 에러 코드가 §9 표에 있는 숫자형 코드인가
 - [ ] 성공 응답을 `ApiResponse<T>` 래퍼로 감쌌는가
 - [ ] DTO 필드는 camelCase로 두고 Jackson 전역 변환에 맡겼는가 (`@JsonProperty` 남발 금지)
-- [ ] 본인 식별자가 필요한 API는 `@RequestHeader("X-User-Public-Id")` + TODO로 임시 처리했는가 (§14)
+- [ ] 본인 식별자가 필요한 API는 `@CurrentUserPublicId`(토큰 claim `public_id`)로 받았는가 (§14). (document-service 한정 헤더 임시처리 잔존)
 
 ---
 
-## 14. 인증 (현재 미구현 — 임시 처리) ★ Claude Code 주의
+## 14. 인증 (OAuth2 Resource Server — 방식 B) ★ Claude Code 주의
 
-**인증(Authentik/Cognito OIDC)은 아직 구현 전이다.** `common-security` 모듈은 보류 상태다. 따라서 각 `api-spec.md`에 "Auth ✅ (JWT sub로 본인 식별)"이라고 적혀 있어도, **지금 단계에서는 JWT에서 사용자를 추출하는 코드를 작성하지 않는다.**
+**인증은 OAuth2 Resource Server(검표원)로 구현됐다.** 외부 IdP(개발=Authentik, 운영/스테이징=Cognito)가 토큰을 발급하고, 각 서비스는 `common-security` 기반으로 토큰을 **검증만** 한다. `SecurityConfig`에서 `oauth2ResourceServer(jwt)` + 공개경로(`/swagger-ui/**`, `/v3/api-docs/**`, `/actuator/**`)만 permitAll, 나머지는 `authenticated()`. `issuer-uri`는 환경변수 `AUTH_ISSUER_URI`로 주입한다(env yml; 커밋되는 `application.yaml`엔 넣지 않음).
 
-대신 본인 식별자(`userPublicId`)가 필요한 곳은 **헤더로 임시 수신 + TODO 주석**으로 처리한다.
+본인 식별자(`userPublicId`)는 토큰 custom claim **`public_id`**(UUID)에서 추출한다. 토큰 `sub`↔`public_id` 매핑은 회원가입 시 IdP attribute(`attributes.public_id`)로 해결됨. 컨트롤러는 서비스별 `global/security`의 ArgumentResolver로 받는다.
 
 ```java
-// TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
-//       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-@RequestHeader("X-User-Public-Id") String userPublicId
+@CurrentUserPublicId String userPublicId   // = jwt.getClaimAsString("public_id")
 ```
 
-- 인증이 확정되면 **이 부분만** 토큰 추출로 교체한다(나머지 로직은 그대로).
-- 인증 실패(JWT 누락/무효) 에러 코드는 `COMMON4011`, 권한 없음은 `COMMON4031`을 재사용한다(도메인 코드 신설 금지).
-- 각 `api-spec.md`의 "Auth ✅" 표기는 **최종 설계상 인증이 필요한 엔드포인트라는 의미**이며, 구현 순서상 지금은 위 헤더 방식으로 식별한다.
+- claim이 없으면 조용히 통과시키지 말고 `AUTH4011`로 fail-fast. 값을 쓰지 않는 엔드포인트(목록·마스터 조회 등)는 파라미터를 생략하고 `authenticated()`로만 보호한다.
+- 인증 실패(JWT 누락/무효) 에러 코드는 **`AUTH4011`**(common-security `RestAuthenticationEntryPoint`가 처리), 권한 없음은 `COMMON4031`을 재사용한다(도메인 인증 코드 신설 금지).
+- 각 `api-spec.md`의 "Auth ✅" 표기는 인증이 필요한 엔드포인트라는 의미다.
 
-> 즉 docs의 "JWT sub로 본인 식별" 문구는 *최종 목표*이고, *현재 구현*은 `X-User-Public-Id` 헤더다. (출처: 프로젝트 CLAUDE.md §9)
+> **적용 현황:** member · wallet · community = 적용 완료. **document-service만 아직 헤더 임시처리**(`@RequestHeader("X-User-Public-Id")` + TODO)이며, 동일 패턴으로 후속 전환 예정. document 컨트롤러를 만질 때만 아래 임시 형태가 남아있다:
+>
+> ```java
+> // TODO: 인증 전환 후 JWT claim(public_id) 추출(@CurrentUserPublicId)로 교체.
+> //       현재는 헤더(X-User-Public-Id)로 임시 수신.
+> @RequestHeader("X-User-Public-Id") String userPublicId
+> ```

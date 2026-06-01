@@ -109,7 +109,8 @@ throw new BusinessException(WalletErrorCode.WALLET_NOT_FOUND);
 |---|---|---|
 | COMMON4001 | 400 | 요청 값이 올바르지 않습니다. (`@Valid` 실패 기본) |
 | COMMON4002 | 400 | 필수 입력 항목이 누락되었습니다. |
-| COMMON4011 | 401 | 인증 정보가 유효하지 않습니다. |
+| AUTH4011 | 401 | 인증이 필요합니다. (토큰 누락·위조·만료 등 요청 인증 실패 통합 — Resource Server `RestAuthenticationEntryPoint`) |
+| COMMON4011 | 401 | 인증 정보가 유효하지 않습니다. (호환 유지 — 신규는 AUTH4011) |
 | COMMON4031 | 403 | 접근 권한이 없습니다. |
 | COMMON4041 | 404 | 존재하지 않는 리소스입니다. |
 | COMMON4091 | 409 | 이미 존재하는 리소스입니다. |
@@ -118,7 +119,7 @@ throw new BusinessException(WalletErrorCode.WALLET_NOT_FOUND);
 | COMMON5000 | 500 | 서버 오류가 발생했습니다. (미처리 예외 전부) |
 | COMMON5031 | 503 | 일시적으로 처리할 수 없습니다. |
 
-> 도메인 인증 실패(JWT 누락/무효)는 도메인 코드를 새로 만들지 말고 `COMMON4011`을, 권한 없음은 `COMMON4031`을 재사용합니다. (명세 §12-2)
+> 인증 실패(JWT 누락/무효)는 도메인 코드를 새로 만들지 말고 `AUTH4011`(common-security `RestAuthenticationEntryPoint`가 자동 처리), 권한 없음은 `COMMON4031`을 재사용합니다. (명세 §12-2)
 
 ### 도메인 에러 코드 (참고 — 명세 §12-4 SSOT)
 각 서비스가 구현할 도메인 코드는 명세 §12-4를 기준으로 합니다. 아래는 일부 예시이며, 전체·최신본은 항상 API 명세를 확인하세요.
