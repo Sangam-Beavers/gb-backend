@@ -4,7 +4,7 @@
 > 코드를 작성하거나 수정하기 전에 관련 문서를 먼저 읽고, 문서와 코드가 충돌하면 **문서를 우선**합니다.
 > (단, 더 최신 결정이 채팅/이슈로 합의되면 그 결정을 문서에 반영한 뒤 진행)
 >
-> 프로젝트 루트의 **`CLAUDE.md`** 가 최상위 개발 지침이며, 이 `docs/`는 그 지침의 세부(기능별 명세·DB·규칙)를 담습니다. 두 문서는 정렬되어 있습니다: 패키지 루트 `com.gb`, JSON snake_case(Jackson 전역 변환), 인증 미구현 시 `X-User-Public-Id` 헤더 임시 처리 등. 충돌이 느껴지면 **CLAUDE.md(실제 코드 기준)** 를 우선합니다.
+> 프로젝트 루트의 **`CLAUDE.md`** 가 최상위 개발 지침이며, 이 `docs/`는 그 지침의 세부(기능별 명세·DB·규칙)를 담습니다. 두 문서는 정렬되어 있습니다: 패키지 루트 `com.gb`, JSON snake_case(Jackson 전역 변환), OAuth2 Resource Server 인증(토큰 claim `public_id`로 본인 식별; document-service만 헤더 임시처리 잔존) 등. 충돌이 느껴지면 **CLAUDE.md(실제 코드 기준)** 를 우선합니다.
 
 ---
 
@@ -77,7 +77,7 @@ Claude Code가 반드시 지켜야 하는 프로젝트 차원의 결정입니다
 - **법령 RAG = Bedrock Knowledge Bases로 통일 (백엔드 저장소 = Amazon S3 Vectors, 계정 B).** 분석 파이프라인과 챗봇 **양쪽 모두** 법령 검색을 KB `retrieve`로 호출한다(검색 코드 일원화). KB가 검색을 오케스트레이션하고 벡터는 S3 Vectors에 저장된다 — S3 Vectors는 빠지지 않고 KB 아래에 깔린다. AI VPC는 퍼블릭 + 프라이빗(=관리 서브넷) 2티어이며 DB 서브넷이 없다. 상세: [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md), [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md).
 - **회원 식별자 보안 원칙** — `users.id`(BIGINT 순번)는 member 도메인 경계를 벗어나지 않는다. 도메인 밖에는 `user_public_id`(UUID)만 노출/전파한다.
 - **금액·환율은 JSON `string` 십진수로 전송**한다. `number`(float) 금지. (표시용 수치 — 등락률·OCR 신뢰도 등 — 만 예외적으로 number 허용)
-- **인증은 현재 미구현.** 본인 식별이 필요한 API는 JWT 추출 대신 `@RequestHeader("X-User-Public-Id")` + TODO로 임시 처리한다. (conventions §14)
+- **인증은 OAuth2 Resource Server(방식 B)로 구현됨.** 본인 식별은 토큰 claim `public_id`를 `@CurrentUserPublicId`로 추출한다. (member·wallet·community 적용 완료, document-service만 `@RequestHeader("X-User-Public-Id")` 헤더 임시처리 잔존 — conventions §14)
 - **패키지 루트 `com.gb`**, 멀티모듈(`common` + `services`). JSON 필드는 snake_case이되 **DTO는 camelCase + Jackson 전역 변환**(`property-naming-strategy: SNAKE_CASE`).
 
 ---

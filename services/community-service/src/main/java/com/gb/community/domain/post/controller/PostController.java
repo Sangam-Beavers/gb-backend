@@ -8,6 +8,7 @@ import com.gb.community.domain.post.dto.request.PostUpdateRequest;
 import com.gb.community.domain.post.dto.response.PostDetailResponse;
 import com.gb.community.domain.post.dto.response.PostListResponse;
 import com.gb.community.domain.post.service.PostService;
+import com.gb.community.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -28,7 +29,6 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -47,8 +47,8 @@ public class PostController {
     // (common ErrorResponse 클래스 레벨 example을 응답별로 override 하기 위함.)
     private static final String EX_COMMON4001 =
             "{\"success\":false,\"code\":\"COMMON4001\",\"message\":\"요청 값이 올바르지 않습니다.\"}";
-    private static final String EX_COMMON4011 =
-            "{\"success\":false,\"code\":\"COMMON4011\",\"message\":\"인증 정보가 유효하지 않습니다.\"}";
+    private static final String EX_AUTH4011 =
+            "{\"success\":false,\"code\":\"AUTH4011\",\"message\":\"인증이 필요합니다.\"}";
     private static final String EX_COMMON4031 =
             "{\"success\":false,\"code\":\"COMMON4031\",\"message\":\"접근 권한이 없습니다.\"}";
     private static final String EX_COMMON5000 =
@@ -58,12 +58,12 @@ public class PostController {
 
     private final PostService postService;
 
-    /** 게시글 목록·검색. 🔒 JWT 필요(현재 인증 미구현 — 헤더 임시 식별). */
+    /** 게시글 목록·검색. 🔒 JWT 필요(본인 식별은 토큰 public_id claim에서 추출). */
     @Operation(
             summary = "게시글 목록·검색",
             description = "category(선택)·keyword(선택, 제목·본문 검색)·sort(latest/popular/accuracy)로 "
                     + "필터·정렬해 페이지네이션한다. 삭제된 글은 제외된다. "
-                    + "이 API는 본인 식별을 쓰지 않지만 인증 API라 헤더는 받아둔다.")
+                    + "이 API는 본인 식별을 쓰지 않지만 인증은 필요하다.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -75,9 +75,9 @@ public class PostController {
                             examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
@@ -86,10 +86,6 @@ public class PostController {
     })
     @GetMapping
     public ApiResponse<PostListResponse> getPosts(
-            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            //       이 API는 목록 조회라 본인 식별 값 자체는 사용하지 않는다.
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
             @RequestParam(required = false) String category,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false, defaultValue = "latest") String sort,
@@ -110,14 +106,14 @@ public class PostController {
                     description = "조회 성공. data에 PostDetailResponse가 담긴다."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "COMMON4001 - 잘못된 요청(헤더 누락/공백, public_id 형식 위반).",
+                    description = "COMMON4001 - 잘못된 요청(public_id 형식 위반).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "COMMUNITY4001 - 존재하지 않는 게시글입니다.",
@@ -131,8 +127,6 @@ public class PostController {
     })
     @GetMapping("/{id}")
     public ApiResponse<PostDetailResponse> getPost(
-            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더(이 API는 본인 식별 값을 사용하지 않음).
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
             @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId) {
         return ApiResponse.success(postService.getPost(postPublicId));
     }
@@ -154,9 +148,9 @@ public class PostController {
                             examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
@@ -166,9 +160,7 @@ public class PostController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<PostDetailResponse> createPost(
-            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @Valid @RequestBody PostCreateRequest request) {
         return ApiResponse.success(SuccessStatus.CREATED, postService.createPost(userPublicId, request));
     }
@@ -189,9 +181,9 @@ public class PostController {
                             examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
                     description = "COMMON4031 - 본인 게시글이 아닙니다(권한 없음).",
@@ -210,8 +202,7 @@ public class PostController {
     })
     @PatchMapping("/{id}")
     public ApiResponse<PostDetailResponse> updatePost(
-            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더(요청자 = 수정 권한 검증 대상).
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId,
             @Valid @RequestBody PostUpdateRequest request) {
         return ApiResponse.success(postService.updatePost(userPublicId, postPublicId, request));
@@ -228,14 +219,14 @@ public class PostController {
                     description = "삭제 성공. data는 null."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "COMMON4001 - 잘못된 요청(헤더 누락/공백, public_id 형식 위반).",
+                    description = "COMMON4001 - 잘못된 요청(public_id 형식 위반).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
                     description = "COMMON4031 - 본인 게시글이 아닙니다(권한 없음).",
@@ -254,8 +245,7 @@ public class PostController {
     })
     @DeleteMapping("/{id}")
     public ApiResponse<Void> deletePost(
-            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더(요청자 = 삭제 권한 검증 대상).
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId) {
         postService.deletePost(userPublicId, postPublicId);
         return ApiResponse.success(null);

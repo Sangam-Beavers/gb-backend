@@ -6,16 +6,20 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
+import com.gb.common.security.RestAuthenticationEntryPoint;
 import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
 import com.gb.wallet.domain.transaction.service.TransferService;
+import com.gb.wallet.global.config.WebConfig;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
+import com.gb.wallet.global.security.CurrentUserPublicIdArgumentResolver;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,8 +27,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 /**
  * {@link TransferController#executeTransfer}의 HTTP wiring 검증 — URL/메서드, @Valid, @RequestHeader,
@@ -42,18 +49,29 @@ import org.springframework.test.web.servlet.MockMvc;
 @WebMvcTest(TransferController.class)
 @Import({
         com.gb.common.exception.handler.GlobalExceptionHandler.class,
-        com.gb.wallet.global.config.SecurityConfig.class
+        com.gb.wallet.global.config.SecurityConfig.class,
+        RestAuthenticationEntryPoint.class,
+        WebConfig.class,
+        CurrentUserPublicIdArgumentResolver.class
 })
+@ActiveProfiles("test")
 class TransferControllerTest {
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
 
     @MockitoBean private TransferService transferService;
+    // 방식 B 보안 필터 체인(oauth2ResourceServer)이 요구하는 JwtDecoder를 가린다(실제 IdP 호출 차단).
+    @MockitoBean private JwtDecoder jwtDecoder;
 
     private static final String USER = "sender-user-uuid";
     private static final String KEY = "idem-key-1";
     private static final String RECEIVER = "11111111-1111-1111-1111-111111111111";
+
+    /** 인증된 요청용 JWT 주입(public_id claim = USER). 컨트롤러는 이 claim으로 송신자를 식별한다. */
+    private static RequestPostProcessor authedJwt() {
+        return jwt().jwt(j -> j.claim("public_id", USER));
+    }
 
     @Test
     @DisplayName("POST /transfers 201: 정상 호출 시 ApiResponse(success=true) + data 포함")
@@ -62,7 +80,7 @@ class TransferControllerTest {
         given(transferService.execute(eq(USER), eq(KEY), any())).willReturn(response);
 
         mockMvc.perform(post("/api/v1/transfers")
-                        .header("X-User-Public-Id", USER)
+                        .with(authedJwt())
                         .header("Idempotency-Key", KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(validBody("10000.0000"))))
@@ -81,7 +99,7 @@ class TransferControllerTest {
         Map<String, Object> body = validBody("not-a-number");
 
         mockMvc.perform(post("/api/v1/transfers")
-                        .header("X-User-Public-Id", USER)
+                        .with(authedJwt())
                         .header("Idempotency-Key", KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))
@@ -99,7 +117,7 @@ class TransferControllerTest {
         body.remove("receiver_public_id");
 
         mockMvc.perform(post("/api/v1/transfers")
-                        .header("X-User-Public-Id", USER)
+                        .with(authedJwt())
                         .header("Idempotency-Key", KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))
@@ -114,7 +132,7 @@ class TransferControllerTest {
     @DisplayName("POST /transfers 400: Idempotency-Key 헤더 누락 → 400")
     void executeTransfer_idempotencyKey_누락() throws Exception {
         mockMvc.perform(post("/api/v1/transfers")
-                        .header("X-User-Public-Id", USER)
+                        .with(authedJwt())
                         // Idempotency-Key 헤더 의도적으로 빠뜨림
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(validBody("10000.0000"))))
@@ -130,7 +148,7 @@ class TransferControllerTest {
                 .given(transferService).execute(eq(USER), eq(KEY), any());
 
         mockMvc.perform(post("/api/v1/transfers")
-                        .header("X-User-Public-Id", USER)
+                        .with(authedJwt())
                         .header("Idempotency-Key", KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(validBody("10000.0000"))))
@@ -146,13 +164,27 @@ class TransferControllerTest {
                 .given(transferService).execute(eq(USER), eq(KEY), any());
 
         mockMvc.perform(post("/api/v1/transfers")
-                        .header("X-User-Public-Id", USER)
+                        .with(authedJwt())
                         .header("Idempotency-Key", KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(validBody("10000.0000"))))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.code").value("TRANSFER4004"));
+    }
+
+    @Test
+    @DisplayName("POST /transfers 401: 토큰 없음 → AUTH4011, Service 미호출")
+    void executeTransfer_토큰_없음_401() throws Exception {
+        mockMvc.perform(post("/api/v1/transfers")
+                        .header("Idempotency-Key", KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validBody("10000.0000"))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verify(transferService, never()).execute(any(), any(), any());
     }
 
     // ----- helpers -----

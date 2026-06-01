@@ -5,6 +5,8 @@ dependencies {
 
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-security'
+    // 방식 B: 외부 IdP가 발급한 JWT를 검증만 하는 "검표원"(Resource Server). issuer-uri로 JWKS 검증.
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     // Redisson: 분산 락(MultiLock) + RBucket 등 Lettuce 위에서 동작하는 고급 기능. Redis 서버는 동일.
@@ -20,4 +22,6 @@ dependencies {
 
     // 테스트 전용 인메모리 DB. spring-boot-starter-test는 루트 build.gradle subprojects에서 이미 적용됨.
     testRuntimeOnly 'com.h2database:h2'
+    // 컨트롤러 슬라이스 테스트에서 jwt() 요청 후처리기로 인증 주체를 주입하기 위해 필요(spring-boot-starter-test 미포함).
+    testImplementation 'org.springframework.security:spring-security-test'
 }

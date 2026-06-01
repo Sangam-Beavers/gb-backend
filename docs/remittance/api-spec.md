@@ -77,7 +77,7 @@
 | `balances[].balance` | string | N | 잔액 (string 십진수) |
 | `updated_at` | string | N | ISO 8601 UTC Z |
 
-**Error**: 401 COMMON4011 / 404 WALLET4001
+**Error**: 401 AUTH4011 / 404 WALLET4001
 
 ---
 
@@ -98,7 +98,7 @@
 | `balances[].balance_in_krw` | string | N | 원화 환산액 |
 | `updated_at` | string | N | ISO 8601 UTC Z |
 
-**Error**: 401 COMMON4011 / 404 WALLET4001
+**Error**: 401 AUTH4011 / 404 WALLET4001
 
 ---
 
@@ -128,7 +128,7 @@
 | `fee_currency_code` | string | N | 수수료 통화 (송금 통화와 동일) |
 | `total_deduct_amount` | string | N | 총 차감 금액 (amount + fee, string 십진수, 소수점 4자리) |
 
-**Error**: 400 COMMON4001 (Body 검증 실패) / 400 TRANSFER4002 (미지원 통화) / 400 TRANSFER4003 (미지원 송금 유형) / 401 COMMON4011
+**Error**: 400 COMMON4001 (Body 검증 실패) / 400 TRANSFER4002 (미지원 통화) / 400 TRANSFER4003 (미지원 송금 유형) / 401 AUTH4011
 
 ### 수수료 정책 (임시 — 실제 정책 확정 시 교체)
 - `INTERNAL_TRANSFER`: 무료 (`fee = 0`)
@@ -204,7 +204,7 @@
 | 400 | TRANSFER4003 | 지원하지 않는 송금 유형입니다. (1단계는 INTERNAL_TRANSFER만) |
 | 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. |
 | 400 | TRANSFER4005 | 지원하지 않는 통화 조합입니다. (1단계는 같은 통화만) |
-| 401 | COMMON4011 | 인증 정보가 유효하지 않습니다. |
+| 401 | AUTH4011 | 인증이 필요합니다. |
 | 404 | WALLET4001 | 존재하지 않는 지갑입니다. (송신자/수신자 wallet 부재, 또는 송신자 통화 잔액 행 부재 — 송신자 잔액 행은 자동 생성하지 않음) |
 | 500 | COMMON5000 | 서버 오류가 발생했습니다. (수신자 잔액 행 자동 생성 직후에도 조회되지 않는 정합성 불변식 위반 — 정상 흐름에서 발생 불가, 방어) |
 | 503 | COMMON5031 | 일시적으로 처리할 수 없습니다. (분산 락 획득 실패) |
@@ -278,7 +278,7 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 | `receive_currency_code` | string | N | 수령 통화 |
 | `expires_at` | string | N | 견적 만료 시각 (ISO 8601 UTC Z) |
 
-**Error**: 400 TRANSFER4002 (미지원 통화) / 401 COMMON4011 / 422 WALLET4002 (잔액 부족)
+**Error**: 400 TRANSFER4002 (미지원 통화) / 401 AUTH4011 / 422 WALLET4002 (잔액 부족)
 
 ---
 
@@ -307,7 +307,7 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 | HTTP | code | message |
 | --- | --- | --- |
 | 400 | EXCHANGE4002 | 환율 견적이 만료되었습니다. |
-| 401 | COMMON4011 | 인증 정보가 유효하지 않습니다. |
+| 401 | AUTH4011 | 인증이 필요합니다. |
 | 404 | EXCHANGE4001 | 존재하지 않는 환전 내역입니다. |
 | 422 | WALLET4002 | 지갑 잔액이 부족합니다. |
 
@@ -358,7 +358,7 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 | --- | --- | --- |
 | 400 | COMMON4001 | 요청 값이 올바르지 않습니다. |
 | 400 | ACCOUNT4003 | 연동 계좌의 잔액이 부족합니다. |
-| 401 | COMMON4011 | 인증 정보가 유효하지 않습니다. |
+| 401 | AUTH4011 | 인증이 필요합니다. |
 | 403 | ACCOUNT4006 | 인증되지 않은 계좌입니다. |
 | 404 | ACCOUNT4001 | 존재하지 않는 계좌입니다. |
 | 404 | WALLET4001 | 존재하지 않는 지갑입니다. (계좌는 있으나 해당 회원의 지갑이 없는 방어 케이스) |
