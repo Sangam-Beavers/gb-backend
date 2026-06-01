@@ -7,6 +7,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-security'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    // Redisson: 분산 락(MultiLock) + RBucket 등 Lettuce 위에서 동작하는 고급 기능. Redis 서버는 동일.
+    implementation 'org.redisson:redisson-spring-boot-starter:3.27.2'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.kafka:spring-kafka'

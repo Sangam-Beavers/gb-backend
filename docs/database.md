@@ -329,7 +329,7 @@
 
 | 용도 | 키 패턴 | 명령 예시 | TTL |
 | --- | --- | --- | --- |
-| 송금 분산 락 | `lock:user:{userPublicId}` | `SET ... 1 NX EX 5` | 5초 |
+| 송금 분산 락 (wallet 단위, 두 개 MultiLock) | `lock:wallet:{walletId}` | Redisson MultiLock(ID 오름차순, waitTime=3s, leaseTime=5s) | 5초 |
 | 멱등성 키 | `idempotency:{key}` | `SET ... <result> EX 86400` | 24시간 |
 | 토큰 블랙리스트 | `blacklist:{token}` | `SET ... 1 EX <남은만료>` | 토큰 만료까지 |
 | 로그인 실패 카운터 | `login:fail:user:{userPublicId}` | `INCR` + `EXPIRE 300` | 5분 |

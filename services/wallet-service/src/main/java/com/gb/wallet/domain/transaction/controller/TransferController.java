@@ -2,11 +2,13 @@ package com.gb.wallet.domain.transaction.controller;
 
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
+import com.gb.wallet.domain.transaction.dto.request.TransferExecuteRequest;
 import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
 import com.gb.wallet.domain.transaction.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
+import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferFeeResponse;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 import com.gb.wallet.domain.transaction.service.TransferService;
@@ -22,6 +24,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -29,6 +32,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Transfer", description = "송금 관련 API")
@@ -61,6 +65,12 @@ public class TransferController {
             "{\"success\":false,\"code\":\"TRANSFER4002\",\"message\":\"지원하지 않는 통화입니다.\"}";
     private static final String EX_TRANSFER4003 =
             "{\"success\":false,\"code\":\"TRANSFER4003\",\"message\":\"지원하지 않는 송금 유형입니다.\"}";
+    private static final String EX_TRANSFER4004 =
+            "{\"success\":false,\"code\":\"TRANSFER4004\",\"message\":\"자기 자신에게 송금할 수 없습니다.\"}";
+    private static final String EX_TRANSFER4005 =
+            "{\"success\":false,\"code\":\"TRANSFER4005\",\"message\":\"지원하지 않는 통화 조합입니다.\"}";
+    private static final String EX_WALLET4002 =
+            "{\"success\":false,\"code\":\"WALLET4002\",\"message\":\"지갑 잔액이 부족합니다.\"}";
 
     private final TransferService transferService;
 
@@ -306,5 +316,69 @@ public class TransferController {
             @RequestHeader("X-User-Public-Id") String userPublicId,
             @Valid @RequestBody TransferFeeRequest request) {
         return ApiResponse.success(transferService.getTransferFee(request));
+    }
+
+    /** 송금 실행(1단계: INTERNAL_TRANSFER + 같은 통화 전용). 🔒 JWT 필요. */
+    @Operation(
+            summary = "송금 실행",
+            description = "INTERNAL_TRANSFER(앱 사용자 간 송금)를 실행한다. 1단계 범위는 같은 통화 송금만 — "
+                    + "currency_code != receive_currency_code면 TRANSFER4005. REMITTANCE는 후속 PR에서 추가. "
+                    + "Idempotency-Key 헤더로 멱등성 보장(3-layer: Redis 캐시 → DB UNIQUE → race 시 첫 결과 재조회). "
+                    + "두 wallet에 대한 분산 락(wallet_id 오름차순 MultiLock) + DB 비관적 락으로 동시성 보호. "
+                    + "인증 미구현 상태라 현재는 X-User-Public-Id 헤더로 사용자를 식별한다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "송금 성공. 응답은 공통 ApiResponse로 감싸지며 data에 TransferExecuteResponse가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - Body 검증 실패 / WALLET4002 - 잔액 부족 / "
+                            + "TRANSFER4002 - 미지원 통화 / TRANSFER4003 - 미지원 송금 유형 / "
+                            + "TRANSFER4004 - 자기 송금 / TRANSFER4005 - 미지원 통화 조합. "
+                            + "같은 400이지만 비즈니스 코드가 다르다 (examples 드롭다운 참고).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = {
+                                    @ExampleObject(name = "COMMON4001", value = EX_COMMON4001),
+                                    @ExampleObject(name = "WALLET4002", value = EX_WALLET4002),
+                                    @ExampleObject(name = "TRANSFER4002", value = EX_TRANSFER4002),
+                                    @ExampleObject(name = "TRANSFER4003", value = EX_TRANSFER4003),
+                                    @ExampleObject(name = "TRANSFER4004", value = EX_TRANSFER4004),
+                                    @ExampleObject(name = "TRANSFER4005", value = EX_TRANSFER4005)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "WALLET4001 - 존재하지 않는 지갑 (송신자 또는 수신자 지갑·해당 통화 잔액 행 없음).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "WALLET4001", value = EX_WALLET4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "503",
+                    description = "COMMON5031 - 분산 락 획득 실패(타임아웃/Redis 일시 장애).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON5031", value = EX_COMMON5031)))
+    })
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public ApiResponse<TransferExecuteResponse> executeTransfer(
+            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더.
+            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @Valid @RequestBody TransferExecuteRequest request) {
+        TransferExecuteResponse response = transferService.execute(userPublicId, idempotencyKey, request);
+        return ApiResponse.success(response, "송금이 완료되었습니다.");
     }
 }
