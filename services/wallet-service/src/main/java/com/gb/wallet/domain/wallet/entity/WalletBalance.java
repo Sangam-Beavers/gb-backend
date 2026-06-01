@@ -73,4 +73,25 @@ public class WalletBalance extends BaseEntity {
         }
         this.balance = this.balance.add(delta);
     }
+
+    /**
+     * 잔액을 {@code delta}만큼 감액한다(송금 출금 등). {@link #addBalance}와 동일한 설계 의도 —
+     * {@code @Setter} 대신 도메인 메서드로만 노출해 불변성 규칙(CLAUDE.md §4)을 지키고, 영속 상태에서
+     * 호출하면 dirty checking으로 UPDATE된다.
+     *
+     * <p>잔액 부족({@code balance < delta})은 외부 입력 검증이 아니라 <em>내부 불변식 방어</em>다 —
+     * Service가 사전에 잔액을 확인한 뒤 호출한다는 가정이며, 위반 시 프로그래밍 오류이므로
+     * 비즈니스 예외(BusinessException) 대상이 아니다(CLAUDE.md §6 본문, {@link #addBalance}와 동일 정책).
+     * 사용자 향 "잔액 부족"(WALLET4002 등) 매핑은 Service 책임.
+     */
+    public void subtract(BigDecimal delta) {
+        if (delta == null || delta.signum() <= 0) {
+            throw new IllegalArgumentException("감액 금액은 양수여야 합니다: " + delta);
+        }
+        if (this.balance.compareTo(delta) < 0) {
+            throw new IllegalArgumentException(
+                    "감액 후 잔액이 음수가 됩니다: balance=" + this.balance + ", delta=" + delta);
+        }
+        this.balance = this.balance.subtract(delta);
+    }
 }

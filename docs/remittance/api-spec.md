@@ -158,50 +158,91 @@
 
 `POST /api/v1/transfers` · Auth ✅ · **1단계 즉시 실행**
 
+> ⚠️ **구현 단계 (점진 확장):**
+> - **1단계 (현재 작업)**: INTERNAL_TRANSFER + 같은 통화 송금만.
+    >   `currency_code == receive_currency_code` 필수. `exchange_rate=null`, `receive_amount=amount`.
+> - **2단계 (후속)**: REMITTANCE 추가 (BankClient.payout 호출).
+> - **3단계 (후속)**: 다통화 송금 (환율 적용 — `currency_code != receive_currency_code`).
+
 **Request Header**
 | 헤더 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `Idempotency-Key` | string | O | 멱등성 키(UUID). 재시도 중복 방지 |
+| `Idempotency-Key` | string | O | 멱등성 키(UUID). 재시도 중복 방지. 동일 키 재요청 시 첫 결과(2xx) 그대로 재반환 |
+| `X-User-Public-Id` | string | O | 송신자 식별 (인증 구현 전 임시). 인증 구현 후 JWT sub로 교체 |
 
 **Request Body**
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `transfer_type` | string | O | INTERNAL_TRANSFER / REMITTANCE |
-| `amount` | string | O | 송금 금액 (출금 통화 기준) |
+| `transfer_type` | string | O | INTERNAL_TRANSFER / REMITTANCE. 1단계는 INTERNAL_TRANSFER만 지원 |
+| `amount` | string | O | 송금 금액 (출금 통화 기준, string 십진수). 양수 |
 | `currency_code` | string | O | 출금 통화 (KRW/USD/PHP/VND) |
-| `receive_currency_code` | string | △ | 수취 통화. 통화 다른 송금 시 필수 |
-| `memo` | string | X | 메모 |
+| `receive_currency_code` | string | O | 수취 통화. 1단계는 `currency_code`와 동일해야 함. 다르면 TRANSFER4005 |
+| `memo` | string | X | 메모 (255자 이내) |
 | `receiver_public_id` | string | △ | 수취 회원 UUID. INTERNAL_TRANSFER 시 필수 |
-| `bank_account_public_id` | string | △ | 수취 계좌 UUID. REMITTANCE 시 필수 |
+| `bank_account_public_id` | string | △ | 수취 계좌 UUID. REMITTANCE 시 필수 (2단계) |
 
 **Response 201** — `data`
 | 필드 | 타입 | nullable | 설명 |
 | --- | --- | --- | --- |
 | `public_id` | string | N | 거래 UUID |
 | `transfer_type` | string | N | INTERNAL_TRANSFER / REMITTANCE |
-| `amount` | string | N | 송금 금액 |
+| `amount` | string | N | 송금 금액 (string 십진수) |
 | `currency_code` | string | N | 출금 통화 |
-| `fee` | string | N | 수수료 |
-| `exchange_rate` | string | Y | "1 외화→KRW". 통화 같으면 null |
-| `receive_amount` | string | N | 수취 금액 |
-| `receive_currency_code` | string | N | 수취 통화 |
+| `fee` | string | N | 수수료 (string 십진수, 소수점 4자리). INTERNAL_TRANSFER=0 |
+| `exchange_rate` | string | Y | 적용 환율. **1단계는 항상 null** (같은 통화 송금) |
+| `receive_amount` | string | N | 수취 금액. 1단계는 amount와 동일 |
+| `receive_currency_code` | string | N | 수취 통화. 1단계는 currency_code와 동일 |
 | `status` | string | N | COMPLETED |
 | `created_at` | string | N | ISO 8601 UTC Z |
 
 **Error**
 | HTTP | code | message |
 | --- | --- | --- |
-| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (Body 검증 실패) |
 | 400 | WALLET4002 | 지갑 잔액이 부족합니다. |
 | 400 | TRANSFER4002 | 지원하지 않는 통화입니다. |
+| 400 | TRANSFER4003 | 지원하지 않는 송금 유형입니다. (1단계는 INTERNAL_TRANSFER만) |
+| 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. |
+| 400 | TRANSFER4005 | 지원하지 않는 통화 조합입니다. (1단계는 같은 통화만) |
 | 401 | COMMON4011 | 인증 정보가 유효하지 않습니다. |
-| 404 | WALLET4001 | 존재하지 않는 지갑입니다. |
-| 404 | MEMBER4001 | 존재하지 않는 회원입니다. |
-| 404 | ACCOUNT4001 | 존재하지 않는 계좌입니다. |
+| 404 | WALLET4001 | 존재하지 않는 지갑입니다. (송신자/수신자 wallet 모두 이 코드 사용) |
+| 503 | COMMON5031 | 일시적으로 처리할 수 없습니다. (분산 락 획득 실패) |
 
-> 멱등성(§12-2-2): 동일 키 재요청 시 에러 없이 첫 결과(2xx) 재반환.
-> 사전 흐름: verify-password → fds-check → 본 API.
+### 6-1. 멱등성 처리 (3-layer)
 
+동일 `Idempotency-Key` 재요청 시 에러 없이 첫 결과(2xx)를 그대로 재반환한다.
+
+1. **Redis 캐시 조회** — `idempotency:{key}` → 있으면 그대로 반환 (빠른 경로, TTL 24h)
+2. **DB 조회** — `transactions.idempotency_key`로 조회 → 있으면 응답 재구성 + Redis 캐시 후 반환
+3. **DB UNIQUE 위반** — 동시 race로 다른 트랜잭션이 먼저 INSERT 시 `DataIntegrityViolationException` catch → 별도 트랜잭션으로 첫 결과 조회 + 반환
+
+### 6-2. 분산 락 정책 (데드락 회피)
+
+INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므로 데드락 위험이 있다. **Resource Ordering** 패턴으로 `wallet_id` 오름차순으로 일관 락 획득.
+
+1. **Redis 분산 락** (Redisson MultiLock):
+    - 키: `lock:wallet:{walletId}` 두 개
+    - `wallet_id` 오름차순으로 묶어 `tryLock(waitTime=3s, leaseTime=5s)`
+    - 실패 시 `COMMON5031`
+2. **DB 비관적 락** (Redis 락 내부):
+    - `WalletBalanceRepository.findForUpdateByWalletAndCurrency` × 2
+    - 같은 순서(`wallet_id` 오름차순)로 획득
+3. 잔액 변경 → 트랜잭션 INSERT × 1 + audit log INSERT × 2 → 커밋 → Redis 락 해제
+
+> 두 단계 락은 의도적 중복이다. Redis는 다중 인스턴스 환경 분산 보호, DB는 같은 인스턴스 내 직렬화. 둘 다 동일 순서로 획득해야 안전.
+
+### 6-3. Audit Log (두 건 — INTERNAL_TRANSFER)
+
+송신자/수신자 각각 잔액 변화를 별도 행으로 기록 (감사 완전성).
+
+| action | user_public_id | before_balance | after_balance | amount |
+| --- | --- | --- | --- | --- |
+| `INTERNAL_TRANSFER_SEND` | sender | sender 변경 전 | sender 변경 후 | amount + fee (차감액) |
+| `INTERNAL_TRANSFER_RECEIVE` | receiver | receiver 변경 전 | receiver 변경 후 | amount (수령액) |
+
+> 두 행 모두 같은 `transaction_id` 참조. 같은 `@Transactional` 안에서 INSERT.
+
+> 사전 흐름: verify-password → fds-check → 본 API (1단계는 verify-password/fds-check 미구현, 별도 작업).
 ---
 
 ## 7. 송금 확인증 / 정기 송금
