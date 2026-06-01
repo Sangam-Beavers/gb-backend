@@ -27,6 +27,7 @@ import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.entity.WalletBalance;
 import com.gb.wallet.domain.wallet.repository.WalletBalanceRepository;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
+import com.gb.wallet.domain.wallet.service.WalletBalanceWriter;
 import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.common.enums.CurrencyType;
@@ -66,6 +67,7 @@ class TransferServiceImplExecuteTest {
 
     @Mock private WalletRepository walletRepository;
     @Mock private WalletBalanceRepository walletBalanceRepository;
+    @Mock private WalletBalanceWriter walletBalanceWriter;
     @Mock private TransactionRepository transactionRepository;
     @Mock private TransactionAuditLogRepository auditLogRepository;
     @Mock private BankAccountRepository bankAccountRepository;
@@ -140,6 +142,46 @@ class TransferServiceImplExecuteTest {
         // 캐시 저장 + 락 해제
         verify(idempotencyCacheHelper).set(eq(KEY), anyString());
         verify(lock).unlock();
+    }
+
+    @Test
+    @DisplayName("수신자가 해당 통화 잔액 행이 없던 회원이어도 → ensure가 0원 행 생성 후 송금 성공")
+    void execute_수신자_zero_balance_ensure_생성_후_송금_성공() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        // 의도(zero-start 입금) 문서화: 첫 KRW 수신자라 ensure가 막 INSERT한 0원 행이 FOR UPDATE에 잡힌다고
+        // 가정한다. walletBalanceWriter는 @Mock 이라 void 호출이 no-op — 실제 INSERT/REQUIRES_NEW/race 흡수는
+        // 단위 테스트 mock으로 검증 불가하므로 Testcontainers 백로그(통합 테스트 단계)에서 보강한다.
+        WalletBalance receiverZero = balance(receiver, BigDecimal.ZERO);
+        RLock lock = lock();
+
+        stubCacheMiss();
+        stubDbMiss();
+        stubWalletLookups(sender, receiver);
+        stubLockAcquired(lock);
+        stubBalanceLocks(sender, receiver, senderBalance, receiverZero);
+        stubTransactionSaveAndAuditLog();
+        given(objectMapper.writeValueAsString(any())).willReturn("{\"any\":\"json\"}");
+
+        TransferExecuteResponse response = service.execute(SENDER_USER, KEY, request("10000.0000"));
+
+        // 응답: COMPLETED + 1단계 정책(fee=0, exchange null, receive_amount = amount)
+        assertThat(response.status()).isEqualTo("COMPLETED");
+        assertThat(response.amount()).isEqualTo("10000.0000");
+        assertThat(response.fee()).isEqualTo("0.0000");
+        assertThat(response.exchangeRate()).isNull();
+
+        // 핵심 신호: 수신자에 대해 ensure가 FOR UPDATE 이전에 호출됐다.
+        verify(walletBalanceWriter).ensureBalanceRow(receiver, CurrencyType.KRW);
+
+        // 잔액 변경: sender 1000000 → 990000, receiver 0 → 10000 (fee=0)
+        assertThat(senderBalance.getBalance()).isEqualByComparingTo("990000");
+        assertThat(receiverZero.getBalance()).isEqualByComparingTo("10000");
+
+        // Transaction 1건 + audit log 2건(SEND/RECEIVE)
+        verify(transactionRepository, times(1)).save(any(Transaction.class));
+        verify(auditLogRepository, times(2)).save(any(TransactionAuditLog.class));
     }
 
     // ===== 도메인 검증 실패 =====
@@ -280,10 +322,12 @@ class TransferServiceImplExecuteTest {
     }
 
     @Test
-    @DisplayName("잔액 행(wallet_balance) 없음 → WALLET4001 (1단계 자동 생성 미지원)")
-    void execute_잔액행없음_WALLET4001() {
+    @DisplayName("송신자 잔액 행 없음 → WALLET4001 (송신자는 자동 생성 안 함 — 돈 있어야 보냄)")
+    void execute_송신자_잔액행없음_WALLET4001() {
         Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
         Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
+        // 수신자 행은 ensure가 보장한 0원 행 — 정상 존재. 송신자 행만 없음.
+        WalletBalance receiverBalance = balance(receiver, BigDecimal.ZERO);
 
         stubCacheMiss();
         stubDbMiss();
@@ -291,16 +335,46 @@ class TransferServiceImplExecuteTest {
         stubLockAcquired(lock());
         given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
         given(walletRepository.findById(RECEIVER_WALLET_ID)).willReturn(Optional.of(receiver));
-        // lower id 쪽 잔액 행 없음(empty) — 자동 생성 안 함
-        Wallet lower = SENDER_WALLET_ID < RECEIVER_WALLET_ID ? sender : receiver;
-        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(lower, CurrencyType.KRW))
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(sender, CurrencyType.KRW))
                 .willReturn(Optional.empty());
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(receiver, CurrencyType.KRW))
+                .willReturn(Optional.of(receiverBalance));
 
         assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(WalletErrorCode.WALLET_NOT_FOUND);
 
+        // 수신자 ensure는 FOR UPDATE 이전 단계에서 호출됐어야 한다(이 케이스에선 receiver는 정상 행).
+        verify(walletBalanceWriter).ensureBalanceRow(receiver, CurrencyType.KRW);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("수신자 잔액 행이 ensure 후에도 없음 → COMMON5000 (정합성 비정상)")
+    void execute_수신자_잔액행없음_post_ensure_COMMON5000() {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+
+        stubCacheMiss();
+        stubDbMiss();
+        stubWalletLookups(sender, receiver);
+        stubLockAcquired(lock());
+        given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
+        given(walletRepository.findById(RECEIVER_WALLET_ID)).willReturn(Optional.of(receiver));
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(sender, CurrencyType.KRW))
+                .willReturn(Optional.of(senderBalance));
+        // ensure를 (mock) 호출했음에도 receiver 행이 안 보이는 비정상 상태 시뮬레이션.
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(receiver, CurrencyType.KRW))
+                .willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.INTERNAL_SERVER_ERROR);
+
+        verify(walletBalanceWriter).ensureBalanceRow(receiver, CurrencyType.KRW);
         verify(transactionRepository, never()).save(any());
     }
 
@@ -319,6 +393,8 @@ class TransferServiceImplExecuteTest {
         verifyNoInteractions(walletRepository, walletBalanceRepository, distributedLockHelper,
                 auditLogRepository, bankClient, memberClient, bankAccountRepository);
         verify(transactionRepository, never()).findByIdempotencyKey(anyString());
+        // replay 경로는 executeInTransaction 미진입 — ensure도 호출되면 안 된다.
+        verify(walletBalanceWriter, never()).ensureBalanceRow(any(), any());
     }
 
     @Test
@@ -340,6 +416,8 @@ class TransferServiceImplExecuteTest {
         verify(walletRepository, never()).findByUserPublicId(anyString());
         // 캐시 채움(다음 동일 키 요청은 Layer 1로 처리)
         verify(idempotencyCacheHelper).set(eq(KEY), anyString());
+        // replay 경로는 executeInTransaction 미진입 — ensure도 호출되면 안 된다.
+        verify(walletBalanceWriter, never()).ensureBalanceRow(any(), any());
     }
 
     @Test
