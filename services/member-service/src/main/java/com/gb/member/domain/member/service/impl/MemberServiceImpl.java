@@ -9,6 +9,7 @@ import com.gb.member.domain.member.repository.MemberRepository;
 import com.gb.member.domain.member.service.MemberService;
 import com.gb.member.global.client.IdpUserClient;
 import com.gb.member.global.exception.code.MemberErrorCode;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,13 +32,18 @@ public class MemberServiceImpl implements MemberService {
             throw new BusinessException(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
         }
 
+        // publicId를 먼저 생성한다. IdP(attributes.public_id)와 우리 DB에 같은 값을 써야
+        // 토큰 custom claim(public_id)과 우리 회원이 일치한다(토큰 sub ↔ publicId 매핑).
+        String publicId = UUID.randomUUID().toString();
+
         // 방식 B: 비밀번호는 우리 DB에 저장하지 않는다. IdP가 보유·검증한다.
-        // 먼저 IdP에 사용자를 등록(비번 포함)하고, IdP가 부여한 식별자(sub)를 받아 authProviderId에 채운다.
+        // 먼저 IdP에 사용자를 등록(비번 + publicId attribute 포함)하고, IdP가 부여한 식별자(sub)를 받아 authProviderId에 채운다.
         // IdP 등록이 실패하면 여기서 예외가 나 트랜잭션이 롤백되므로 로컬 회원도 생성되지 않는다(정합성).
         String authProviderId = idpUserClient.provisionUser(
-                request.getEmail(), request.getName(), request.getPassword());
+                request.getEmail(), request.getName(), request.getPassword(), publicId);
 
         Member member = Member.builder()
+                .publicId(publicId)
                 .email(request.getEmail())
                 .name(request.getName())
                 .nickname(request.getNickname())
