@@ -1,8 +1,42 @@
 package com.gb.wallet.domain.exchange.service.impl;
 
+import com.gb.common.exception.BusinessException;
+import com.gb.common.exception.CommonErrorCode;
+import com.gb.wallet.domain.exchange.dto.QuoteData;
+import com.gb.wallet.domain.exchange.dto.request.ExchangeExecuteRequest;
+import com.gb.wallet.domain.exchange.dto.request.QuoteRequest;
+import com.gb.wallet.domain.exchange.dto.response.ExchangeResponse;
+import com.gb.wallet.domain.exchange.dto.response.QuoteResponse;
 import com.gb.wallet.domain.exchange.dto.response.SupportedCurrenciesResponse;
+import com.gb.wallet.domain.exchange.repository.QuoteRedisRepository;
 import com.gb.wallet.domain.exchange.service.ExchangeService;
+import com.gb.wallet.domain.transaction.entity.Transaction;
+import com.gb.wallet.domain.transaction.entity.TransactionAuditLog;
+import com.gb.wallet.domain.transaction.repository.TransactionAuditLogRepository;
+import com.gb.wallet.domain.transaction.repository.TransactionRepository;
+import com.gb.wallet.domain.wallet.entity.Wallet;
+import com.gb.wallet.domain.wallet.entity.WalletBalance;
+import com.gb.wallet.domain.wallet.repository.WalletBalanceRepository;
+import com.gb.wallet.domain.wallet.repository.WalletRepository;
+import com.gb.wallet.domain.wallet.service.WalletBalanceWriter;
+import com.gb.wallet.global.client.ExchangeRateClient;
+import com.gb.wallet.global.common.enums.CurrencyType;
+import com.gb.wallet.global.common.enums.ExchangeType;
+import com.gb.wallet.global.common.enums.TransactionStatus;
+import com.gb.wallet.global.common.enums.TransactionType;
+import com.gb.wallet.global.exception.code.ExchangeErrorCode;
+import com.gb.wallet.global.exception.code.TransferErrorCode;
+import com.gb.wallet.global.exception.code.WalletErrorCode;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Optional;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -10,10 +44,251 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class ExchangeServiceImpl implements ExchangeService {
 
+    /** 환전 수수료: 신청 금액의 0.5%(KRW 기준), 소수 4자리 HALF_UP. 임시 정책 — 운영 시 정책 객체로 분리. */
+    private static final BigDecimal EXCHANGE_FEE_RATE = new BigDecimal("0.005");
+    private static final int MONEY_SCALE = 4;
+    private static final int RATE_SCALE = 8;
+    /** 견적 유효 시간(분). Redis TTL과 응답 expires_at 계산에 함께 사용. */
+    private static final long QUOTE_TTL_MINUTES = 5L;
+    private static final String EXCHANGE_ACTION = "EXCHANGE";
+
+    private final WalletRepository walletRepository;
+    private final WalletBalanceRepository walletBalanceRepository;
+    private final WalletBalanceWriter walletBalanceWriter;
+    private final TransactionRepository transactionRepository;
+    private final TransactionAuditLogRepository auditLogRepository;
+    private final QuoteRedisRepository quoteRedisRepository;
+    private final ExchangeRateClient exchangeRateClient;
+
+    /** self-injection: @Transactional 프록시 적용 위함(충전/송금 동일 패턴). */
+    @Autowired
+    @Lazy
+    private ExchangeService self;
+
     @Override
     @Transactional(readOnly = true)
     public SupportedCurrenciesResponse getSupportedCurrencies() {
         // 지원 통화는 CurrencyType enum이 SSOT — DB 조회 없이 enum에서 구성한다.
         return SupportedCurrenciesResponse.of();
+    }
+
+    // ───────────────────────────── 견적 ─────────────────────────────
+
+    @Override
+    public QuoteResponse createQuote(String userPublicId, QuoteRequest request) {
+        // 1) 입력 검증 — 형식은 @Valid에서, enum/통화는 여기서(도메인 에러로 매핑).
+        ExchangeType exchangeType = parseExchangeType(request.getExchangeType());
+        CurrencyType from = parseCurrency(request.getFromCurrencyCode());
+        CurrencyType to = parseCurrency(request.getToCurrencyCode());
+        BigDecimal amount = parseAmount(request.getAmount());
+
+        // 2) 환율 계산. 견적은 "1 외화 → KRW" 환율을 기준으로 from→to 환산.
+        //    EXCHANGE(원화→외화): KRW amount → 외화. RE_EXCHANGE(외화→원화): 외화 amount → KRW.
+        BigDecimal fromRate = rateToKrw(from);   // 1 from = ?KRW
+        BigDecimal toRate = rateToKrw(to);       // 1 to   = ?KRW
+
+        // amount(from 통화) → KRW 환산 → to 통화로 환산.
+        BigDecimal amountInKrw = amount.multiply(fromRate);
+        // 수수료는 KRW 기준 0.5%.
+        BigDecimal fee = amountInKrw.multiply(EXCHANGE_FEE_RATE).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        // 수수료 차감 후 KRW를 to 통화로 환산 = 수령액.
+        BigDecimal receiveAmount = amountInKrw.subtract(fee)
+                .divide(toRate, MONEY_SCALE, RoundingMode.HALF_UP);
+
+        // 응답 환율은 명세상 "1 외화 → KRW". EXCHANGE면 to(외화) 환율, RE_EXCHANGE면 from(외화) 환율을 노출.
+        BigDecimal displayRate = (exchangeType == ExchangeType.EXCHANGE ? toRate : fromRate)
+                .setScale(RATE_SCALE, RoundingMode.HALF_UP);
+
+        // 3) 견적 스냅샷 생성 + Redis 저장(TTL 5분).
+        String quotePublicId = UUID.randomUUID().toString();
+        QuoteData quote = new QuoteData(
+                quotePublicId, userPublicId, exchangeType, from, to,
+                amount, displayRate, fee, CurrencyType.KRW, receiveAmount, to);
+        quoteRedisRepository.save(quote);
+
+        Instant expiresAt = Instant.now().plus(QUOTE_TTL_MINUTES, ChronoUnit.MINUTES);
+        return QuoteResponse.of(quote, expiresAt);
+    }
+
+    // ───────────────────────────── 실행 ─────────────────────────────
+
+    @Override
+    public ExchangeResponse execute(String userPublicId, String idempotencyKey,
+                                    ExchangeExecuteRequest request) {
+        // 1) 멱등성 — 이미 처리된 키면 첫 거래를 재반환(잔액 재변경 없음).
+        Optional<Transaction> prior = transactionRepository.findByIdempotencyKey(idempotencyKey);
+        if (prior.isPresent()) {
+            return toResponse(prior.get());
+        }
+
+        // 2) 견적 조회 — 없으면(TTL 만료/미존재) 만료 처리.
+        QuoteData quote = quoteRedisRepository.find(request.getQuotePublicId())
+                .orElseThrow(() -> new BusinessException(ExchangeErrorCode.QUOTE_EXPIRED));
+
+        // 3) 견적 발급자 본인 확인 — 타인이 견적 id를 탈취해 실행하는 것 방지.
+        if (!quote.userPublicId().equals(userPublicId)) {
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
+
+        // 4) 트랜잭션 내 실행 (self-proxy — 직접 호출 시 @Transactional 미적용).
+        try {
+            ExchangeResponse response = self.executeInTransaction(userPublicId, idempotencyKey, quote);
+            // 5) 성공 시 견적 삭제(재사용 방지).
+            quoteRedisRepository.delete(quote.quotePublicId());
+            return response;
+        } catch (DataIntegrityViolationException race) {
+            // 동시 race로 같은 키가 먼저 커밋됨 → 첫 거래 재조회.
+            return self.readPrior(idempotencyKey);
+        }
+    }
+
+    @Override
+    @Transactional
+    public ExchangeResponse executeInTransaction(String userPublicId, String idempotencyKey, QuoteData quote) {
+        // (1) 지갑 조회.
+        Wallet wallet = walletRepository.findByUserPublicId(userPublicId)
+                .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+
+        // (2) 받을 통화(to) 잔액 행 0원 보장 — 없으면 FOR UPDATE로 못 잠그므로 먼저 생성(REQUIRES_NEW).
+        walletBalanceWriter.ensureBalanceRow(wallet, quote.toCurrencyCode());
+
+        // (3) from/to 잔액 행을 비관적 락으로 조회. (같은 지갑 두 통화 — 데드락 회피 위해 통화명 순서로 잠금)
+        boolean fromFirst = quote.fromCurrencyCode().name().compareTo(quote.toCurrencyCode().name()) <= 0;
+        CurrencyType firstCur = fromFirst ? quote.fromCurrencyCode() : quote.toCurrencyCode();
+        CurrencyType secondCur = fromFirst ? quote.toCurrencyCode() : quote.fromCurrencyCode();
+        walletBalanceRepository.findForUpdateByWalletAndCurrency(wallet, firstCur);
+        walletBalanceRepository.findForUpdateByWalletAndCurrency(wallet, secondCur);
+
+        // 잠근 뒤 역할별로 다시 가져온다(from = 출금, to = 입금).
+        WalletBalance fromBalance = walletBalanceRepository
+                .findForUpdateByWalletAndCurrency(wallet, quote.fromCurrencyCode())
+                // from 잔액 행이 없다 = 바꿀 돈이 없음 → 잔액 부족.
+                .orElseThrow(() -> new BusinessException(WalletErrorCode.INSUFFICIENT_BALANCE));
+        WalletBalance toBalance = walletBalanceRepository
+                .findForUpdateByWalletAndCurrency(wallet, quote.toCurrencyCode())
+                // to 행은 (2)에서 보장했으므로 없으면 정합성 깨진 비정상 상태.
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
+
+        // (4) 잔액 검증 — 신청 금액(from 통화)만큼 있어야 함. 부족하면 WALLET4002.
+        if (fromBalance.getBalance().compareTo(quote.amount()) < 0) {
+            throw new BusinessException(WalletErrorCode.INSUFFICIENT_BALANCE);
+        }
+
+        // (5) 잔액 변경 — from 차감, to 증가.
+        BigDecimal fromBefore = fromBalance.getBalance();
+        BigDecimal toBefore = toBalance.getBalance();
+        fromBalance.subtract(quote.amount());
+        toBalance.addBalance(quote.receiveAmount());
+        BigDecimal fromAfter = fromBalance.getBalance();
+        BigDecimal toAfter = toBalance.getBalance();
+
+        // (6) 거래 기록 INSERT (type=EXCHANGE). idempotency_key UNIQUE 위반 시 catch로 race 처리.
+        Transaction tx = transactionRepository.save(Transaction.builder()
+                .publicId(UUID.randomUUID().toString())
+                .wallet(wallet)
+                .type(TransactionType.EXCHANGE)
+                .amount(quote.amount())
+                .currencyCode(quote.fromCurrencyCode())     // 출금 통화
+                .fee(quote.fee())
+                .status(TransactionStatus.COMPLETED)
+                .idempotencyKey(idempotencyKey)
+                .receiveAmount(quote.receiveAmount())
+                .receiveCurrencyCode(quote.toCurrencyCode())
+                .exchangeRate(quote.exchangeRate())
+                .toAmount(quote.receiveAmount())
+                .build());
+
+        // (7) 감사 로그 INSERT × 2 (출금/입금, append-only).
+        auditLogRepository.save(TransactionAuditLog.builder()
+                .transaction(tx)
+                .userPublicId(userPublicId)
+                .action(EXCHANGE_ACTION + "_FROM")
+                .amount(quote.amount())
+                .currencyCode(quote.fromCurrencyCode())
+                .beforeBalance(fromBefore)
+                .afterBalance(fromAfter)
+                .status(TransactionStatus.COMPLETED)
+                .build());
+        auditLogRepository.save(TransactionAuditLog.builder()
+                .transaction(tx)
+                .userPublicId(userPublicId)
+                .action(EXCHANGE_ACTION + "_TO")
+                .amount(quote.receiveAmount())
+                .currencyCode(quote.toCurrencyCode())
+                .beforeBalance(toBefore)
+                .afterBalance(toAfter)
+                .status(TransactionStatus.COMPLETED)
+                .build());
+
+        return ExchangeResponse.from(tx, quote.exchangeType().name());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ExchangeResponse readPrior(String idempotencyKey) {
+        Transaction prior = transactionRepository.findByIdempotencyKey(idempotencyKey)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
+        return toResponse(prior);
+    }
+
+    // ───────────────────────────── 내역 조회 ─────────────────────────────
+
+    @Override
+    @Transactional(readOnly = true)
+    public ExchangeResponse getExchange(String userPublicId, String exchangePublicId) {
+        Transaction tx = transactionRepository.findByPublicId(exchangePublicId)
+                // 없거나 환전 거래가 아니면 EXCHANGE4001.
+                .filter(t -> t.getType() == TransactionType.EXCHANGE)
+                .orElseThrow(() -> new BusinessException(ExchangeErrorCode.EXCHANGE_NOT_FOUND));
+
+        // 본인 것이 아니면 COMMON4031.
+        if (!tx.getWallet().getUserPublicId().equals(userPublicId)) {
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
+        return toResponse(tx);
+    }
+
+    // ───────────────────────────── 헬퍼 ─────────────────────────────
+
+    /** 멱등성 재반환·내역 조회 공용. transactions에 환전 유형 컬럼이 없어 from/to 통화로 유형을 역산한다. */
+    private ExchangeResponse toResponse(Transaction tx) {
+        ExchangeType type = (tx.getReceiveCurrencyCode() == CurrencyType.KRW)
+                ? ExchangeType.RE_EXCHANGE : ExchangeType.EXCHANGE;
+        return ExchangeResponse.from(tx, type.name());
+    }
+
+    private ExchangeType parseExchangeType(String value) {
+        try {
+            return ExchangeType.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            // 잘못된 환전 유형은 요청 값 오류로 처리.
+            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+        }
+    }
+
+    private CurrencyType parseCurrency(String code) {
+        return CurrencyType.fromCode(code)
+                .orElseThrow(() -> new BusinessException(TransferErrorCode.UNSUPPORTED_CURRENCY));
+    }
+
+    private BigDecimal parseAmount(String amount) {
+        try {
+            BigDecimal value = new BigDecimal(amount);
+            if (value.signum() <= 0) {
+                throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+            }
+            return value;
+        } catch (NumberFormatException e) {
+            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+        }
+    }
+
+    /** 환율표에 없는 통화면 미지원 통화(TRANSFER4002). */
+    private BigDecimal rateToKrw(CurrencyType currency) {
+        BigDecimal rate = exchangeRateClient.getRateToKrw(currency);
+        if (rate == null) {
+            throw new BusinessException(TransferErrorCode.UNSUPPORTED_CURRENCY);
+        }
+        return rate;
     }
 }

@@ -18,6 +18,9 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
      */
     Optional<Transaction> findByIdempotencyKey(String idempotencyKey);
 
+    /** 외부 노출 식별자(public_id)로 거래 단건 조회. 환전 내역 조회 등에서 사용. */
+    Optional<Transaction> findByPublicId(String publicId);
+
     /**
      * 내가 송신자인 INTERNAL_TRANSFER(COMPLETED) 중, 수신자(receiver wallet)별로 가장 최근 송금
      * 한 건씩 골라 최근순으로 N건을 반환한다. {@code N}은 {@link Pageable#getPageSize()}로 제어한다.
