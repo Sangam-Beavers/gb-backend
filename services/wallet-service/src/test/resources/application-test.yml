@@ -20,6 +20,24 @@ spring:
   jackson:
     # main과 동일한 전역 규칙(응답 JSON 검증 시 대비).
     property-naming-strategy: SNAKE_CASE
+  # Redis: 테스트에서 실제 호출은 (c)단계 테스트에서 @MockitoBean으로 차단할 예정. 여기는 @Value 해석용 더미.
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 1s
+  # 테스트에선 Redis가 안 떠 있다. RedissonAutoConfigurationV2가 RedisTemplate + RedissonConnectionFactory를
+  # eager wire하면서 우리 @Lazy RedissonClient 빈을 강제 실체화 → 연결 실패로 컨텍스트가 깨지므로 제외한다.
+  # 우리 RedisConfig.redissonClient 빈은 그대로 살아있고, (c)단계 테스트에서 @MockitoBean으로 대체된다.
+  autoconfigure:
+    exclude:
+      - org.redisson.spring.starter.RedissonAutoConfigurationV2
+
+# 테스트 환경에선 Redis가 안 떠 있으므로 actuator의 Redis health contributor도 비활성화.
+management:
+  health:
+    redis:
+      enabled: false
 
 # BankClientConfig가 RestClient 빈 등록 시 사용하는 base URL.
 # 테스트는 외부 Mock 은행을 실제로 호출하지 않지만, @Value 해석을 위해 더미 값을 둔다.
