@@ -16,6 +16,7 @@ import com.gb.wallet.domain.account.service.ChargeService;
 import com.gb.wallet.domain.account.service.HolderService;
 import com.gb.wallet.domain.account.service.SupportedBankService;
 import com.gb.wallet.global.common.util.ClientIpResolver;
+import com.gb.wallet.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -55,22 +56,22 @@ public class AccountController {
             summary = "추가 지원 은행 목록 조회",
             description = "충전·현금화 계좌 등록 시 선택 가능한 활성 국내 은행 목록을 가나다순으로 반환한다. "
                     + "Beaver/Quokka Bank 등 시뮬레이션 은행도 활성 상태이면 포함된다. "
-                    + "인증 미구현 상태라 현재는 X-User-Public-Id 헤더를 받지만 결과는 사용자와 무관하다.")
+                    + "마스터 데이터 조회라 결과는 사용자와 무관하지만 인증은 필요하다.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
                     description = "조회 성공. 응답은 공통 ApiResponse로 감싸지며 data에 SupportedBankListResponse가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @GetMapping("/supported-banks")
-    public ApiResponse<SupportedBankListResponse> getSupportedBanks(
-            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            //       (마스터 조회라 헤더 값 자체는 사용하지 않음)
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId) {
+    public ApiResponse<SupportedBankListResponse> getSupportedBanks() {
         return ApiResponse.success(supportedBankService.getSupportedBanks());
     }
 
@@ -80,12 +81,16 @@ public class AccountController {
             description = "요청 회원이 등록한 활성 은행 계좌를 주 계좌 우선, 최신 등록순으로 반환한다. "
                     + "계좌번호는 마스킹되어(앞 3 + 끝 2) 전달된다. "
                     + "등록된 계좌가 없으면 404가 아닌 200 + accounts: [] 빈 배열로 응답한다. "
-                    + "인증 미구현 상태라 현재는 X-User-Public-Id 헤더로 사용자를 식별한다.")
+                    + "사용자는 JWT의 public_id claim으로 식별한다.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
                     description = "조회 성공. 응답은 공통 ApiResponse로 감싸지며 data에 AccountListResponse가 담긴다. "
                             + "등록된 계좌가 없는 경우에도 200 + 빈 배열로 응답한다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
@@ -93,9 +98,7 @@ public class AccountController {
     })
     @GetMapping
     public ApiResponse<AccountListResponse> getMyAccounts(
-            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId) {
+            @CurrentUserPublicId String userPublicId) {
         return ApiResponse.success(bankAccountService.getMyAccounts(userPublicId));
     }
 
@@ -114,6 +117,10 @@ public class AccountController {
                     description = "COMMON4001 - 요청 값이 올바르지 않습니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "ACCOUNT4001 - 존재하지 않는 계좌입니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -128,10 +135,6 @@ public class AccountController {
     })
     @GetMapping("/holder")
     public ApiResponse<AccountHolderResponse> getAccountHolder(
-            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            //       (외부 조회 위임이라 헤더 값 자체는 사용하지 않음)
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
             @RequestParam("bankCode") @NotBlank @Size(max = 20) String bankCode,
             @RequestParam("accountNumber") @NotBlank @Size(max = 100) String accountNumber) {
         return ApiResponse.success(holderService.getAccountHolder(bankCode, accountNumber));
@@ -153,6 +156,10 @@ public class AccountController {
                     description = "COMMON4001 - 요청 값이 올바르지 않습니다. / ACCOUNT4002 - 계좌 인증에 실패했습니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "ACCOUNT4001 - 존재하지 않는 계좌입니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -167,10 +174,6 @@ public class AccountController {
     })
     @PostMapping("/verify")
     public ApiResponse<VerifyAccountResponse> verifyAccount(
-            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            //       (외부 인증 위임이라 헤더 값 자체는 사용하지 않음)
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
             @Valid @RequestBody VerifyAccountRequest request) {
         return ApiResponse.success(bankAccountService.verifyAccount(request));
     }
@@ -189,6 +192,10 @@ public class AccountController {
                     description = "COMMON4001 - 요청 값이 올바르지 않습니다(필수값 누락/지원하지 않는 은행 코드).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409",
                     description = "ACCOUNT4004 - 이미 등록된 계좌입니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -200,9 +207,7 @@ public class AccountController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<AccountResponse> registerAccount(
-            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @Valid @RequestBody RegisterAccountRequest request) {
         return ApiResponse.success(bankAccountService.registerAccount(userPublicId, request));
     }
@@ -220,6 +225,10 @@ public class AccountController {
                     responseCode = "400",
                     description = "COMMON4001 - 요청 값이 올바르지 않습니다(금액 누락/형식 오류/0 이하, 필수 헤더 누락). "
                             + "/ ACCOUNT4003 - 연동 계좌의 잔액이 부족합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
@@ -245,9 +254,7 @@ public class AccountController {
     @PostMapping("/{id}/charge")
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<ChargeResponse> charge(
-            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 100) String idempotencyKey,
             @PathVariable("id") @NotBlank @Size(max = 36) String accountPublicId,
             @Valid @RequestBody ChargeRequest request,

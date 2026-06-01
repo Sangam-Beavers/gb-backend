@@ -6,6 +6,7 @@ import com.gb.common.response.SuccessStatus;
 import com.gb.community.domain.like.dto.response.LikedPostListResponse;
 import com.gb.community.domain.like.dto.response.PostLikeResponse;
 import com.gb.community.domain.like.service.LikeService;
+import com.gb.community.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -23,7 +24,6 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -48,8 +48,8 @@ public class LikeController {
     // 응답별 ErrorResponse 예시 JSON. ErrorCode enum의 (code, message)와 1:1 일치하도록 손으로 박는다.
     private static final String EX_COMMON4001 =
             "{\"success\":false,\"code\":\"COMMON4001\",\"message\":\"요청 값이 올바르지 않습니다.\"}";
-    private static final String EX_COMMON4011 =
-            "{\"success\":false,\"code\":\"COMMON4011\",\"message\":\"인증 정보가 유효하지 않습니다.\"}";
+    private static final String EX_AUTH4011 =
+            "{\"success\":false,\"code\":\"AUTH4011\",\"message\":\"인증이 필요합니다.\"}";
     private static final String EX_COMMON4091 =
             "{\"success\":false,\"code\":\"COMMON4091\",\"message\":\"이미 존재하는 리소스입니다.\"}";
     private static final String EX_COMMON5000 =
@@ -59,7 +59,7 @@ public class LikeController {
 
     private final LikeService likeService;
 
-    /** 관심글 목록 조회. 🔒 JWT 필요(현재 인증 미구현 — 헤더 임시 식별). */
+    /** 관심글 목록 조회. 🔒 JWT 필요(본인 식별은 토큰 public_id claim에서 추출). */
     @Operation(
             summary = "관심글 목록 조회",
             description = "요청자가 좋아요한 게시글 목록을 sort(latest=좋아요 누른 시각순 / popular=좋아요 수순, "
@@ -71,14 +71,14 @@ public class LikeController {
                     description = "조회 성공. data에 LikedPostListResponse(posts + 페이지 메타)가 담긴다."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "COMMON4001 - 잘못된 sort 값 또는 page/size 범위 위반, 헤더 누락/공백.",
+                    description = "COMMON4001 - 잘못된 sort 값 또는 page/size 범위 위반.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
@@ -87,10 +87,7 @@ public class LikeController {
     })
     @GetMapping("/liked")
     public ApiResponse<LikedPostListResponse> getLikedPosts(
-            // TODO: 인증 구현 후 JWT(sub/claim)에서 userPublicId 추출로 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            //       이 API는 "요청자가 좋아요한 글"이라 본인 식별 값을 실제로 사용한다.
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @RequestParam(required = false, defaultValue = "latest") String sort,
             @RequestParam(defaultValue = "0") @Min(0) int page,
             // size 상한(100)은 과도한 조회를 막는 방어적 가드.
@@ -110,14 +107,14 @@ public class LikeController {
                     description = "저장 성공. data에 PostLikeResponse(like_count 갱신값, liked=true)가 담긴다."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "COMMON4001 - 잘못된 요청(헤더 누락/공백, public_id 형식 위반).",
+                    description = "COMMON4001 - 잘못된 요청(public_id 형식 위반).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "COMMUNITY4001 - 존재하지 않는 게시글입니다.",
@@ -137,8 +134,7 @@ public class LikeController {
     @PostMapping("/{id}/likes")
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<PostLikeResponse> like(
-            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더(요청자 = 좋아요 주체).
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId) {
         return ApiResponse.success(SuccessStatus.CREATED, likeService.like(userPublicId, postPublicId));
     }
@@ -154,14 +150,14 @@ public class LikeController {
                     description = "취소 성공(또는 멱등 no-op). data에 PostLikeResponse(liked=false)가 담긴다."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "COMMON4001 - 잘못된 요청(헤더 누락/공백, public_id 형식 위반).",
+                    description = "COMMON4001 - 잘못된 요청(public_id 형식 위반).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보가 유효하지 않습니다. (인증 구현 후 활성화)",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "COMMUNITY4001 - 존재하지 않는 게시글입니다.",
@@ -175,8 +171,7 @@ public class LikeController {
     })
     @DeleteMapping("/{id}/likes")
     public ApiResponse<PostLikeResponse> unlike(
-            // TODO: 인증 구현 후 JWT로 교체. 현재는 임시 헤더(요청자 = 좋아요 취소 주체).
-            @RequestHeader("X-User-Public-Id") @NotBlank String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId) {
         return ApiResponse.success(likeService.unlike(userPublicId, postPublicId));
     }

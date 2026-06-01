@@ -8,6 +8,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -15,6 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
+import com.gb.common.security.RestAuthenticationEntryPoint;
 import com.gb.wallet.domain.account.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.account.dto.response.AccountListResponse;
 import com.gb.wallet.domain.account.dto.response.AccountResponse;
@@ -26,7 +28,9 @@ import com.gb.wallet.domain.account.service.ChargeService;
 import com.gb.wallet.domain.account.service.HolderService;
 import com.gb.wallet.domain.account.service.SupportedBankService;
 import com.gb.wallet.global.client.dto.AccountToken;
+import com.gb.wallet.global.config.WebConfig;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
+import com.gb.wallet.global.security.CurrentUserPublicIdArgumentResolver;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -36,9 +40,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 /**
  * {@link AccountController}의 HTTP wiring 검증 — URL/메서드, @Valid·@Validated, @RequestHeader,
@@ -53,8 +60,12 @@ import org.springframework.test.web.servlet.ResultActions;
 @WebMvcTest(AccountController.class)
 @Import({
         com.gb.common.exception.handler.GlobalExceptionHandler.class,
-        com.gb.wallet.global.config.SecurityConfig.class
+        com.gb.wallet.global.config.SecurityConfig.class,
+        RestAuthenticationEntryPoint.class,
+        WebConfig.class,
+        CurrentUserPublicIdArgumentResolver.class
 })
+@ActiveProfiles("test")
 class AccountControllerTest {
 
     @Autowired private MockMvc mockMvc;
@@ -64,9 +75,24 @@ class AccountControllerTest {
     @MockitoBean private SupportedBankService supportedBankService;
     @MockitoBean private HolderService holderService;
     @MockitoBean private ChargeService chargeService;
+    // 방식 B 보안 필터 체인(oauth2ResourceServer)이 요구하는 JwtDecoder를 가린다(실제 IdP 호출 차단).
+    @MockitoBean private JwtDecoder jwtDecoder;
 
     private static final String USER_ID = "test-uuid-1234";
     private static final String ACCT_ID = "acct-uuid";
+
+    /** 인증된 요청용 JWT 주입(public_id claim = USER_ID). 컨트롤러는 이 claim으로 사용자를 식별한다. */
+    private static RequestPostProcessor authedJwt() {
+        return jwt().jwt(j -> j.claim("public_id", USER_ID));
+    }
+
+    /**
+     * 토큰은 유효하나 {@code public_id} claim이 없는 JWT(=IdP Property Mapping 누락 시나리오).
+     * CurrentUserPublicIdArgumentResolver가 AUTH4011로 fail-fast 하는 경로 검증용.
+     */
+    private static RequestPostProcessor jwtWithoutPublicId() {
+        return jwt().jwt(j -> j.claim("sub", "no-mapping"));
+    }
 
     // --- POST /verify ---
 
@@ -77,7 +103,7 @@ class AccountControllerTest {
                 .willReturn(VerifyAccountResponse.from(new AccountToken("tok-abcdef")));
 
         mockMvc.perform(post("/api/v1/accounts/verify")
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
@@ -92,7 +118,7 @@ class AccountControllerTest {
     @DisplayName("POST /verify 400: 필수값 누락(holder_name) → COMMON4001로 변환")
     void verify_필수값_누락() throws Exception {
         mockMvc.perform(post("/api/v1/accounts/verify")
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
@@ -109,7 +135,7 @@ class AccountControllerTest {
     void verify_길이_초과() throws Exception {
         String tooLong = "0".repeat(101);
         mockMvc.perform(post("/api/v1/accounts/verify")
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
@@ -128,7 +154,7 @@ class AccountControllerTest {
                 .given(bankAccountService).verifyAccount(any());
 
         mockMvc.perform(post("/api/v1/accounts/verify")
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
@@ -139,16 +165,16 @@ class AccountControllerTest {
     }
 
     @Test
-    @DisplayName("POST /verify 400: X-User-Public-Id 헤더 누락 → COMMON4001 (헤더 필수)")
-    void verify_헤더_누락() throws Exception {
+    @DisplayName("POST /verify 401: 토큰 없음 → AUTH4011 (보호 엔드포인트), service 미호출")
+    void verify_토큰_없음_401() throws Exception {
         mockMvc.perform(post("/api/v1/accounts/verify")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
                                 "account_number", "1234567890",
                                 "holder_name", "홍길동"))))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("COMMON4001"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
 
         verifyNoInteractions(bankAccountService);
     }
@@ -162,7 +188,7 @@ class AccountControllerTest {
                 .willReturn(stubAccountResponse());
 
         mockMvc.perform(post("/api/v1/accounts")
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
@@ -184,7 +210,7 @@ class AccountControllerTest {
                 .given(bankAccountService).registerAccount(eq(USER_ID), any());
 
         mockMvc.perform(post("/api/v1/accounts")
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
@@ -198,7 +224,7 @@ class AccountControllerTest {
     @DisplayName("POST /accounts 400: 필수값 누락(account_token) → COMMON4001")
     void register_필수값_누락() throws Exception {
         mockMvc.perform(post("/api/v1/accounts")
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
@@ -213,7 +239,7 @@ class AccountControllerTest {
     @DisplayName("POST /accounts 400: bank_code 20자 초과 → @Size 위반 → COMMON4001")
     void register_은행코드_길이_초과() throws Exception {
         mockMvc.perform(post("/api/v1/accounts")
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "0".repeat(21),
@@ -234,7 +260,7 @@ class AccountControllerTest {
                 .willReturn(stubHolderResponse("홍길동"));
 
         mockMvc.perform(get("/api/v1/accounts/holder")
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .param("bankCode", "004")
                         .param("accountNumber", "1234567890"))
                 .andExpect(status().isOk())
@@ -245,7 +271,7 @@ class AccountControllerTest {
     @DisplayName("GET /holder 400: bankCode 누락(필수 @RequestParam) → COMMON4001")
     void holder_파라미터_누락() throws Exception {
         mockMvc.perform(get("/api/v1/accounts/holder")
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .param("accountNumber", "1234567890"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("COMMON4001"));
@@ -262,7 +288,7 @@ class AccountControllerTest {
                 .willReturn(SupportedBankListResponse.from(java.util.List.of()));
 
         mockMvc.perform(get("/api/v1/accounts/supported-banks")
-                        .header("X-User-Public-Id", USER_ID))
+                        .with(authedJwt()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.banks").isArray());
@@ -277,7 +303,7 @@ class AccountControllerTest {
                 .willReturn(AccountListResponse.from(java.util.List.of()));
 
         mockMvc.perform(get("/api/v1/accounts")
-                        .header("X-User-Public-Id", USER_ID))
+                        .with(authedJwt()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.accounts").isArray())
@@ -312,7 +338,7 @@ class AccountControllerTest {
                 .willReturn(stubChargeResponse());
 
         mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .header("Idempotency-Key", "idem-1")
                         .header("X-Forwarded-For", "203.0.113.7, 10.0.0.1")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -338,14 +364,28 @@ class AccountControllerTest {
     }
 
     @Test
-    @DisplayName("POST /{id}/charge 400: X-User-Public-Id 헤더 누락 → COMMON4001, service 미호출")
-    void charge_userHeader_누락() throws Exception {
+    @DisplayName("POST /{id}/charge 401: 토큰 없음 → AUTH4011, service 미호출")
+    void charge_토큰_없음_401() throws Exception {
         mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
                         .header("Idempotency-Key", "idem-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of("amount", "1530000"))))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("COMMON4001"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verifyNoInteractions(chargeService);
+    }
+
+    @Test
+    @DisplayName("POST /{id}/charge 401: 토큰은 유효하나 public_id claim 누락 → AUTH4011(resolver fail-fast), service 미호출")
+    void charge_publicIdClaim_누락_401() throws Exception {
+        mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
+                        .with(jwtWithoutPublicId())
+                        .header("Idempotency-Key", "idem-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("amount", "1530000"))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
 
         verifyNoInteractions(chargeService);
     }
@@ -354,7 +394,7 @@ class AccountControllerTest {
     @DisplayName("POST /{id}/charge 400: Idempotency-Key 헤더 누락 → COMMON4001, service 미호출")
     void charge_idempotencyHeader_누락() throws Exception {
         mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of("amount", "1530000"))))
                 .andExpect(status().isBadRequest())
@@ -368,7 +408,7 @@ class AccountControllerTest {
     void charge_amount_검증_실패() throws Exception {
         for (String bad : List.of("0", "-100", "1.23456")) {
             mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
-                            .header("X-User-Public-Id", USER_ID)
+                            .with(authedJwt())
                             .header("Idempotency-Key", "idem-1")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(Map.of("amount", bad))))
@@ -377,7 +417,7 @@ class AccountControllerTest {
         }
         // amount 필드 누락(빈 객체)
         mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
-                        .header("X-User-Public-Id", USER_ID)
+                        .with(authedJwt())
                         .header("Idempotency-Key", "idem-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
@@ -435,7 +475,7 @@ class AccountControllerTest {
 
     private ResultActions performValidCharge() throws Exception {
         return mockMvc.perform(post("/api/v1/accounts/{id}/charge", ACCT_ID)
-                .header("X-User-Public-Id", USER_ID)
+                .with(authedJwt())
                 .header("Idempotency-Key", "idem-1")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(Map.of("amount", "1530000"))));

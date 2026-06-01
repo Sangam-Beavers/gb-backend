@@ -61,7 +61,7 @@
 | `total_elements` | integer | N | 전체 게시글 수 |
 | `total_pages` | integer | N | 전체 페이지 수 |
 
-**Error**: 400 COMMON4001 / 401 COMMON4011
+**Error**: 400 COMMON4001 / 401 AUTH4011
 
 ---
 
@@ -92,7 +92,7 @@
 | `created_at` | string | N | 작성 시각(UTC Z) |
 | `updated_at` | string | N | 수정 시각(UTC Z) |
 
-**Error**: 400 COMMON4001 / 400 COMMON4002 / 401 COMMON4011
+**Error**: 400 COMMON4001 / 400 COMMON4002 / 401 AUTH4011
 
 ---
 
@@ -148,7 +148,7 @@
 
 작성 성공 시 게시글 `comment_count` +1.
 
-**Error**: 401 COMMON4011 / 404 COMMUNITY4001(게시글 없음) / 404 COMMUNITY4002(부모 댓글 없음)
+**Error**: 401 AUTH4011 / 404 COMMUNITY4001(게시글 없음) / 404 COMMUNITY4002(부모 댓글 없음)
 
 ---
 
@@ -178,7 +178,7 @@ message: "신고가 접수되었습니다."
 | HTTP | code | message |
 | --- | --- | --- |
 | 400 | COMMON4001 | 요청 값이 올바르지 않습니다. |
-| 401 | COMMON4011 | 인증 정보가 유효하지 않습니다. |
+| 401 | AUTH4011 | 인증이 필요합니다. |
 | 404 | COMMUNITY4001 | 존재하지 않는 게시글입니다. |
 | 409 | COMMON4091 | 이미 존재하는 리소스입니다. (중복 신고) |
 
@@ -188,7 +188,7 @@ message: "신고가 접수되었습니다."
 
 `POST /api/v1/community/posts/{postId}/comments/{commentId}/reports` · Auth ✅
 Body: `reason`(필수), `detail`(선택). Response 201. 게시글 신고와 동일 체계.
-**Error**: 401 COMMON4011 / 404 COMMUNITY4002(댓글 없음) / 409 COMMON4091(중복).
+**Error**: 401 AUTH4011 / 404 COMMUNITY4002(댓글 없음) / 409 COMMON4091(중복).
 
 ---
 
@@ -207,7 +207,7 @@ Body: `reason`(필수), `detail`(선택). Response 201. 게시글 신고와 동�
 | `average_score` | number | Y | 평균 점수(1.0~5.0, 표시용). 이력 없으면 null |
 | `review_count` | integer | N | 받은 평가 수 |
 
-**Error**: 401 COMMON4011 / 404 MEMBER4001
+**Error**: 401 AUTH4011 / 404 MEMBER4001
 
 ---
 
@@ -226,7 +226,7 @@ Body: `reason`(필수), `detail`(선택). Response 201. 게시글 신고와 동�
 자기 평가 불가, 중복 평가 불가. 평가 저장 후 대상 회원 `temperature_grade` 재집계.
 
 **Response 201** — `data`: 평가 결과 + 갱신된 대상 온도 요약.
-**Error**: 400 COMMON4001 / 401 COMMON4011 / 404 MEMBER4001 / 409 COMMON4091(중복 평가)
+**Error**: 400 COMMON4001 / 401 AUTH4011 / 404 MEMBER4001 / 409 COMMON4091(중복 평가)
 
 ---
 

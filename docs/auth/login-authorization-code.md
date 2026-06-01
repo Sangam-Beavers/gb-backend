@@ -88,6 +88,8 @@
 - 회원가입 `/auth/register` + `IdpUserClient`(`RealIdpUserClient`) **유지**
 - `Member.authProviderId`(토큰 `sub` ↔ 우리 회원 매핑) **유지**
 
+**wallet · community 전환 완료(2026-06-01):** 두 서비스도 member와 동일한 방식 B(OAuth2 Resource Server)로 전환했다. `X-User-Public-Id` 헤더 임시처리(CLAUDE.md §9)를 제거하고, `SecurityConfig`를 `oauth2ResourceServer(jwt)` + 공개경로(swagger/api-docs/actuator)만 permitAll로 교체, 컨트롤러는 토큰 custom claim `public_id`를 `@CurrentUserPublicId`(서비스별 `global/security` ArgumentResolver)로 추출한다. 인증 실패는 `AUTH4011`. **남은 곳: document-service**(헤더 임시처리 유지 — 동일 패턴으로 후속 전환).
+
 ---
 
 ## 6. 남은 작업

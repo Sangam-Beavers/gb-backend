@@ -6,23 +6,30 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.gb.common.exception.BusinessException;
+import com.gb.common.security.RestAuthenticationEntryPoint;
 import com.gb.community.domain.comment.dto.response.CommentListResponse;
 import com.gb.community.domain.comment.dto.response.CommentResponse;
 import com.gb.community.domain.comment.service.CommentService;
+import com.gb.community.global.config.WebConfig;
 import com.gb.community.global.exception.code.CommunityErrorCode;
+import com.gb.community.global.security.CurrentUserPublicIdArgumentResolver;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 /**
  * {@link CommentController} HTTP wiring 검증 — URL/메서드, @Validated, @RequestHeader, ApiResponse 래핑,
@@ -34,8 +41,12 @@ import org.springframework.test.web.servlet.MockMvc;
 @WebMvcTest(CommentController.class)
 @Import({
         com.gb.common.exception.handler.GlobalExceptionHandler.class,
-        com.gb.community.global.config.SecurityConfig.class
+        com.gb.community.global.config.SecurityConfig.class,
+        RestAuthenticationEntryPoint.class,
+        WebConfig.class,
+        CurrentUserPublicIdArgumentResolver.class
 })
+@ActiveProfiles("test")
 class CommentControllerTest {
 
     @Autowired
@@ -44,9 +55,18 @@ class CommentControllerTest {
     @MockitoBean
     private CommentService commentService;
 
+    // 방식 B 보안 필터 체인(oauth2ResourceServer)이 요구하는 JwtDecoder를 가린다(실제 IdP 호출 차단).
+    @MockitoBean
+    private JwtDecoder jwtDecoder;
+
     private static final String USER = "00000000-0000-0000-0000-000000000001";
     private static final String PID = "a1b2c3d4-0000-0000-0000-000000000001";
     private static final String CID = "c1d2e3f4-0000-0000-0000-000000000001";
+
+    /** 인증된 요청용 JWT 주입. getComments는 본인 식별을 쓰지 않지만 보호 엔드포인트라 토큰이 필요하다. */
+    private static RequestPostProcessor authedJwt() {
+        return jwt().jwt(j -> j.claim("public_id", USER));
+    }
 
     @Test
     @DisplayName("GET 200: 댓글 목록 → comments 배열 + 페이지 메타(snake_case), parent_comment_public_id는 null")
@@ -55,7 +75,7 @@ class CommentControllerTest {
                 .willReturn(CommentListResponse.of(List.of(stubComment()), 0, 20, 1, 1));
 
         mockMvc.perform(get("/api/v1/community/posts/{id}/comments", PID)
-                        .header("X-User-Public-Id", USER))
+                        .with(authedJwt()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.comments").isArray())
@@ -81,7 +101,7 @@ class CommentControllerTest {
                 .willThrow(new BusinessException(CommunityErrorCode.POST_NOT_FOUND));
 
         mockMvc.perform(get("/api/v1/community/posts/{id}/comments", PID)
-                        .header("X-User-Public-Id", USER))
+                        .with(authedJwt()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.code").value("COMMUNITY4001"));
@@ -91,7 +111,7 @@ class CommentControllerTest {
     @DisplayName("GET 400: size 상한(100) 초과 → COMMON4001(@Max 위반), service 미호출")
     void getComments_size_초과() throws Exception {
         mockMvc.perform(get("/api/v1/community/posts/{id}/comments", PID)
-                        .header("X-User-Public-Id", USER)
+                        .with(authedJwt())
                         .param("size", "101"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("COMMON4001"));
@@ -100,11 +120,11 @@ class CommentControllerTest {
     }
 
     @Test
-    @DisplayName("GET 400: X-User-Public-Id 헤더 누락 → COMMON4001, service 미호출")
-    void getComments_헤더_누락() throws Exception {
+    @DisplayName("GET 401: 토큰 없음 → AUTH4011, service 미호출")
+    void getComments_토큰_없음_401() throws Exception {
         mockMvc.perform(get("/api/v1/community/posts/{id}/comments", PID))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("COMMON4001"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
 
         verifyNoInteractions(commentService);
     }
