@@ -156,12 +156,13 @@
 
 ## 6. 송금 실행 ★
 
-`POST /api/v1/transfers` · Auth ✅ · **1단계 즉시 실행**
+`POST /api/v1/transfers` · Auth ✅ · **1·2단계 즉시 실행**
 
 > ⚠️ **구현 단계 (점진 확장):**
-> - **1단계 (현재 작업)**: INTERNAL_TRANSFER + 같은 통화 송금만.
-    >   `currency_code == receive_currency_code` 필수. `exchange_rate=null`, `receive_amount=amount`.
-> - **2단계 (후속)**: REMITTANCE 추가 (BankClient.payout 호출).
+> - **1단계 (완료)**: INTERNAL_TRANSFER + 같은 통화 송금. `currency_code == receive_currency_code` 필수.
+>   `exchange_rate=null`, `receive_amount=amount`.
+> - **2단계 (완료)**: REMITTANCE 추가 (BankClient.payout 호출). **같은 통화만 지원** —
+>   `currency_code == receive_currency_code` 강제 유지(다르면 TRANSFER4005). 다통화는 3단계로 이연.
 > - **3단계 (후속)**: 다통화 송금 (환율 적용 — `currency_code != receive_currency_code`).
 
 **Request Header**
@@ -173,13 +174,13 @@
 **Request Body**
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `transfer_type` | string | O | INTERNAL_TRANSFER / REMITTANCE. 1단계는 INTERNAL_TRANSFER만 지원 |
+| `transfer_type` | string | O | INTERNAL_TRANSFER / REMITTANCE 모두 지원(2단계 완료) |
 | `amount` | string | O | 송금 금액 (출금 통화 기준, string 십진수). 양수 |
 | `currency_code` | string | O | 출금 통화 (KRW/USD/PHP/VND) |
-| `receive_currency_code` | string | O | 수취 통화. 1단계는 `currency_code`와 동일해야 함. 다르면 TRANSFER4005 |
+| `receive_currency_code` | string | O | 수취 통화. 1·2단계는 `currency_code`와 동일해야 함. 다르면 TRANSFER4005 (다통화는 3단계) |
 | `memo` | string | X | 메모 (255자 이내) |
-| `receiver_public_id` | string | △ | 수취 회원 UUID. INTERNAL_TRANSFER 시 필수 |
-| `bank_account_public_id` | string | △ | 수취 계좌 UUID. REMITTANCE 시 필수 (2단계) |
+| `receiver_public_id` | string | △ | 수취 회원 UUID. INTERNAL_TRANSFER 시 필수 (DTO `@NotBlank`로 강제) |
+| `bank_account_public_id` | string | △ | 수취 계좌 UUID. REMITTANCE 시 필수 (누락 시 COMMON4001) |
 
 **Response 201** — `data`
 | 필드 | 타입 | nullable | 설명 |
@@ -198,18 +199,42 @@
 **Error**
 | HTTP | code | message |
 | --- | --- | --- |
-| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (Body 검증 실패) |
-| 400 | WALLET4002 | 지갑 잔액이 부족합니다. |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (Body 검증 실패, REMITTANCE 시 `bank_account_public_id` 누락 포함) |
+| 400 | WALLET4002 | 지갑 잔액이 부족합니다. (REMITTANCE는 amount + fee ≤ 송신자 잔액) |
 | 400 | TRANSFER4002 | 지원하지 않는 통화입니다. |
-| 400 | TRANSFER4003 | 지원하지 않는 송금 유형입니다. (1단계는 INTERNAL_TRANSFER만) |
-| 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. |
-| 400 | TRANSFER4005 | 지원하지 않는 통화 조합입니다. (1단계는 같은 통화만) |
+| 400 | TRANSFER4003 | 지원하지 않는 송금 유형입니다. (INTERNAL_TRANSFER/REMITTANCE 외 — 예: CHARGE/EXCHANGE) |
+| 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. (INTERNAL_TRANSFER 한정) |
+| 400 | TRANSFER4005 | 지원하지 않는 통화 조합입니다. (1·2단계는 같은 통화만) |
+| 400 | ACCOUNT4002 | 계좌 인증에 실패했습니다. (REMITTANCE — Mock 은행 BANK4003 매핑) |
+| 400 | ACCOUNT4003 | 연동 계좌의 잔액이 부족합니다. (REMITTANCE — Mock 은행 BANK4002 매핑) |
 | 401 | AUTH4011 | 인증이 필요합니다. |
+| 403 | ACCOUNT4006 | 인증되지 않은 계좌입니다. (REMITTANCE — `mock_account_token` 미발급, 또는 Mock 은행 BANK4010 매핑) |
+| 404 | ACCOUNT4001 | 존재하지 않는 계좌입니다. (REMITTANCE — 본인 + active 미매칭, 또는 Mock 은행 BANK4040 매핑) |
 | 404 | WALLET4001 | 존재하지 않는 지갑입니다. (송신자/수신자 wallet 부재, 또는 송신자 통화 잔액 행 부재 — 송신자 잔액 행은 자동 생성하지 않음) |
 | 500 | COMMON5000 | 서버 오류가 발생했습니다. (수신자 잔액 행 자동 생성 직후에도 조회되지 않는 정합성 불변식 위반 — 정상 흐름에서 발생 불가, 방어) |
-| 503 | COMMON5031 | 일시적으로 처리할 수 없습니다. (분산 락 획득 실패) |
+| 503 | COMMON5031 | 일시적으로 처리할 수 없습니다. (분산 락 획득 실패, 또는 Mock 은행 일시 장애/타임아웃/연결 실패 — REMITTANCE) |
 
 > **수신자 잔액 행 자동 생성** — 수신자가 지갑은 있으나 해당 통화 잔액 행이 없으면 송금 시점에 0원 행을 자동 생성한 뒤 입금한다(`WalletBalanceWriter.ensureBalanceRow` — `REQUIRES_NEW`로 독립 커밋, `uk_wallet_balances_wallet_currency` UNIQUE로 동시 생성 race 흡수). 따라서 미보유 통화 수신 요청도 성공한다. **송신자**는 자동 생성하지 않으며(돈이 있어야 보내는 게 정상), 잔액 행 부재 시 `WALLET4001`. 수신자 행이 자동 생성 직후에도 없는 경우 정합성 불변식 위반으로 `COMMON5000`(정상 흐름에서 발생 불가 — 방어).
+
+### 6-0. REMITTANCE 동작 노트 (2단계)
+
+INTERNAL_TRANSFER와 분기를 분리해 처리한다. 외부 계좌 송금이라 receiver wallet/self-check/분산 락이 의미 없어, 단일 송신자 잔액 행 비관적 락(`SELECT … FOR UPDATE`)만으로 직렬화한다.
+
+**흐름** (`TransferServiceImpl.executeRemittanceInTransaction`):
+
+1. 송신자 wallet 재조회 + 본인 소유 + active `bank_account` 조회(없으면 `ACCOUNT4001` — 사유 미구분, 정보 누설 방지)
+2. `mock_account_token == null` → `ACCOUNT4006`(외부 호출 전 차단, 충전과 동일 정책)
+3. 송신자 잔액 행 `FOR UPDATE`(없으면 `WALLET4001` — 자동 생성 안 함)
+4. 수수료 계산: `amount × 0.5%`, `RoundingMode.HALF_UP`, scale 4 (§4 정책 SSOT 공유). `totalDeduct = amount + fee`
+5. 잔액 검증: `totalDeduct > 잔액` → `WALLET4002`
+6. **외부 호출 *직전* 시도 흔적 별도 커밋** — `RemittanceAttemptWriter.record`로 `remittance_attempts`에 1행을 `REQUIRES_NEW`로 INSERT. 메인 트랜잭션이 이후 단계에서 rollback돼도 흔적은 살아남는다.
+7. `BankClient.payout(bank_code, account_number, amount, currency_code, idempotency_key)` 호출. 외부 에러는 `BankErrorMapper`가 자동 변환(§13-4)해 그대로 전파(메인 tx rollback → 잔액 미차감).
+8. 응답 `status != "COMPLETED"` → `COMMON5031`(방어, 충전 패턴 동일)
+9. 송신자 잔액 차감(`totalDeduct`) → `transactions` INSERT(`type=REMITTANCE`, `bank_account_id=계좌.id`, `receiver_wallet_id=null`, `receive_amount=amount`, `receive_currency_code=currency`, `exchange_rate=null`) → 감사 로그 1건(`action="REMITTANCE"`, 송신자 한 줄만 — 외부 계좌라 수신 감사 없음) → 커밋
+
+**시도 흔적을 `transaction_audit_logs`가 아닌 신규 `remittance_attempts`에 박는 이유**: audit log는 `transaction_id` NOT NULL이라 본 `transactions` INSERT 전엔 행을 만들 수 없고, "거래 1:1 흔적" 의미를 흐린다. 별도 테이블로 분리해 충전·INTERNAL_TRANSFER 흐름엔 영향 없게 한다(database.md `remittance_attempts` 섹션 SSOT).
+
+> **reconcile 배치는 미구현.** 현재 `remittance_attempts`는 timeout-but-success 사건의 단서로만 쌓이며, 자동 정합성 복구 배치는 향후 운영 도입 시 본 테이블을 입력으로 추가한다.
 
 ### 6-1. 멱등성 처리 (3-layer)
 
@@ -219,7 +244,9 @@
 2. **DB 조회** — `transactions.idempotency_key`로 조회 → 있으면 응답 재구성 + Redis 캐시 후 반환
 3. **DB UNIQUE 위반** — 동시 race로 다른 트랜잭션이 먼저 INSERT 시 `DataIntegrityViolationException` catch → 별도 트랜잭션으로 첫 결과 조회 + 반환
 
-### 6-2. 분산 락 정책 (데드락 회피)
+### 6-2. 분산 락 정책 (데드락 회피 — INTERNAL_TRANSFER 한정)
+
+> REMITTANCE는 단일 송신자 잔액 행만 잠그면 충분해 Redisson MultiLock을 사용하지 않는다(§6-0 참조). 아래 정책은 INTERNAL_TRANSFER 전용.
 
 INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므로 데드락 위험이 있다. **Resource Ordering** 패턴으로 `wallet_id` 오름차순으로 일관 락 획득.
 
@@ -234,16 +261,23 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 
 > 두 단계 락은 의도적 중복이다. Redis는 다중 인스턴스 환경 분산 보호, DB는 같은 인스턴스 내 직렬화. 둘 다 동일 순서로 획득해야 안전.
 
-### 6-3. Audit Log (두 건 — INTERNAL_TRANSFER)
+### 6-3. Audit Log
 
-송신자/수신자 각각 잔액 변화를 별도 행으로 기록 (감사 완전성).
+**INTERNAL_TRANSFER (두 건)** — 송신자/수신자 각각 잔액 변화를 별도 행으로 기록 (감사 완전성).
 
 | action | user_public_id | before_balance | after_balance | amount |
 | --- | --- | --- | --- | --- |
 | `INTERNAL_TRANSFER_SEND` | sender | sender 변경 전 | sender 변경 후 | amount + fee (차감액) |
 | `INTERNAL_TRANSFER_RECEIVE` | receiver | receiver 변경 전 | receiver 변경 후 | amount (수령액) |
 
-> 두 행 모두 같은 `transaction_id` 참조. 같은 `@Transactional` 안에서 INSERT.
+**REMITTANCE (한 건)** — 외부 계좌라 수신 감사 없음. 송신자 한 줄만.
+
+| action | user_public_id | before_balance | after_balance | amount |
+| --- | --- | --- | --- | --- |
+| `REMITTANCE` | sender | sender 변경 전 | sender 변경 후 | amount + fee (차감액) |
+
+> 모든 행은 같은 `transaction_id` 참조. 같은 `@Transactional` 안에서 INSERT.
+> REMITTANCE 시도 흔적(외부 호출 직전)은 `transaction_audit_logs`가 아닌 별도 `remittance_attempts`에 박는다(§6-0 참조).
 
 > 사전 흐름: verify-password → fds-check → 본 API (1단계는 verify-password/fds-check 미구현, 별도 작업).
 ---
