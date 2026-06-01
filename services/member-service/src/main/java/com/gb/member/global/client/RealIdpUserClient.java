@@ -19,9 +19,14 @@ import org.springframework.web.client.RestClientException;
  *
  * <p>Authentik 회원 등록은 두 번의 호출로 이뤄진다(API가 그렇게 나뉘어 있음):
  * <ol>
- *   <li>{@code POST /api/v3/core/users/} — 사용자 생성(username/email/name). 응답에서 {@code pk}와 {@code uuid}를 받는다.</li>
+ *   <li>{@code POST /api/v3/core/users/} — 사용자 생성(username/email/name + attributes.public_id).
+ *       응답에서 {@code pk}와 {@code uuid}를 받는다.</li>
  *   <li>{@code POST /api/v3/core/users/{pk}/set_password/} — 1에서 받은 pk의 사용자에 비밀번호 설정(204).</li>
  * </ol>
+ *
+ * <p>사용자 생성 시 우리 {@code publicId}를 {@code attributes.public_id}로 함께 저장한다. Authentik
+ * Provider에 이 attribute를 토큰 claim({@code public_id})으로 내보내는 Scope/Property Mapping을 설정하면,
+ * 발급 토큰에서 publicId를 바로 꺼낼 수 있다(토큰 sub ↔ publicId 매핑).
  *
  * <p>이 호출은 로그인 중계와 달리 <b>관리자 토큰</b>(Authorization: Bearer)이 필요하다.
  * 토큰은 평문 금지: {@code auth.idp.admin-token}으로 받되 실제 값은 환경변수(AUTH_ADMIN_TOKEN)로만 주입한다.
@@ -55,11 +60,12 @@ public class RealIdpUserClient implements IdpUserClient {
     }
 
     @Override
-    public String provisionUser(String email, String name, String rawPassword) {
+    public String provisionUser(String email, String name, String rawPassword, String publicId) {
         try {
             // 1) 사용자 생성. username은 이메일로 통일(Authentik에서 username은 필수·고유).
             // 본문은 ObjectMapper로 직접 JSON 문자열로 만들어 보낸다(컨버터 환경 차이로 Map이
             // 빈 본문으로 직렬화되는 문제를 피하기 위해 — String은 항상 그대로 전송된다).
+            // attributes.public_id: 우리 회원 식별자를 IdP에 저장 → 토큰 custom claim(public_id)으로 노출.
             CreateUserResponse created = restClient.post()
                     .uri(apiBaseUri + "/core/users/")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)
@@ -69,7 +75,8 @@ public class RealIdpUserClient implements IdpUserClient {
                             "email", email,
                             "name", name,
                             "type", "internal",
-                            "is_active", true)))
+                            "is_active", true,
+                            "attributes", Map.of("public_id", publicId))))
                     .retrieve()
                     .body(CreateUserResponse.class);
 

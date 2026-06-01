@@ -3,6 +3,8 @@ package com.gb.member.domain.member.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -61,25 +63,29 @@ class MemberServiceImplTest {
 
         when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
-        // IdP가 사용자를 만들고 식별자(sub=uuid)를 돌려준다.
-        when(idpUserClient.provisionUser("new@example.com", "홍길동", "P@ssw0rd!"))
+        // IdP가 사용자를 만들고 식별자(sub=uuid)를 돌려준다. publicId는 Service가 만들어 4번째 인자로 넘긴다.
+        when(idpUserClient.provisionUser(eq("new@example.com"), eq("홍길동"), eq("P@ssw0rd!"), anyString()))
                 .thenReturn("idp-sub-uuid-9999");
-        when(memberRepository.save(any(Member.class))).thenAnswer(invocation -> {
-            Member m = invocation.getArgument(0);
-            ReflectionTestUtils.setField(m, "publicId", "11111111-1111-1111-1111-111111111111");
-            return m;
-        });
+        // 저장 시 publicId는 Service가 이미 채워 넘기므로 그대로 돌려준다(덮어쓰지 않는다).
+        when(memberRepository.save(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // when
         SignupResponse response = memberService.signup(request);
 
         // then
-        assertThat(response.getPublicId()).isEqualTo("11111111-1111-1111-1111-111111111111");
         assertThat(response.getEmail()).isEqualTo("new@example.com");
         assertThat(response.getNickname()).isEqualTo("gildong");
-        // IdP가 준 sub가 회원의 authProviderId로 저장돼야 한다.
+
+        // publicId가 IdP(attributes)와 우리 회원에 "같은 값"으로 들어가야 한다(토큰 sub ↔ publicId 매핑의 핵심).
+        ArgumentCaptor<String> idpPublicId = ArgumentCaptor.forClass(String.class);
+        verify(idpUserClient).provisionUser(eq("new@example.com"), eq("홍길동"), eq("P@ssw0rd!"), idpPublicId.capture());
+
         ArgumentCaptor<Member> saved = ArgumentCaptor.forClass(Member.class);
         verify(memberRepository).save(saved.capture());
+        assertThat(saved.getValue().getPublicId()).isEqualTo(idpPublicId.getValue());
+        // 응답 publicId도 동일해야 한다.
+        assertThat(response.getPublicId()).isEqualTo(idpPublicId.getValue());
+        // IdP가 준 sub가 회원의 authProviderId로 저장돼야 한다.
         assertThat(saved.getValue().getAuthProviderId()).isEqualTo("idp-sub-uuid-9999");
     }
 
@@ -100,7 +106,7 @@ class MemberServiceImplTest {
 
         verify(memberRepository, never()).save(any());
         // 중복이면 IdP에도 사용자를 만들지 않는다(로컬 검증이 먼저).
-        verify(idpUserClient, never()).provisionUser(any(), any(), any());
+        verify(idpUserClient, never()).provisionUser(any(), any(), any(), any());
     }
 
     // ──────────────────── 이메일/닉네임 중복 확인 ────────────────────

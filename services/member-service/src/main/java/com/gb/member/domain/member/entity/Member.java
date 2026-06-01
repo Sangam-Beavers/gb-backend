@@ -50,7 +50,8 @@ public class Member {
 
     @PrePersist
     public void prePersist() {
-        // 대외 식별자(UUID)를 저장 직전에 생성한다. 응답·URL에는 이 값만 노출(내부 id 비공개).
+        // publicId는 보통 Service에서 미리 생성해 IdP(attributes.public_id)와 동일 값으로 넘긴다.
+        // 여기서는 빌더로 받지 않은 경로(테스트 등)를 위한 fallback으로만 생성한다.
         if (this.publicId == null) {
             this.publicId = UUID.randomUUID().toString();
         }
@@ -58,9 +59,10 @@ public class Member {
     }
 
     @Builder
-    public Member(String email, String name,
+    public Member(String publicId, String email, String name,
                   String nickname, String nationality, String language,
                   String authProviderId) {
+        this.publicId = publicId;
         this.email = email;
         this.name = name;
         this.nickname = nickname;
