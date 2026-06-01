@@ -82,6 +82,13 @@ public class ExchangeServiceImpl implements ExchangeService {
         CurrencyType to = parseCurrency(request.getToCurrencyCode());
         BigDecimal amount = parseAmount(request.getAmount());
 
+        // 통화 조합 검증 — 환전은 "원화↔외화"만 허용. 같은 통화(KRW→KRW)나 외화↔외화(USD→PHP)는 거부.
+        // exactly one이 KRW여야 한다(둘 다 KRW거나 둘 다 외화면 미지원 조합).
+        boolean exactlyOneKrw = (from == CurrencyType.KRW) ^ (to == CurrencyType.KRW);
+        if (!exactlyOneKrw) {
+            throw new BusinessException(TransferErrorCode.UNSUPPORTED_CURRENCY);
+        }
+
         // 2) 환율 계산. 견적은 "1 외화 → KRW" 환율을 기준으로 from→to 환산.
         //    EXCHANGE(원화→외화): KRW amount → 외화. RE_EXCHANGE(외화→원화): 외화 amount → KRW.
         BigDecimal fromRate = rateToKrw(from);   // 1 from = ?KRW
@@ -283,10 +290,11 @@ public class ExchangeServiceImpl implements ExchangeService {
         }
     }
 
-    /** 환율표에 없는 통화면 미지원 통화(TRANSFER4002). */
+    /** 환율표에 없거나(미지원) 0 이하인 비정상 환율이면 미지원 통화(TRANSFER4002). */
     private BigDecimal rateToKrw(CurrencyType currency) {
         BigDecimal rate = exchangeRateClient.getRateToKrw(currency);
-        if (rate == null) {
+        // null(미지원) 또는 0 이하(비정상)면 거부 — 0 이하면 이후 나눗셈/계산이 깨진다.
+        if (rate == null || rate.signum() <= 0) {
             throw new BusinessException(TransferErrorCode.UNSUPPORTED_CURRENCY);
         }
         return rate;

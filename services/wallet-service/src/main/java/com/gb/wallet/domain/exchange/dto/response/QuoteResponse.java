@@ -2,6 +2,7 @@ package com.gb.wallet.domain.exchange.dto.response;
 
 import com.gb.wallet.domain.exchange.dto.QuoteData;
 import io.swagger.v3.oas.annotations.media.Schema;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
@@ -55,10 +56,11 @@ public class QuoteResponse {
     public static QuoteResponse of(QuoteData quote, Instant expiresAt) {
         return QuoteResponse.builder()
                 .quotePublicId(quote.quotePublicId())
-                .exchangeRate(quote.exchangeRate().setScale(4).toPlainString())
-                .fee(quote.fee().setScale(4).toPlainString())
+                // scale 축소 시 RoundingMode 없으면 ArithmeticException — 명시적 HALF_UP.
+                .exchangeRate(quote.exchangeRate().setScale(4, RoundingMode.HALF_UP).toPlainString())
+                .fee(quote.fee().setScale(4, RoundingMode.HALF_UP).toPlainString())
                 .feeCurrencyCode(quote.feeCurrencyCode().name())
-                .receiveAmount(quote.receiveAmount().setScale(4).toPlainString())
+                .receiveAmount(quote.receiveAmount().setScale(4, RoundingMode.HALF_UP).toPlainString())
                 .receiveCurrencyCode(quote.receiveCurrencyCode().name())
                 .expiresAt(DateTimeFormatter.ISO_INSTANT.format(expiresAt.truncatedTo(ChronoUnit.SECONDS)))
                 .build();

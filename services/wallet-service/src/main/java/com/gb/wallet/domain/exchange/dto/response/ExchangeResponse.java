@@ -2,6 +2,7 @@ package com.gb.wallet.domain.exchange.dto.response;
 
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import io.swagger.v3.oas.annotations.media.Schema;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -84,10 +85,10 @@ public class ExchangeResponse {
                 .exchangeType(exchangeType)
                 .fromCurrencyCode(tx.getCurrencyCode().name())
                 .toCurrencyCode(tx.getReceiveCurrencyCode().name())
-                .amount(tx.getAmount().setScale(4).toPlainString())
-                .exchangeRate(tx.getExchangeRate().setScale(4).toPlainString())
-                .fee(tx.getFee().setScale(4).toPlainString())
-                .receiveAmount(tx.getReceiveAmount().setScale(4).toPlainString())
+                .amount(tx.getAmount().setScale(4, RoundingMode.HALF_UP).toPlainString())
+                .exchangeRate(tx.getExchangeRate().setScale(4, RoundingMode.HALF_UP).toPlainString())
+                .fee(tx.getFee().setScale(4, RoundingMode.HALF_UP).toPlainString())
+                .receiveAmount(tx.getReceiveAmount().setScale(4, RoundingMode.HALF_UP).toPlainString())
                 .receiveCurrencyCode(tx.getReceiveCurrencyCode().name())
                 .status(tx.getStatus().name())
                 .exchangedAt(toUtcZ(tx.getCreatedAt()))

@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.gb.common.exception.BusinessException;
+import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.exchange.dto.QuoteData;
 import com.gb.wallet.domain.exchange.dto.request.ExchangeExecuteRequest;
 import com.gb.wallet.domain.exchange.dto.request.QuoteRequest;
@@ -152,8 +153,7 @@ class ExchangeServiceImplTest {
         assertThatThrownBy(() -> exchangeService.execute(USER, "idem-1", request))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
-                .extracting(Object::toString)
-                .isEqualTo("FORBIDDEN");
+                .isEqualTo(CommonErrorCode.FORBIDDEN);
     }
 
     @Test
