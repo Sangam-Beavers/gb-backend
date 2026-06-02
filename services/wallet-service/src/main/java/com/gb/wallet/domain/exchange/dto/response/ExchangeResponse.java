@@ -1,5 +1,7 @@
 package com.gb.wallet.domain.exchange.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.math.RoundingMode;
@@ -15,6 +17,11 @@ import lombok.Getter;
  *
  * <p>금액·환율은 string(금액 소수 4자리, 환율 소수 8자리 → 응답 표기상 4자리로 패딩)으로 전송한다.
  * 식별자는 public_id(UUID)만, 시각은 ISO 8601 UTC Z. transactions(type=EXCHANGE)에서 만든다.
+ *
+ * <p><b>Jackson 역직렬화:</b> 환전 멱등성 Layer 1(Redis 캐시)이 응답을 JSON으로 저장했다가 동일 키 재요청 시
+ * 객체로 복원한다. {@code @Builder} private 생성자라 Jackson이 creator를 추론하기 모호하므로 생성자에
+ * {@code @JsonCreator} + 직렬화 키와 1:1인 snake_case {@code @JsonProperty}를 명시해 round-trip을 보장한다
+ * (ChargeResponse와 동일 패턴). 직렬화는 기존대로 필드 기반(전역 SNAKE_CASE)이라 출력은 불변.
  */
 @Getter
 public class ExchangeResponse {
@@ -53,10 +60,19 @@ public class ExchangeResponse {
     private final String exchangedAt;
 
     @Builder
-    private ExchangeResponse(String publicId, String exchangeType, String fromCurrencyCode,
-                            String toCurrencyCode, String amount, String exchangeRate, String fee,
-                            String receiveAmount, String receiveCurrencyCode, String status,
-                            String exchangedAt) {
+    @JsonCreator
+    private ExchangeResponse(
+            @JsonProperty("public_id") String publicId,
+            @JsonProperty("exchange_type") String exchangeType,
+            @JsonProperty("from_currency_code") String fromCurrencyCode,
+            @JsonProperty("to_currency_code") String toCurrencyCode,
+            @JsonProperty("amount") String amount,
+            @JsonProperty("exchange_rate") String exchangeRate,
+            @JsonProperty("fee") String fee,
+            @JsonProperty("receive_amount") String receiveAmount,
+            @JsonProperty("receive_currency_code") String receiveCurrencyCode,
+            @JsonProperty("status") String status,
+            @JsonProperty("exchanged_at") String exchangedAt) {
         this.publicId = publicId;
         this.exchangeType = exchangeType;
         this.fromCurrencyCode = fromCurrencyCode;

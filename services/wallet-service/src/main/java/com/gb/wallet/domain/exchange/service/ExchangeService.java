@@ -3,6 +3,7 @@ package com.gb.wallet.domain.exchange.service;
 import com.gb.wallet.domain.exchange.dto.QuoteData;
 import com.gb.wallet.domain.exchange.dto.request.ExchangeExecuteRequest;
 import com.gb.wallet.domain.exchange.dto.request.QuoteRequest;
+import com.gb.wallet.domain.exchange.dto.response.ExchangeListResponse;
 import com.gb.wallet.domain.exchange.dto.response.ExchangeResponse;
 import com.gb.wallet.domain.exchange.dto.response.QuoteResponse;
 import com.gb.wallet.domain.exchange.dto.response.SupportedCurrenciesResponse;
@@ -20,6 +21,9 @@ public interface ExchangeService {
 
     /** 환전 완료 내역 단건을 조회한다(본인 것만). */
     ExchangeResponse getExchange(String userPublicId, String exchangePublicId);
+
+    /** 회원의 환전 완료 내역을 페이지로 조회한다(본인 것만, 최근순). */
+    ExchangeListResponse getExchanges(String userPublicId, int page, int size);
 
     /**
      * 트랜잭션 경계 안에서 실제 잔액 변경·거래 기록을 수행한다.
