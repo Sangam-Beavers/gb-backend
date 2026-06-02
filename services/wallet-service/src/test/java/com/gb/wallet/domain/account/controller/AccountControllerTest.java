@@ -99,7 +99,7 @@ class AccountControllerTest {
     @Test
     @DisplayName("POST /verify 200: 정상 호출 시 ApiResponse(success=true)로 account_token 반환")
     void verify_정상() throws Exception {
-        given(bankAccountService.verifyAccount(any()))
+        given(bankAccountService.verifyAccount(any(), anyString()))
                 .willReturn(VerifyAccountResponse.from(new AccountToken("tok-abcdef")));
 
         mockMvc.perform(post("/api/v1/accounts/verify")
@@ -151,7 +151,7 @@ class AccountControllerTest {
     @DisplayName("POST /verify 400: Mock 은행 인증 실패(ACCOUNT4002)가 그대로 응답된다")
     void verify_은행_인증_실패() throws Exception {
         willThrow(new BusinessException(AccountErrorCode.ACCOUNT_VERIFICATION_FAILED))
-                .given(bankAccountService).verifyAccount(any());
+                .given(bankAccountService).verifyAccount(any(), anyString());
 
         mockMvc.perform(post("/api/v1/accounts/verify")
                         .with(authedJwt())
@@ -177,6 +177,44 @@ class AccountControllerTest {
                 .andExpect(jsonPath("$.code").value("AUTH4011"));
 
         verifyNoInteractions(bankAccountService);
+    }
+
+    @Test
+    @DisplayName("POST /verify 429: service가 ACCOUNT4005(rate-limit 초과) 던지면 → 429 + code")
+    void verify_rate_limit_429() throws Exception {
+        willThrow(new BusinessException(AccountErrorCode.VERIFICATION_RATE_LIMITED))
+                .given(bankAccountService).verifyAccount(any(), anyString());
+
+        mockMvc.perform(post("/api/v1/accounts/verify")
+                        .with(authedJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "bank_code", "004",
+                                "account_number", "1234567890",
+                                "holder_name", "홍길동"))))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("ACCOUNT4005"));
+    }
+
+    @Test
+    @DisplayName("POST /verify - X-Forwarded-For가 있으면 맨 앞 IP를 clientIp(rate-limit 키)로 service에 전달")
+    void verify_forwardsClientIpFromXff() throws Exception {
+        given(bankAccountService.verifyAccount(any(), anyString()))
+                .willReturn(VerifyAccountResponse.from(new AccountToken("tok")));
+
+        mockMvc.perform(post("/api/v1/accounts/verify")
+                        .with(authedJwt())
+                        .header("X-Forwarded-For", "203.0.113.9, 10.0.0.2")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "bank_code", "004",
+                                "account_number", "1234567890",
+                                "holder_name", "홍길동"))))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<String> ipCaptor = ArgumentCaptor.forClass(String.class);
+        verify(bankAccountService).verifyAccount(any(), ipCaptor.capture());
+        assertThat(ipCaptor.getValue()).isEqualTo("203.0.113.9");
     }
 
     // --- POST /accounts ---

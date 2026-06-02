@@ -21,3 +21,8 @@ management:
 wallet:
   charge:
     single-limit: 10000000   # 단일 거래 충전 한도(KRW). 초과 시 ACCOUNT4007(명세 §12)
+  account:
+    # 계좌 인증(verify) rate-limit. IP 단위 고정 윈도. 미지정 시 VerifyRateLimitProperties 기본값(60s/10회).
+    verify-rate-limit:
+      window-seconds: 60     # 카운터 윈도(초)
+      limit: 10              # 윈도 내 허용 호출 수. 초과 시 ACCOUNT4005(429). Redis 장애 시 fail-open

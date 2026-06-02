@@ -67,4 +67,27 @@ public class DistributedLockHelper {
             return null;
         }
     }
+
+    /**
+     * 단일 키에 대한 분산 락을 {@code wait 3s / lease 5s}로 획득한다(두-wallet MultiLock과 동일 타이밍 정책).
+     *
+     * <p>계좌 등록을 user 단위로 직렬화하는 것처럼, 잠글 리소스가 하나뿐이라 Resource Ordering이 필요 없는
+     * 경우에 쓴다. 네임스페이스는 호출자가 정한다(키 전체를 넘긴다) — MultiLock 메서드가 {@code lock:wallet:}을
+     * 강제하는 것과 달리, 이 메서드는 도메인별 키({@code lock:account-register:{user}} 등)를 받는다.
+     *
+     * <p>호출자 책임: 반환된 {@link RLock}은 try-finally에서 {@code isHeldByCurrentThread()} 확인 후
+     * {@code unlock()}한다. 획득 실패(타임아웃·인터럽트) 시 {@code null} 반환 — 호출 측에서 비즈니스 에러로 매핑.
+     *
+     * @param lockKey 전체 락 키(네임스페이스 포함, 예: {@code lock:account-register:{userPublicId}})
+     */
+    public RLock tryLock(String lockKey) {
+        RLock lock = redissonClient.getLock(lockKey);
+        try {
+            boolean acquired = lock.tryLock(WAIT_TIME_SECONDS, LEASE_TIME_SECONDS, TimeUnit.SECONDS);
+            return acquired ? lock : null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+    }
 }

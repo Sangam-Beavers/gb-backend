@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -38,6 +39,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.redisson.api.RBucket;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
@@ -62,6 +65,10 @@ class ChargeServiceIntegrationTest {
     @MockitoBean private MemberClient memberClient;
     // 방식 B 보안 필터 체인(oauth2ResourceServer)이 요구하는 JwtDecoder를 가린다(실제 IdP 호출 차단 — 컨텍스트 로딩용).
     @MockitoBean private JwtDecoder jwtDecoder;
+    // 충전 멱등성 Layer 1(Redis 캐시)이 RedissonClient를 쓴다. 테스트엔 Redis가 없으므로 @MockitoBean으로
+    // 가려 실제 연결을 막는다. 아래 setUp에서 getBucket → no-op 버킷(get()=null)을 반환하도록 stub해
+    // 캐시는 항상 miss(=Layer 2 DB가 멱등성을 담당)로 동작시킨다.
+    @MockitoBean private RedissonClient redissonClient;
 
     @Autowired private ChargeService chargeService;
     @Autowired private WalletRepository walletRepository;
@@ -100,6 +107,11 @@ class ChargeServiceIntegrationTest {
         given(bankClient.withdraw(anyString(), any(BigDecimal.class), anyString(), anyString()))
                 .willAnswer(inv -> new WithdrawalResult(
                         "mock-tx", "COMPLETED", inv.getArgument(1), "KRW", BigDecimal.ZERO));
+
+        // 멱등성 Layer 1 캐시는 항상 miss(no-op 버킷). get()=null이라 캐시 hit 없이 DB Layer 2가 멱등성을 담당.
+        @SuppressWarnings("rawtypes")
+        RBucket bucket = mock(RBucket.class);
+        given(redissonClient.getBucket(anyString())).willReturn(bucket);
     }
 
     /**
