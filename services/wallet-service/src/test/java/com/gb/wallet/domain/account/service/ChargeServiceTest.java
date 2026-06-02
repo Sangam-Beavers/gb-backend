@@ -114,9 +114,11 @@ class ChargeServiceTest {
                 .willReturn(Optional.of(account));
         given(walletRepository.findByUserPublicId(USER)).willReturn(Optional.of(wallet));
         given(bankClient.withdraw(TOKEN, amount, "KRW", KEY)).willReturn(completed(amount));
-        // 1차: 행 없음 → ensureBalanceRow 호출 → 2차: 보장된 0원 행을 잠가서 반환
+        // ensureBalanceRow로 0원 행을 먼저 보장한 뒤, FOR UPDATE로 그 행을 한 번에 잠가서 반환한다
+        // (ensure→FOR UPDATE 순서 — 없는 행에 FOR UPDATE를 걸면 gap lock+REQUIRES_NEW INSERT가 self-deadlock
+        //  나므로 ensure를 먼저 한다. ChargeServiceImpl (7)단계 주석 참고).
         given(walletBalanceRepository.findForUpdateByWalletAndCurrency(wallet, CurrencyType.KRW))
-                .willReturn(Optional.empty(), Optional.of(created));
+                .willReturn(Optional.of(created));
         given(transactionRepository.save(any(Transaction.class))).willAnswer(inv -> {
             Transaction t = inv.getArgument(0);
             ReflectionTestUtils.setField(t, "id", 100L);

@@ -191,21 +191,20 @@ public class ChargeServiceImpl implements ChargeService {
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
 
-        // (7) 잔액 행을 비관적 락으로 조회. 없으면(첫 KRW 충전) 먼저 0원 행을 보장한 뒤 다시 잠근다.
-        //     존재하지 않는 행은 FOR UPDATE로 잠글 수 없어, 여기서 단순 save하면 동시 첫 충전(서로 다른 키)에서
-        //     uk_wallet_balances_wallet_currency 위반이 메인 트랜잭션을 오염시키고 charge() 래퍼의
-        //     DataIntegrityViolationException catch(멱등성 race 복구)로 잘못 흘러가 COMMON5000이 된다.
-        //     행 보장을 별도 트랜잭션(WalletBalanceWriter, REQUIRES_NEW)으로 분리해 위반을 거기서 흡수하고,
-        //     본 트랜잭션은 항상 존재하는 행을 잠근다 — 그 catch는 이제 idempotency_key 위반만 본다.
+        // (7) 잔액 행 0원 보장(REQUIRES_NEW)을 FOR UPDATE보다 "먼저" 한다.
+        //     존재하지 않는 행에 FOR UPDATE를 걸면 MySQL(REPEATABLE READ)이 그 (wallet_id, currency) 자리에
+        //     gap lock을 잡는데, 이어서 ensureBalanceRow의 REQUIRES_NEW INSERT(별도 커넥션)가 그 gap을
+        //     기다리다 self-deadlock에 빠진다 — 바깥 트랜잭션은 INSERT가 끝나길 기다리고, 그 INSERT는 바깥이
+        //     쥔 gap lock이 풀리길 기다려, InnoDB 데드락 감지에도 안 잡히고 innodb_lock_wait_timeout(기본 50s)을
+        //     꽉 채운 뒤 PessimisticLockingFailureException으로 터진다(첫 충전마다 결정적 — H2는 gap lock이 없어
+        //     테스트에서 안 드러남). 그래서 행을 먼저 독립 커밋(REQUIRES_NEW)해 만들어 두고 — 동시 첫 충전의
+        //     uk_wallet_balances_wallet_currency 위반은 WalletBalanceWriter가 흡수 — 항상 존재하는 행을
+        //     FOR UPDATE로 record lock한다. 환전(ExchangeServiceImpl)도 동일하게 ensure→FOR UPDATE 순서다.
+        walletBalanceWriter.ensureBalanceRow(wallet, CHARGE_CURRENCY);
         WalletBalance balance = walletBalanceRepository
                 .findForUpdateByWalletAndCurrency(wallet, CHARGE_CURRENCY)
-                .orElseGet(() -> {
-                    walletBalanceWriter.ensureBalanceRow(wallet, CHARGE_CURRENCY);
-                    return walletBalanceRepository
-                            .findForUpdateByWalletAndCurrency(wallet, CHARGE_CURRENCY)
-                            // 행 보장 직후라 비어 있을 수 없다 — 비면 정합성이 깨진 비정상 상태.
-                            .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
-                });
+                // 행 보장 직후라 비어 있을 수 없다 — 비면 정합성이 깨진 비정상 상태.
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
 
         BigDecimal beforeBalance = balance.getBalance();
         balance.addBalance(amount); // 영속 상태 → dirty checking으로 UPDATE
