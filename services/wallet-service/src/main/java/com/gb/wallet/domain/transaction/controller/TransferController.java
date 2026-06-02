@@ -10,6 +10,7 @@ import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferFeeResponse;
+import com.gb.wallet.domain.transaction.dto.response.TransferReceiptResponse;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 import com.gb.wallet.domain.transaction.service.TransferService;
 import com.gb.wallet.global.security.CurrentUserPublicId;
@@ -24,10 +25,12 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -369,5 +372,43 @@ public class TransferController {
             @Valid @RequestBody TransferExecuteRequest request) {
         TransferExecuteResponse response = transferService.execute(userPublicId, idempotencyKey, request);
         return ApiResponse.success(response, "송금이 완료되었습니다.");
+    }
+
+    /** 송금 확인증 조회. 🔒 JWT 필요. 송신자 본인만 조회 가능. */
+    @Operation(
+            summary = "송금 확인증 조회",
+            description = "완료된 송금 한 건의 확인증(송·수취인, 금액, 수수료, 적용 환율, 수취 금액 등)을 조회한다. "
+                    + "대상은 INTERNAL_TRANSFER · REMITTANCE만이며, 송신자 본인만 조회 가능하다. "
+                    + "본인 아님·미존재·미지원 유형은 정보 누설 방지로 동일한 TRANSFER4001로 모호 매핑한다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "조회 성공. data에 TransferReceiptResponse가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 요청 값이 올바르지 않습니다(path variable 형식 위반).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_COMMON4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "TRANSFER4001 - 존재하지 않는 송금 내역입니다. "
+                            + "(미존재·본인 아님·미지원 유형 모두 동일 매핑)",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_COMMON5000)))
+    })
+    @GetMapping("/{transferPublicId}/receipt")
+    public ApiResponse<TransferReceiptResponse> getReceipt(
+            @CurrentUserPublicId String userPublicId,
+            @PathVariable("transferPublicId") @NotBlank @Size(max = 36) String transferPublicId) {
+        return ApiResponse.success(transferService.getReceipt(userPublicId, transferPublicId));
     }
 }

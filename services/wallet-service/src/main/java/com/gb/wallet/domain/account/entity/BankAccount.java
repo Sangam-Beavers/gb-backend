@@ -55,6 +55,16 @@ public class BankAccount extends BaseEntity {
     @Column(name = "account_number", length = 100, nullable = false)
     private String accountNumber;
 
+    /**
+     * 외부 계좌 예금주명. 계좌 등록 시 verify 응답(외부 은행이 알려준 진짜 예금주)에서 받아 저장한다 —
+     * 사용자 입력값이 아닌 외부 신뢰 source. REMITTANCE 송금 시 {@code Transaction.receiverName}에
+     * snapshot으로 복사돼 송금 확인증의 receiver_name 출처가 된다.
+     *
+     * <p>NULLABLE — 컬럼 추가 전 등록된 기존 계좌는 null. 신규 등록은 Service에서 항상 채움.
+     */
+    @Column(name = "holder_name", length = 100)
+    private String holderName;
+
     /** 외부(Mock) 은행이 발급한 계좌 토큰. 인증 완료 전이면 null. */
     @Column(name = "mock_account_token", length = 36)
     private String mockAccountToken;
@@ -73,11 +83,13 @@ public class BankAccount extends BaseEntity {
 
     @Builder
     private BankAccount(String publicId, String userPublicId, Bank bank, String accountNumber,
-                        String mockAccountToken, boolean isVirtual, boolean isPrimary, boolean isActive) {
+                        String holderName, String mockAccountToken,
+                        boolean isVirtual, boolean isPrimary, boolean isActive) {
         this.publicId = publicId;
         this.userPublicId = userPublicId;
         this.bank = bank;
         this.accountNumber = accountNumber;
+        this.holderName = holderName;
         this.mockAccountToken = mockAccountToken;
         this.isVirtual = isVirtual;
         this.isPrimary = isPrimary;

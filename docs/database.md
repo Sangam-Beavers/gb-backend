@@ -142,6 +142,7 @@
 | `bank_id` | BIGINT | FK → banks.id, NOT NULL | 스키마 내부 참조 |
 | `account_number` | VARCHAR(100) | NOT NULL | 계좌번호 (암호화 권장) |
 | `mock_account_token` | VARCHAR(36) | NULL | **충전용 토큰.** 계좌 인증 시 Mock 은행(또는 실서비스 PG)이 발급한 토큰. 충전(출금) 호출 시 이 값으로 계좌를 지칭한다. 실서비스에서는 PG 빌링키에 해당 |
+| `holder_name` | VARCHAR(100) | NULL | **외부 계좌 예금주명.** 계좌 등록 시 verify 응답에서 받아 저장. REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot 복사. 송금 확인증 receiver_name 출처. 컬럼 추가 전 등록된 기존 계좌는 null. |
 | `is_virtual` | BOOLEAN | NOT NULL, DEFAULT FALSE | TRUE면 가상계좌(Beaver Bank 발급) |
 | `is_primary` | BOOLEAN | NOT NULL, DEFAULT FALSE | 주 계좌 여부 |
 | `is_active` | BOOLEAN | NOT NULL, DEFAULT TRUE | |

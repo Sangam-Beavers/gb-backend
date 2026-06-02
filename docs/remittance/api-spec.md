@@ -296,7 +296,56 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 
 ## 7. 송금 확인증 / 정기 송금
 
-- 확인증: `GET /api/v1/transfers/{id}/receipt` → 적용 환율·수수료 등 상세.
+### 7-1. 송금 확인증 조회 ★
+
+`GET /api/v1/transfers/{transferPublicId}/receipt` · Auth ✅
+
+완료된 송금 한 건의 확인증(송·수취인, 금액, 수수료, 적용 환율 등)을 반환한다.
+
+**대상 거래**: `INTERNAL_TRANSFER` · `REMITTANCE`만. 충전·환전·기타 유형은 `TRANSFER4001`로 차단(확인증 대상 아님).
+
+**본인 검증**: 송신자(거래 wallet 주인) 본인만 조회 가능. 수신자는 별도 "받은 거래 내역" API 영역. 본인 아님·미존재·미지원 유형 실패는 모두 `TRANSFER4001`로 모호 매핑(충전 `rebuildFromPrior` 정책 답습 — cross-user 응답 노출 방지).
+
+**Path Variable**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `transferPublicId` | string | O | 송금 거래 식별자(UUID, `transactions.public_id`). 최대 36자 |
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `public_id` | string | N | 거래 식별자(UUID) |
+| `sender_name` | string | N | 송금인 본명. 요청자(JWT `public_id`)의 회원 본명. MemberClient 조회 |
+| `receiver_name` | string | Y | 수취인 본명. INTERNAL은 수신자 본명(MemberClient 장애 시 null), REMITTANCE는 계좌 등록 시 verify 응답으로 받은 예금주(컬럼 추가 전 등록된 구 계좌면 null) |
+| `bank_name` | string | Y | 수취 은행명. REMITTANCE만 값 있음, INTERNAL은 null |
+| `account_number` | string | Y | 수취 계좌번호(마스킹). REMITTANCE만 값 있음, INTERNAL은 null |
+| `amount` | string | N | 송금 금액 (string 십진수, 소수점 4자리) |
+| `currency_code` | string | N | 출금 통화 코드 |
+| `fee` | string | N | 수수료 (string 십진수) |
+| `exchange_rate` | string | Y | 적용 환율. 1·2단계 same-currency는 항상 null. 3단계(다통화)부터 값 |
+| `receive_amount` | string | N | 수취 금액 (1·2단계는 amount와 동일) |
+| `receive_currency_code` | string | N | 수취 통화 코드 |
+| `status` | string | N | 거래 상태 (예: COMPLETED) |
+| `created_at` | string | N | 송금 시각 (ISO 8601, UTC `Z`) |
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다(path variable 형식 위반). |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | TRANSFER4001 | 존재하지 않는 송금 내역입니다. (미존재 / 본인 아님 / 미지원 유형(CHARGE·EXCHANGE 등) 모두 동일 매핑 — 정보 누설 방지) |
+| 500 | COMMON5000 | 서버 오류가 발생했습니다. (REMITTANCE 거래의 `bank_account_id`가 사라진 정합성 불변식 위반 — 정상 흐름에서 발생 불가) |
+
+**구현 노트 — receiver_name snapshot 정책**
+
+`Transaction.receiverName`은 송금 시점에 **snapshot으로 박힌 값**을 그대로 응답한다(외부 호출 없음).
+- INTERNAL_TRANSFER: 송금 시 `MemberClient.getMember(receiverPublicId).name`을 snapshot (fail-open — MemberClient 장애 시 null로 저장하고 송금 진행)
+- REMITTANCE: 송금 시 `BankAccount.holderName`을 snapshot. 그 holder_name은 계좌 등록(`POST /accounts`) 시 `POST /accounts/verify` 응답의 예금주를 받아 저장됨(외부 신뢰 source, 사용자 입력 X)
+
+snapshot 방식이라 회원이 본명을 바꾸거나 외부 계좌의 명의가 바뀌어도 과거 거래 영수증은 송금 당시 이름 그대로 유지된다(금융 영수증 표준 패턴).
+
+### 7-2. 정기 송금
+
 - 정기 송금: `validate`(대상 검증, GET) → `supported-currencies`(GET) → `scheduled`(설정 POST / 내역 GET) → `scheduled/{id}/history`(진행 완료 GET).
 
 ---
@@ -371,8 +420,10 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 - 목록: `GET /api/v1/accounts` → `data: { accounts: [...] }`
 - 지원 은행: `GET /api/v1/accounts/supported-banks`
 - 예금주 실명 조회: `GET /api/v1/accounts/holder?bankCode={}&accountNumber={}`
-- 계좌 연결+자동이체 인증 요청: `POST /api/v1/accounts/verify` (※ Mock/화면용. 실제 인증 미구현)
+- 계좌 연결+자동이체 인증 요청: `POST /api/v1/accounts/verify` (※ Mock/화면용. 실제 인증 미구현). 응답으로 `account_token` + `account_holder_name`(외부 은행이 검증한 진짜 예금주) 반환.
 - 계좌 등록 최종 완료: `POST /api/v1/accounts` → 201, `bank_accounts` INSERT
+    - **Body 필수 필드**: `bank_code`, `account_number`, `account_token`(verify 응답), **`holder_name`(verify 응답의 `account_holder_name`을 그대로 전달, 최대 100자)**.
+    - holder_name은 REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot되어 송금 확인증의 `receiver_name` 출처가 된다(외부 신뢰 source, 사용자 임의 입력 금지).
 - 주 계좌 변경: `PATCH /api/v1/accounts/{id}/primary`
 - 계좌 삭제: `DELETE /api/v1/accounts/{id}`
 

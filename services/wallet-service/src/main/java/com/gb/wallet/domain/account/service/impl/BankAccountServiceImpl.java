@@ -134,6 +134,7 @@ public class BankAccountServiceImpl implements BankAccountService {
                 .userPublicId(userPublicId)
                 .bank(bank)
                 .accountNumber(request.getAccountNumber())
+                .holderName(request.getHolderName())
                 .mockAccountToken(request.getAccountToken())
                 .isVirtual(false)
                 .isPrimary(isPrimary)

@@ -17,6 +17,7 @@ import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse.CurrencyItem;
 import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferFeeResponse;
+import com.gb.wallet.domain.transaction.dto.response.TransferReceiptResponse;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import com.gb.wallet.domain.transaction.entity.TransactionAuditLog;
@@ -538,6 +539,66 @@ public class TransferServiceImpl implements TransferService {
                 : WalletErrorCode.WALLET_NOT_FOUND;
     }
 
+    /**
+     * 회원 본명을 안전하게 조회한다(INTERNAL_TRANSFER 송금 시 receiver_name snapshot, 그리고 송금 확인증의
+     * sender_name 조회용으로 공용 사용).
+     *
+     * <p>송금 확인증은 격식 있는 영수증 문서라 본명({@link MemberInfo#name})을 사용한다(닉네임이 아님).
+     *
+     * <p><b>fail-open:</b> MemberClient 장애·timeout이 본업(송금/확인증 응답)을 막지 않도록, 어떤 예외라도
+     * 잡아 {@code null}을 반환한다. 외부 의존 장애 시 receiverName이 null로 저장되며, 송금 자체는 정상
+     * 진행한다. MockMemberClient는 fallback {@code "Unknown"}까지 반환하므로 일반적으로 null이 나오지
+     * 않지만, 운영 RealMemberClient 도입 후 HTTP 장애·5xx 응답을 흡수하는 안전망이다.
+     */
+    private String fetchMemberNameSafe(String userPublicId) {
+        try {
+            MemberInfo info = memberClient.getMember(userPublicId);
+            return info != null ? info.name() : null;
+        } catch (RuntimeException e) {
+            log.warn("MemberClient 조회 실패 — name=null 처리. user={}", userPublicId, e);
+            return null;
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // 송금 확인증 조회 (GET /api/v1/transfers/{publicId}/receipt)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    @Override
+    @Transactional(readOnly = true)
+    public TransferReceiptResponse getReceipt(String userPublicId, String transferPublicId) {
+        // (1) 거래 조회 — 없으면 TRANSFER4001 (정보 누설 방지로 미존재·권한·유형 실패 모두 동일 코드).
+        Transaction tx = transactionRepository.findByPublicId(transferPublicId)
+                .orElseThrow(() -> new BusinessException(TransferErrorCode.TRANSFER_NOT_FOUND));
+
+        // (2) 본인 검증 — 송신자(거래 wallet 주인)만 조회 가능. 수신자는 별도 "받은 거래 내역" API 영역.
+        //     실패 시 동일 TRANSFER4001로 모호 매핑(rebuildFromPrior 정책 답습 — cross-user 응답 노출 차단).
+        if (!tx.getWallet().getUserPublicId().equals(userPublicId)) {
+            throw new BusinessException(TransferErrorCode.TRANSFER_NOT_FOUND);
+        }
+
+        // (3) 송금 유형 검증 — INTERNAL_TRANSFER/REMITTANCE만. 충전·환전·기타는 확인증 대상 아님.
+        TransactionType type = tx.getType();
+        if (type != TransactionType.INTERNAL_TRANSFER && type != TransactionType.REMITTANCE) {
+            throw new BusinessException(TransferErrorCode.TRANSFER_NOT_FOUND);
+        }
+
+        // (4) 송신자 본명 조회(MemberClient fail-open). 본인이라 호출 실패 시 null이어도 영수증 자체는 응답.
+        String senderName = fetchMemberNameSafe(userPublicId);
+
+        // (5) 도메인별 부가 데이터 조달.
+        //     INTERNAL은 외부 계좌 없음 → bankAccount=null로 응답(bankName·accountNumber 모두 null).
+        //     REMITTANCE는 bank_account_id로 BankAccount를 풀어 bank명·계좌번호(마스킹)를 응답에 채운다.
+        //     bank_account_id가 어떤 이유로든 사라진 비정상 상태는 정합성 위반 → COMMON5000.
+        BankAccount bankAccount = null;
+        if (type == TransactionType.REMITTANCE) {
+            bankAccount = bankAccountRepository.findById(tx.getBankAccountId())
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
+        }
+
+        return TransferReceiptResponse.of(tx, senderName, bankAccount);
+    }
+
     @Override
     @Transactional
     public TransferExecuteResponse executeInTransaction(
@@ -610,6 +671,10 @@ public class TransferServiceImpl implements TransferService {
             BigDecimal senderAfter = senderBalance.getBalance();
             BigDecimal receiverAfter = receiverBalance.getBalance();
 
+            // (6-a) 수신자 본명 snapshot — 송금 확인증의 receiver_name 출처.
+            //     fail-open: MemberClient 장애로 본업(송금)을 막지 않는다. 실패 시 receiverName=null로 저장.
+            String receiverName = fetchMemberNameSafe(receiverWallet.getUserPublicId());
+
             // (6) Transaction INSERT — idempotency_key UNIQUE 위반 시 catch로 Layer 3 흐름.
             Transaction transaction = transactionRepository.save(Transaction.builder()
                     .publicId(UUID.randomUUID().toString())
@@ -621,6 +686,7 @@ public class TransferServiceImpl implements TransferService {
                     .status(TransactionStatus.COMPLETED)
                     .idempotencyKey(idempotencyKey)
                     .receiverWallet(receiverWallet)
+                    .receiverName(receiverName)         // snapshot — 확인증 receiver_name
                     .receiveAmount(amount)              // 1단계 같은 통화 — receive == amount
                     .receiveCurrencyCode(currency)      // 1단계 — receive currency == send currency
                     .exchangeRate(null)                 // 1단계 — 환율 미적용
@@ -798,8 +864,8 @@ public class TransferServiceImpl implements TransferService {
 
         // (9) Transaction INSERT — idempotency_key UNIQUE 위반 시 상위 catch가 Layer 3 흐름으로 흡수.
         //     bank_account_id = 검증된 계좌의 내부 id (database.md REMITTANCE 행 — 수취 계좌 컬럼).
-        //     receiver_wallet_id = null (외부 계좌). receiver_name = null (BankAccount에 holderName 필드 없음 —
-        //       후속에 BankClient.inquiry로 받은 holder를 매핑할지 검토).
+        //     receiver_wallet_id = null (외부 계좌). receiver_name = bankAccount.holderName snapshot —
+        //       송금 확인증의 receiver_name 출처. 컬럼 추가 전 등록된 기존 계좌면 null(허용).
         //     receive_amount/receive_currency_code = amount/currency (same-currency 강제 — 다통화는 3단계).
         //     exchange_rate = null (same-currency).
         Transaction transaction = transactionRepository.save(Transaction.builder()
@@ -812,6 +878,7 @@ public class TransferServiceImpl implements TransferService {
                 .status(TransactionStatus.COMPLETED)
                 .idempotencyKey(idempotencyKey)
                 .bankAccountId(account.getId())
+                .receiverName(account.getHolderName())   // snapshot — 확인증 receiver_name
                 .receiveAmount(amount)
                 .receiveCurrencyCode(currency)
                 .exchangeRate(null)

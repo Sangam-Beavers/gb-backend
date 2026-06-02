@@ -102,9 +102,11 @@ class TransferServiceTest {
                 .willReturn(List.of(linhWallet, mariaWallet));
 
         given(memberClient.getMember("linh-uuid"))
-                .willReturn(new MemberInfo("linh-uuid",  "linh-test@example.com",  "Linh",  "VN", true));
+                .willReturn(new MemberInfo("linh-uuid",  "linh-test@example.com",
+                        "Nguyen Thi Linh", "Linh",  "VN", true));
         given(memberClient.getMember("maria-uuid"))
-                .willReturn(new MemberInfo("maria-uuid", "maria-test@example.com", "Maria", "PH", true));
+                .willReturn(new MemberInfo("maria-uuid", "maria-test@example.com",
+                        "Maria Santos", "Maria", "PH", true));
 
         RecentRecipientsResponse response =
                 transferService.getRecentInternalRecipients(SENDER_PUBLIC_ID);
@@ -159,6 +161,7 @@ class TransferServiceTest {
         MemberInfo linh = new MemberInfo(
                 "11111111-1111-1111-1111-111111111111",
                 email,
+                "Nguyen Thi Linh",
                 "Linh",
                 "VN",
                 true);
@@ -478,11 +481,141 @@ class TransferServiceTest {
                 .userPublicId(UUID.randomUUID().toString())
                 .bank(bank)
                 .accountNumber(accountNumber)
+                .holderName("NGUYEN VAN A")
                 .isVirtual(false)
                 .isPrimary(false)
                 .isActive(true)
                 .build();
         ReflectionTestUtils.setField(account, "id", id);
         return account;
+    }
+
+    // ==========================================================================
+    // getReceipt(userPublicId, transferPublicId) — 송금 확인증 조회
+    // ==========================================================================
+
+    private static final String TX_PUBLIC_ID = "tx-pid-9b2e4c1a";
+    private static final LocalDateTime TX_CREATED = LocalDateTime.of(2026, 5, 25, 12, 0, 0);
+
+    @Test
+    @DisplayName("getReceipt 정상 INTERNAL_TRANSFER: 송신자/수신자 본명 채워서 응답, bank·account_number는 null")
+    void getReceipt_정상_INTERNAL() {
+        Wallet sender = wallet(1L, SENDER_PUBLIC_ID);
+        com.gb.wallet.domain.transaction.entity.Transaction tx = buildTx(
+                sender, com.gb.wallet.global.common.enums.TransactionType.INTERNAL_TRANSFER,
+                "Nguyen Thi Linh", null);
+
+        given(transactionRepository.findByPublicId(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
+        given(memberClient.getMember(SENDER_PUBLIC_ID)).willReturn(
+                new MemberInfo(SENDER_PUBLIC_ID, "sender@example.com",
+                        "Sangam Beavers", "Sangam", "KR", true));
+
+        var resp = transferService.getReceipt(SENDER_PUBLIC_ID, TX_PUBLIC_ID);
+
+        assertThat(resp.publicId()).isEqualTo(TX_PUBLIC_ID);
+        assertThat(resp.senderName()).as("본명을 응답해야 한다").isEqualTo("Sangam Beavers");
+        assertThat(resp.receiverName()).as("snapshot된 수신자 본명을 그대로 응답").isEqualTo("Nguyen Thi Linh");
+        assertThat(resp.bankName()).as("INTERNAL은 외부 은행 없음").isNull();
+        assertThat(resp.accountNumber()).as("INTERNAL은 외부 계좌번호 없음").isNull();
+        assertThat(resp.exchangeRate()).as("same-currency는 환율 null").isNull();
+        assertThat(resp.status()).isEqualTo("COMPLETED");
+    }
+
+    @Test
+    @DisplayName("getReceipt 정상 REMITTANCE: bankAccount에서 bank명 + 마스킹된 계좌번호 응답")
+    void getReceipt_정상_REMITTANCE() {
+        Wallet sender = wallet(1L, SENDER_PUBLIC_ID);
+        com.gb.wallet.domain.transaction.entity.Transaction tx = buildTx(
+                sender, com.gb.wallet.global.common.enums.TransactionType.REMITTANCE,
+                "NGUYEN VAN A", 99L);
+        BankAccount ba = bankAccount(99L, bank("020", "Quokka Bank"), "1002345678901");
+
+        given(transactionRepository.findByPublicId(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
+        given(bankAccountRepository.findById(99L)).willReturn(Optional.of(ba));
+        given(memberClient.getMember(SENDER_PUBLIC_ID)).willReturn(
+                new MemberInfo(SENDER_PUBLIC_ID, "sender@example.com",
+                        "Sangam Beavers", "Sangam", "KR", true));
+
+        var resp = transferService.getReceipt(SENDER_PUBLIC_ID, TX_PUBLIC_ID);
+
+        assertThat(resp.senderName()).isEqualTo("Sangam Beavers");
+        assertThat(resp.receiverName())
+                .as("REMITTANCE는 외부 은행 verify 응답의 예금주를 그대로 snapshot")
+                .isEqualTo("NGUYEN VAN A");
+        assertThat(resp.bankName()).isEqualTo("Quokka Bank");
+        assertThat(resp.accountNumber())
+                .as("계좌번호는 응답 직전에 마스킹되어야 한다")
+                .isNotEqualTo("1002345678901")
+                .contains("*");
+    }
+
+    @Test
+    @DisplayName("getReceipt: 거래 미존재 → TRANSFER4001 (정보 누설 방지)")
+    void getReceipt_미존재_TRANSFER4001() {
+        given(transactionRepository.findByPublicId(TX_PUBLIC_ID)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> transferService.getReceipt(SENDER_PUBLIC_ID, TX_PUBLIC_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.TRANSFER_NOT_FOUND);
+
+        verifyNoInteractions(bankAccountRepository, memberClient);
+    }
+
+    @Test
+    @DisplayName("getReceipt: 다른 사용자의 거래 → TRANSFER4001로 모호 매핑 (cross-user 차단)")
+    void getReceipt_본인아님_TRANSFER4001() {
+        Wallet otherSender = wallet(2L, "other-user-uuid");
+        com.gb.wallet.domain.transaction.entity.Transaction tx = buildTx(
+                otherSender, com.gb.wallet.global.common.enums.TransactionType.INTERNAL_TRANSFER,
+                "Linh", null);
+        given(transactionRepository.findByPublicId(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
+
+        assertThatThrownBy(() -> transferService.getReceipt(SENDER_PUBLIC_ID, TX_PUBLIC_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.TRANSFER_NOT_FOUND);
+
+        // 본인 검증 차단 후 부가 데이터 조회 진입 안 함
+        verifyNoInteractions(bankAccountRepository, memberClient);
+    }
+
+    @Test
+    @DisplayName("getReceipt: type=CHARGE 등 비송금 거래 → TRANSFER4001 (확인증 대상 아님)")
+    void getReceipt_type_CHARGE_TRANSFER4001() {
+        Wallet sender = wallet(1L, SENDER_PUBLIC_ID);
+        com.gb.wallet.domain.transaction.entity.Transaction tx = buildTx(
+                sender, com.gb.wallet.global.common.enums.TransactionType.CHARGE, null, null);
+        given(transactionRepository.findByPublicId(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
+
+        assertThatThrownBy(() -> transferService.getReceipt(SENDER_PUBLIC_ID, TX_PUBLIC_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.TRANSFER_NOT_FOUND);
+
+        verifyNoInteractions(bankAccountRepository, memberClient);
+    }
+
+    /** getReceipt 테스트용 Transaction 헬퍼. */
+    private com.gb.wallet.domain.transaction.entity.Transaction buildTx(
+            Wallet sender, com.gb.wallet.global.common.enums.TransactionType type,
+            String receiverName, Long bankAccountId) {
+        var tx = com.gb.wallet.domain.transaction.entity.Transaction.builder()
+                .publicId(TX_PUBLIC_ID)
+                .wallet(sender)
+                .type(type)
+                .amount(new BigDecimal("500000"))
+                .currencyCode(CurrencyType.KRW)
+                .fee(new BigDecimal("3000"))
+                .status(com.gb.wallet.global.common.enums.TransactionStatus.COMPLETED)
+                .idempotencyKey("idem-receipt-" + TX_PUBLIC_ID)
+                .receiverName(receiverName)
+                .receiveAmount(new BigDecimal("500000"))
+                .receiveCurrencyCode(CurrencyType.KRW)
+                .bankAccountId(bankAccountId)
+                .build();
+        ReflectionTestUtils.setField(tx, "id", 100L);
+        ReflectionTestUtils.setField(tx, "createdAt", TX_CREATED);
+        return tx;
     }
 }

@@ -8,6 +8,7 @@ import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferFeeResponse;
+import com.gb.wallet.domain.transaction.dto.response.TransferReceiptResponse;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionType;
@@ -93,4 +94,19 @@ public interface TransferService {
     TransferExecuteResponse readPriorTransaction(
             String idempotencyKey, String userPublicId,
             TransactionType expectedType, String expectedScopeId);
+
+    /**
+     * 송금 확인증 조회 — 완료된 송금 한 건의 송수신자/금액/수수료/환율 등을 반환한다.
+     *
+     * <p>대상 거래: {@code INTERNAL_TRANSFER} · {@code REMITTANCE}만. 충전·환전·기타 유형은
+     * {@code TRANSFER4001}(존재하지 않는 송금 내역)로 차단한다.
+     *
+     * <p>본인 검증: 요청자가 송신자(=거래 wallet 주인)일 때만 조회 가능. 다른 사용자가 조회 시도하면
+     * 정보 누설 방지로 같은 {@code TRANSFER4001}로 모호 매핑한다(충전 정책 답습).
+     *
+     * @param userPublicId 요청자(JWT public_id)
+     * @param transferPublicId 송금 거래의 public_id(UUID)
+     * @return 확인증 응답 DTO. REMITTANCE면 bank/account 정보 포함, INTERNAL이면 null.
+     */
+    TransferReceiptResponse getReceipt(String userPublicId, String transferPublicId);
 }
