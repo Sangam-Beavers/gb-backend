@@ -31,6 +31,17 @@ public interface IdpUserClient {
     String provisionUser(String email, String name, String rawPassword, String publicId);
 
     /**
+     * 기존 IdP 사용자의 비밀번호를 새 값으로 변경한다(비밀번호 재설정용).
+     *
+     * <p>비밀번호는 IdP가 보유하므로 변경도 IdP 관리 API(set_password)로 한다. 회원가입과 달리
+     * 기존 사용자라 pk를 모르므로, email(=username)로 사용자를 먼저 조회해 pk를 얻은 뒤 set_password를 호출한다.
+     *
+     * @param email       대상 사용자 이메일(IdP username 겸용)
+     * @param newPassword 새 평문 비밀번호(IdP에만 저장된다)
+     */
+    void changePassword(String email, String newPassword);
+
+    /**
      * 탈퇴 처리: IdP의 해당 사용자를 비활성화한다({@code is_active=false}). 이후 IdP 로그인/토큰 발급이 막힌다.
      *
      * <p>하드 삭제가 아니라 비활성화다 — 로컬 soft delete(deleted_at)와 의미를 맞춰 복구·감사 기록을 보존한다.

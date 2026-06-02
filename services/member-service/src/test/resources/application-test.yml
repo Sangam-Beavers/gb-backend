@@ -20,6 +20,13 @@ spring:
   jackson:
     # main과 동일한 전역 규칙(응답 JSON 검증 시 대비).
     property-naming-strategy: SNAKE_CASE
+  # 메일 발송(EmailSender)이 JavaMailSender 빈을 요구하므로 컨텍스트 로딩용 더미 설정을 둔다.
+  # 테스트는 실제 메일을 보내지 않는다(단위테스트는 EmailSender를 mock).
+  mail:
+    host: localhost
+    port: 25
+    username: test@localhost
+    password: test
 
 # 방식 B(검표원) 보안 설정은 issuer-uri로 외부 IdP의 JWKS를 부팅 시 받아온다.
 # 테스트에선 실제 IdP가 없으므로 issuer-uri를 두지 않고, 컨텍스트 테스트가 JwtDecoder를
@@ -34,3 +41,8 @@ auth:
     client-secret: test-secret
     api-base-uri: http://localhost/dummy/api/v3
     admin-token: test-admin-token
+
+# 비밀번호 재설정 링크 베이스 URL — MemberServiceImpl의 @Value가 요구. 테스트용 더미.
+app:
+  password-reset:
+    base-url: http://localhost/reset-password
