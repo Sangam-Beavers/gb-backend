@@ -23,8 +23,8 @@ import org.springframework.web.client.RestClient;
 /**
  * 개발/스테이지용 {@link BankClient} 구현. 외부 Mock 은행 서버(Beaver/Quokka Bank)를 호출한다.
  *
- * <p>현재 {@link #inquiry}/{@link #verify}/{@link #withdraw}(충전 출금)가 실동작하며, {@code payout}(현금화)은
- * 후속 이슈에서 구현된다(인터페이스 시그니처는 동결).
+ * <p>{@link #inquiry}/{@link #verify}/{@link #withdraw}(충전 출금)/{@link #payout}(현금화 지급) 4개 모두
+ * 실동작한다. 인터페이스 시그니처는 동결.
  *
  * <p>운영 전환 시 {@code RealBankClient}(@Profile("prod"))가 추가되며 Service 코드는 그대로 둔다.
  *
@@ -33,6 +33,7 @@ import org.springframework.web.client.RestClient;
  * ({@code spring.jackson.property-naming-strategy: SNAKE_CASE})에 의존하지 않는다 —
  * 외부 계약은 전역 설정 변경에 영향받지 않아야 한다. {@code payout}용 wire-format record를 추가할 때도
  * 동일 패턴을 따른다.
+ * 외부 계약은 전역 설정 변경에 영향받지 않아야 한다.
  */
 @Component
 @Profile({"dev", "stage"})
@@ -41,6 +42,7 @@ public class MockBankClient implements BankClient {
     private static final String INQUIRY_PATH = "/api/v1/bank/accounts/inquiry";
     private static final String VERIFY_PATH = "/api/v1/bank/accounts/verify";
     private static final String WITHDRAW_PATH = "/api/v1/bank/transfers/withdrawal";
+    private static final String PAYOUT_PATH = "/api/v1/bank/transfers/payout";
 
     private final RestClient bankRestClient;
     private final ObjectMapper objectMapper;
@@ -146,10 +148,45 @@ public class MockBankClient implements BankClient {
         }
     }
 
+    /**
+     * 현금화 지급(외부 계좌 증액). 환율은 본체가 환전 시점에 적용한 최종 외화 금액만 Mock에 넘긴다.
+     * {@code idempotencyKey}를 헤더로 그대로 forward한다 — Mock 은행도 같은 키로 첫 응답을 재반환한다.
+     *
+     * <p>에러 매핑은 {@link #withdraw}와 동일 경로 — {@link #translateError} → {@link BankErrorMapper}.
+     * (BANK4002→ACCOUNT4003, BANK4010→ACCOUNT4006, BANK4040→ACCOUNT4001, 그 외/네트워크→COMMON5031).
+     */
     @Override
     public PayoutResult payout(String bankCode, String accountNumber, BigDecimal amount,
                                String currencyCode, String idempotencyKey) {
-        throw new UnsupportedOperationException("후속 이슈에서 구현 — 현금화 지급");
+        try {
+            BankPayoutEnvelope body = bankRestClient.post()
+                    .uri(PAYOUT_PATH)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .header("Idempotency-Key", idempotencyKey)
+                    .body(Map.of(
+                            "bank_code", bankCode,
+                            "account_number", accountNumber,
+                            "amount", amount.setScale(4).toPlainString(),
+                            "currency_code", currencyCode))
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError, this::translateError)
+                    .body(BankPayoutEnvelope.class);
+            if (body == null || body.data() == null || body.data().status() == null) {
+                throw BankErrorMapper.toBusinessException(new BankClientException(
+                        "BANK5000", HttpStatus.INTERNAL_SERVER_ERROR, "Mock 은행 응답 본문이 비어있음"));
+            }
+            BankPayoutData data = body.data();
+            return new PayoutResult(
+                    data.transactionId(), data.status(), data.amount(),
+                    data.currencyCode(), data.balanceAfter());
+        } catch (BankClientException ex) {
+            throw BankErrorMapper.toBusinessException(ex);
+        } catch (ResourceAccessException ex) {
+            // 네트워크 오류(타임아웃·연결 실패) — 일시 장애.
+            throw BankErrorMapper.toBusinessException(
+                    new BankClientException(null, HttpStatus.SERVICE_UNAVAILABLE,
+                            "Mock 은행 연결 실패: " + ex.getMessage(), ex));
+        }
     }
 
     /**
@@ -233,6 +270,25 @@ public class MockBankClient implements BankClient {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record BankWithdrawData(
+            @JsonProperty("transaction_id") String transactionId,
+            @JsonProperty("status") String status,
+            @JsonProperty("amount") BigDecimal amount,
+            @JsonProperty("currency_code") String currencyCode,
+            @JsonProperty("balance_after") BigDecimal balanceAfter) {
+    }
+
+    /**
+     * Mock 은행 payout 응답의 wire-format. envelope 구조와 어노테이션 규칙은
+     * {@link BankInquiryEnvelope} 주석 참고. 필드 구성은 {@link BankWithdrawData}와 동일하다
+     * (외부계좌 차감/증액 응답 모양이 같음 — {@code balance_after}는 외부 계좌 잔액).
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record BankPayoutEnvelope(
+            @JsonProperty("data") BankPayoutData data) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record BankPayoutData(
             @JsonProperty("transaction_id") String transactionId,
             @JsonProperty("status") String status,
             @JsonProperty("amount") BigDecimal amount,
