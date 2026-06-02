@@ -416,6 +416,114 @@ snapshot 방식이라 회원이 본명을 바꾸거나 외부 계좌의 명의�
 
 > 외부 호출 없음 — 우리 DB만으로 사전 검증한다(빠른 검증). 정기 송금 실제 실행(`POST /scheduled`) 시점에 외부 은행 호출이 일어난다.
 
+#### 7-2-2. 정기 송금 설정 ★
+
+`POST /api/v1/transfers/scheduled` · Auth ✅
+
+매주/매월 자동 실행되는 정기 송금을 설정한다. 설정 즉시 `ACTIVE` 상태로 등록되며 다음 실행 예정일(`next_run_date`)이 **KST(`Asia/Seoul`) 기준**으로 계산된다.
+
+**대상 송금 유형**: `INTERNAL_TRANSFER` · `REMITTANCE` 둘 다 (송금 실행·validate와 동일하게 `transfer_type`으로 분기).
+
+**Request Body**
+| 필드 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `transfer_type` | string | O | `INTERNAL_TRANSFER` / `REMITTANCE` |
+| `receiver_public_id` | string | △ | INTERNAL_TRANSFER 필수 (수신자 회원 UUID) |
+| `bank_account_public_id` | string | △ | REMITTANCE 필수 (수신 은행 계좌 UUID) |
+| `amount` | string | O | 회차당 송금액 (string 십진수, 소수점 최대 4자리) |
+| `currency_code` | string | O | 출금 통화 코드 (KRW/USD/PHP/VND) |
+| `receive_currency_code` | string | O | 수취 통화 코드 |
+| `frequency` | string | O | 반복 주기 — `WEEKLY` / `MONTHLY` |
+| `schedule_day` | integer | O | 실행 기준일 — MONTHLY=1~31, WEEKLY=1~7 (ISO 요일, 1=월요일) |
+| `memo` | string | X | 메모, 최대 255자 |
+
+**Response 201** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `public_id` | string | N | 정기 송금 식별자(UUID) |
+| `transfer_type` | string | N | INTERNAL_TRANSFER / REMITTANCE |
+| `amount` | string | N | 회차당 송금액 |
+| `currency_code` | string | N | 출금 통화 |
+| `receive_currency_code` | string | N | 수취 통화 |
+| `frequency` | string | N | WEEKLY / MONTHLY |
+| `schedule_day` | integer | N | 실행 기준일 |
+| `next_run_date` | string | N | 다음 실행 예정일 (ISO 8601 date `YYYY-MM-DD`, KST 기준) |
+| `status` | string | N | 상태 (ACTIVE) |
+| `created_at` | string | N | 생성 시각 (ISO 8601 UTC `Z`) |
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (필수 필드 누락·형식 오류·미지원 frequency) |
+| 400 | TRANSFER4002 | 지원하지 않는 통화입니다. |
+| 400 | TRANSFER4003 | 지원하지 않는 송금 유형입니다. (CHARGE/EXCHANGE 등) |
+| 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. (INTERNAL_TRANSFER 한정) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 403 | ACCOUNT4006 | 인증되지 않은 계좌입니다. (REMITTANCE — `mock_account_token` 미발급) |
+| 404 | ACCOUNT4001 | 존재하지 않는 계좌입니다. (REMITTANCE — 본인 + active 미매칭) |
+| 404 | WALLET4001 | 존재하지 않는 지갑입니다. (INTERNAL — 수신자 wallet 부재) |
+| 422 | COMMON4221 | 처리할 수 없는 요청입니다. (`schedule_day` 범위 초과 또는 `currency_code != receive_currency_code` — 값 자체가 비호환) |
+
+**next_run_date 계산 정책 (`NextRunDateCalculator`)**
+
+- KST(`Asia/Seoul`) 기준 `LocalDate` 계산.
+- **WEEKLY**: 오늘 이후 가장 가까운 `schedule_day` 요일. 오늘이 그 요일이면 **다음 주** (오늘 이미 지났음 정책).
+- **MONTHLY**: 이번 달의 `schedule_day` 일자가 오늘 이후면 채택, 같거나 지났으면 다음 달. **해당 달 일수보다 큰 값은 그 달 마지막 날로 fallback** (예: 31일인데 4월이면 4/30, 2월 비윤년이면 2/28).
+
+**receiver_name snapshot 정책**
+
+설정 시점에 `receiverName`을 미리 박아 둠 — 정기 송금 실행 회차마다 외부 호출 없이 빠르게 transactions에 복사.
+- INTERNAL → `MemberClient.getMember(receiver).name` (fail-open: 장애 시 null로 저장, 송금 자체는 진행)
+- REMITTANCE → `bankAccount.holderName` (구 계좌면 null)
+
+> **다음 사이클**: 자동 실행 스케줄러(KST 매일 새벽 1시 `0 0 1 * * *`, Redisson 분산 락으로 단일 인스턴스 실행 보장). 단건 조회·취소·재개는 후속.
+
+#### 7-2-3. 정기 송금 내역 조회 ★
+
+`GET /api/v1/transfers/scheduled` · Auth ✅
+
+로그인한 회원 본인이 설정한 정기 송금 목록을 페이지 단위로 조회한다. `status`로 선택적 필터링.
+
+**Query Parameter**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `status` | string | X | 상태 필터 (`ACTIVE` / `PAUSED` / `CANCELLED`). 미지정 시 전체. 허용 외 값은 COMMON4001 |
+| `page` | integer | X | 페이지 번호 (0-base, 기본 0) |
+| `size` | integer | X | 페이지 크기 (기본 20, 최대 100) |
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `scheduled_transfers` | array | N | 정기 송금 목록 |
+| `scheduled_transfers[].public_id` | string | N | 정기송금 식별자(UUID) |
+| `scheduled_transfers[].receiver_name` | string | Y | 수취인명 (설정 시 snapshot. INTERNAL은 MemberClient.name, REMITTANCE는 bankAccount.holderName. 외부 장애·구 계좌면 null) |
+| `scheduled_transfers[].amount` | string | N | 회차당 송금액 (string 십진수) |
+| `scheduled_transfers[].currency_code` | string | N | 출금 통화 |
+| `scheduled_transfers[].receive_currency_code` | string | N | 수취 통화 |
+| `scheduled_transfers[].frequency` | string | N | 반복 주기 (`WEEKLY` / `MONTHLY`) |
+| `scheduled_transfers[].schedule_day` | integer | N | 실행 기준일 |
+| `scheduled_transfers[].next_run_date` | string | N | 다음 실행 예정일 (ISO 8601 date) |
+| `scheduled_transfers[].status` | string | N | 상태 (`ACTIVE` / `PAUSED` / `CANCELLED`) |
+| `scheduled_transfers[].created_at` | string | N | 생성 시각 (ISO 8601 UTC `Z`) |
+| `page` | integer | N | 현재 페이지 (0-base) |
+| `size` | integer | N | 페이지 크기 |
+| `total_elements` | integer | N | 전체 건수 |
+| `total_pages` | integer | N | 전체 페이지 수 |
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (status 허용 enum 외, page·size 범위 위반 등) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+
+**정렬**
+
+`created_at DESC` (최신 설정 우선). 향후 status 우선 정렬·next_run_date 정렬 옵션 검토 가능.
+
+**전용 응답 DTO**
+
+설정 응답({@link ScheduledTransferResponse})과 별도 DTO. 목록 응답엔 `transfer_type`/`bank_name`/`account_number`/`last_run_at` 미포함 — 명세 단순화. 수신자 식별은 `receiver_name` snapshot으로.
+
 ---
 
 ## 8. 환전 견적 조회·검증
