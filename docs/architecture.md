@@ -40,8 +40,8 @@ Redis                      (분산 락, 캐시, 세션 등)
 | **운영기 (prod)** | AWS EKS (sb-prod-vpc) | Cognito | Aurora MySQL |
 
 > **핵심:** Spring 코드는 환경에 따라 바뀌지 않는다.
-> `application-dev.yml` / `application-stage.yml` / `application-prod.yml` 의 `issuer-uri`(JWT) 등 **설정값만 다르게** 둔다.
-> JWT의 `sub` 값은 환경마다 다르지만(`authentik|...` vs `ap-northeast-2_...`), DB의 `users.auth_provider_id` 컬럼은 동일하게 사용한다.
+> JWT 검증의 `issuer-uri`는 환경별 yml(`application-dev/stage/prod.yml`)에 서로 다른 값을 박지 않고 **단일 환경변수 `AUTH_ISSUER_URI`로 주입**한다(각 환경이 이 변수만 다르게 공급하며, 커밋되는 `application.yaml`엔 넣지 않는다 — SSOT). `SecurityConfig`는 `oauth2ResourceServer(jwt)` + 공개 경로(`/swagger-ui/**`·`/v3/api-docs/**`·`/actuator/**`)만 `permitAll`, 나머지는 `authenticated()`로 환경 불변하게 토큰을 검증만 한다.
+> JWT의 `sub` 값은 환경마다 다르지만(`authentik|...` vs `ap-northeast-2_...`), DB의 `members.auth_provider_id` 컬럼은 동일하게 사용한다.
 
 ---
 
@@ -71,9 +71,9 @@ MSA의 각 서비스는 도메인 경계로 나뉜다. 현재는 **단일 Aurora
 | member | 회원/인증/프로필/설정 | `/auth`, `/members` |
 | wallet | 주머니/잔액/거래내역/**송금**/충전/환전 | `/wallets`, `/transfers`, `/exchanges`, `/accounts` |
 | document | AI 서류 분석 | `/documents` |
-| community | 게시글/댓글/신고/온도 | `/community` |
+| community | 게시글/댓글 | `/community` |
 
-> **MSA 경계 참조 규칙 (중요):** member 도메인 **밖**에서 회원을 가리킬 때는 `users.id`(BIGINT)가 아니라 **`user_public_id`(UUID, 물리 FK 없음)** 로만 참조한다. 상세는 [`database.md`](./database.md).
+> **MSA 경계 참조 규칙 (중요):** member 도메인 **밖**에서 회원을 가리킬 때는 `members.id`(BIGINT)가 아니라 **`user_public_id`(UUID, 물리 FK 없음)** 로만 참조한다. 상세는 [`database.md`](./database.md).
 
 ### 충전/출금 — Mock 가상 은행
 

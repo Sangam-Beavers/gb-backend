@@ -8,7 +8,7 @@
 >
 > 본인 식별은 JWT custom claim **`public_id`**(UUID)에서 추출한다 — 컨트롤러에서 `@CurrentUserPublicId String userPublicId`로 주입받는다(`X-User-Public-Id` 헤더 임시처리는 인증 적용 완료된 서비스에서 대체됨). claim 누락/토큰 무효는 `AUTH4011`로 fail-fast. 회원가입 시 우리 `public_id`를 IdP 사용자 attribute로 저장해 토큰 claim으로 노출한다(토큰 sub ↔ publicId 매핑). 상세: [`../conventions.md`](../conventions.md) §9·§14, [`login-authorization-code.md`](./login-authorization-code.md), [`spec-realignment-auth-b.md`](./spec-realignment-auth-b.md).
 >
-> 🔧 **방식 B 정합화 진행 중:** 아래 명세 중 일부는 방식 A(백엔드 자체 JWT 발급) 기준 잔재가 남아 있다. **확정된 변경**(로그인·토큰재발급 폐기, 회원가입 IdP 프로비저닝)은 반영했고, **팀 논의가 필요한 항목**(Google 로그인·로그아웃·비번 재설정·이메일 인증)은 "⚠️ 재정의 필요"로 표시만 했다. 결정 후 확정 반영한다.
+> 🔧 **방식 B 정합화 진행 중:** 아래 명세 중 일부는 방식 A(백엔드 자체 JWT 발급) 기준 잔재가 남아 있다. **확정된 변경**(로그인·토큰재발급 폐기, 회원가입 IdP 프로비저닝)은 반영했고, **팀 논의가 필요한 항목**(Google 로그인·로그아웃·비번 재설정)은 "⚠️ 재정의 필요"로 표시만 했다. 결정 후 확정 반영한다.
 
 ---
 
@@ -22,7 +22,6 @@
 | Google 소셜 로그인 | POST | `/api/v1/auth/login/google` | ❌ | ⚠️ 방식 B 재정의 필요 (Authentik 소셜 연동 중개로 전환 검토 — 팀 논의) |
 | ~~토큰 재발급~~ | ~~POST~~ | ~~`/api/v1/auth/reissue`~~ | — | ❌ **폐기 검토** — 토큰 갱신은 IdP 소관. (Kyubo 담당 확인) |
 | 로그아웃 | POST | `/api/v1/auth/logout` | ✅ | ⚠️ 방식 B 재정의 필요 (Stateless라 무효화 방식 재논의 — 로컬삭제/IdP end-session/블랙리스트) |
-| 가입 인증 이메일 발송 | POST | `/api/v1/auth/email/verify-request` | ❌ | ⚠️ SMTP(메일 발송) 인프라 선행 필요 |
 | 재설정 링크 발송 | POST | `/api/v1/auth/password/reset-request` | ❌ | ⚠️ SMTP 선행 + 비번은 IdP 보관 → IdP 경유 재설정 |
 | 비밀번호 재설정 | POST | `/api/v1/auth/password/reset` | ❌ | ⚠️ SMTP 선행 + IdP set_password 경유 |
 | 서버 health check | GET | `/health` | ❌ | |
@@ -39,8 +38,6 @@
 | 프로필 사진 변경 | PATCH | `/api/v1/members/me/profile-image` | ✅ |
 | 인증 상태 조회 | GET | `/api/v1/members/me/verification` | ✅ |
 | 신분증 인증 요청 | POST | `/api/v1/members/me/verification` | ✅ |
-| 알림 설정 조회 | GET | `/api/v1/members/me/notification-settings` | ✅ |
-| 알림 설정 저장 | PATCH | `/api/v1/members/me/notification-settings` | ✅ |
 | 언어 설정 조회 | GET | `/api/v1/members/me/language` | ✅ |
 | 언어 설정 변경 | PATCH | `/api/v1/members/me/language` | ✅ |
 | 탈퇴 | DELETE | `/api/v1/members/me` | ✅ |
@@ -175,22 +172,14 @@ message: "회원가입이 완료되었습니다."
 
 ---
 
-## 7. 가입 인증 이메일 발송 — ⚠️ SMTP 선행 필요
-
-`POST /api/v1/auth/email/verify-request` · Auth ❌ (Body: `email`) → 인증 메일 발송. 200.
-
-> 메일 발송(SMTP) 인프라가 선행돼야 구현 가능. 개발기 SMTP 가용 여부 확인 필요.
-
----
-
-## 8. 중복 확인
+## 7. 중복 확인
 
 - 이메일: `GET /api/v1/members/check-email?email={}` · Auth ❌ → `data: { "available": true }`
 - 닉네임: `GET /api/v1/members/check-nickname?nickname={}` · Auth ❌ → `data: { "available": true }`
 
 ---
 
-## 9. 내 프로필 조회
+## 8. 내 프로필 조회
 
 `GET /api/v1/members/me` · Auth ✅ (본인 식별: JWT custom claim `public_id` → `@CurrentUserPublicId`. 인증 미적용 서비스는 `X-User-Public-Id` 헤더 임시처리 — conventions §9·§14)
 
@@ -202,24 +191,39 @@ message: "회원가입이 완료되었습니다."
 | `nickname` | string | N | 닉네임 |
 | `nationality` | string | N | 국적 코드 |
 | `is_verified` | boolean | N | 인증 배지 여부 |
-| `temperature_grade` | string | N | RED/YELLOW/GREEN/PURPLE/BLUE |
 | `profile_image_url` | string | Y | 프로필 사진 URL (미설정 시 null) |
 | `created_at` | string | N | 가입 일시 (ISO 8601 UTC Z) |
 
-**Error**: 401 COMMON4011 / 404 MEMBER4001
+**Error**: 401 AUTH4011 / 404 MEMBER4001
 
 ---
 
-## 10. 프로필 수정 / 사진 변경 / 설정
+## 9. 프로필 수정 / 사진 변경 / 설정
 
 - 프로필 수정: `PATCH /api/v1/members/me` (닉네임 등 부분 수정) → 200
 - 프로필 사진: `PATCH /api/v1/members/me/profile-image` → 200
-- 알림 설정 조회/저장: `GET`/`PATCH /api/v1/members/me/notification-settings`
 - 언어 설정 조회/변경: `GET`/`PATCH /api/v1/members/me/language`
+
+### 9-1. 언어 설정 (구현됨)
+
+주 사용 언어는 자유 문자열(BCP 47, 예 `"vi"`, `"ko"`)로 저장한다(지원 언어 화이트리스트/enum 미정의 — 검증은 필수 여부만). 본인 식별은 JWT claim `public_id`.
+
+- **조회** `GET /api/v1/members/me/language` · Auth ✅
+  **Response 200** — `data`: `{ "language": "vi" }`
+- **변경** `PATCH /api/v1/members/me/language` · Auth ✅
+  **Request** `{ "language": "ko" }` (필수, 빈 값 불가)
+  **Response 200** — `data`: `{ "language": "ko" }`
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (language 누락/빈 값) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | MEMBER4001 | 존재하지 않는 회원입니다. |
 
 ---
 
-## 11. 신분증 인증 요청
+## 10. 신분증 인증 요청
 
 `POST /api/v1/members/me/verification` · Auth ✅
 
@@ -237,12 +241,12 @@ message: "신분증 인증 요청이 접수되었습니다. 검토 후 결과를
 | HTTP | code | message |
 | --- | --- | --- |
 | 400 | COMMON4001 | 요청 값이 올바르지 않습니다. |
-| 401 | COMMON4011 | 인증 정보가 유효하지 않습니다. |
+| 401 | AUTH4011 | 인증이 필요합니다. |
 | 409 | COMMON4091 | 이미 존재하는 리소스입니다. (이미 검토 중/완료) |
 
 ---
 
-## 12. 인증 상태 조회
+## 11. 인증 상태 조회
 
 `GET /api/v1/members/me/verification` · Auth ✅
 
@@ -254,13 +258,27 @@ message: "신분증 인증 요청이 접수되었습니다. 검토 후 결과를
 | `reviewed_at` | string | Y | 검토 시각 (미검토 시 null) |
 | `created_at` | string | N | 요청 시각 |
 
-**Error**: 401 COMMON4011 / 404 MEMBER4001
+**Error**: 401 AUTH4011 / 404 MEMBER4001
 
 ---
 
-## 13. 탈퇴
+## 12. 탈퇴
 
-`DELETE /api/v1/members/me` · Auth ✅ → soft delete(`users.deleted_at` SET). 200.
+`DELETE /api/v1/members/me` · Auth ✅ → 200 (요청/응답 바디 없음, `data`는 null).
+
+탈퇴는 두 가지를 함께 처리한다:
+1. **로컬 soft delete** — `members.deleted_at`을 현재 시각으로 세팅(row는 보존). 이후 `findByPublicIdAndDeletedAtIsNull` 조회에서 제외된다.
+2. **외부 IdP(Authentik) 사용자 비활성화** — 저장된 `auth_provider_id`(= Authentik user uuid)로 사용자를 찾아 `is_active=false`로 PATCH한다. 이후 IdP 로그인/토큰 발급이 막힌다(하드 삭제 아님 — 복구·감사 보존). 대상이 IdP에 이미 없으면 멱등 통과한다.
+
+> IdP 비활성화 호출은 서비스 트랜잭션의 마지막 단계라, 실패하면 `@Transactional`이 롤백되어 로컬 soft delete도 반영되지 않는다(정합성).
+> 탈퇴자 `email`/`nickname`은 여전히 "사용 중"으로 취급되어 동일 값 재가입은 막힌다(`existsBy*`는 `deleted_at`을 필터하지 않음 — 의도된 동작).
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | MEMBER4001 | 존재하지 않는 회원입니다. |
+| 500 | COMMON5000 | 서버 내부 오류입니다. (IdP 연동 실패) |
 
 ---
 

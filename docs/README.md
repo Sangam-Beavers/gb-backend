@@ -15,7 +15,7 @@
 
 1. **송금 · 환전 (주머니)** — 다중 통화 전자지갑(주머니)에 충전하고, 앱 사용자 간 송금 / 타행 송금 / 실시간 환전
 2. **AI 서류 분석** — 근로계약서 · 급여명세서 등을 업로드하면 AI가 위험 조항을 분석하고 모국어로 번역
-3. **커뮤니티** — 생활정보 · 비자 · 거주 등 카테고리별 게시판, 인증 배지와 "친절한 이웃 온도"
+3. **커뮤니티** — 생활정보 · 비자 · 거주 등 카테고리별 게시판, 인증 배지
 
 자세한 내용은 [`project-overview.md`](./project-overview.md) 참고.
 
@@ -75,7 +75,7 @@ Claude Code가 반드시 지켜야 하는 프로젝트 차원의 결정입니다
 - **AI 분석 결과 저장 = MySQL `document_results`에 직접 저장. (분석 결과 한정) DynamoDB 미사용.** 결과는 **요청 출처(`source` 필드)에 따라 한 경로로만** 저장된다 — 운영기 요청(source="production")은 SQS→계정 A Aurora MySQL, 개발기 요청(source="development")은 Lambda B→EC2(HAProxy)→WireGuard→온프렘 개발기 MySQL 직접 INSERT. **양쪽 동시 저장이 아니라 요청한 환경으로만 결과가 돌아간다.** (개발기 온프렘 MySQL / 운영·스테이징 Aurora MySQL 공통 스키마)
 - **후속 질문 챗봇 = 신규 추가 (기존 분석 흐름 무변경, "추가만").** 결과 화면 하단에 채팅 영역 1개 + `POST /api/v1/documents/{id}/chat` 1개만 추가한다. 대화기록은 분석 결과와 별개 워크로드라 **계정 B DynamoDB(`chat_sessions`, TTL 90일) + Redis 캐시(30분)** 를 신규 도입한다 — 위 "분석 결과 DynamoDB 미사용" 원칙과 저장 대상이 달라 충돌하지 않는다. 챗봇은 동기 + SSE 스트리밍, 권한 검증은 백엔드(Spring 2차 인가), 신규 에러코드 없음(기존 `COMMON4011/4031`, `DOCUMENT4001` 재사용). 상세: [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md).
 - **법령 RAG = Bedrock Knowledge Bases로 통일 (백엔드 저장소 = Amazon S3 Vectors, 계정 B).** 분석 파이프라인과 챗봇 **양쪽 모두** 법령 검색을 KB `retrieve`로 호출한다(검색 코드 일원화). KB가 검색을 오케스트레이션하고 벡터는 S3 Vectors에 저장된다 — S3 Vectors는 빠지지 않고 KB 아래에 깔린다. AI VPC는 퍼블릭 + 프라이빗(=관리 서브넷) 2티어이며 DB 서브넷이 없다. 상세: [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md), [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md).
-- **회원 식별자 보안 원칙** — `users.id`(BIGINT 순번)는 member 도메인 경계를 벗어나지 않는다. 도메인 밖에는 `user_public_id`(UUID)만 노출/전파한다.
+- **회원 식별자 보안 원칙** — `members.id`(BIGINT 순번)는 member 도메인 경계를 벗어나지 않는다. 도메인 밖에는 `user_public_id`(UUID)만 노출/전파한다.
 - **금액·환율은 JSON `string` 십진수로 전송**한다. `number`(float) 금지. (표시용 수치 — 등락률·OCR 신뢰도 등 — 만 예외적으로 number 허용)
 - **인증은 OAuth2 Resource Server(방식 B)로 구현됨.** 본인 식별은 토큰 claim `public_id`를 `@CurrentUserPublicId`로 추출한다. (member·wallet·community 적용 완료, document-service만 `@RequestHeader("X-User-Public-Id")` 헤더 임시처리 잔존 — conventions §14)
 - **패키지 루트 `com.gb`**, 멀티모듈(`common` + `services`). JSON 필드는 snake_case이되 **DTO는 camelCase + Jackson 전역 변환**(`property-naming-strategy: SNAKE_CASE`).

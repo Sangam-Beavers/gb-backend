@@ -2,7 +2,6 @@ package com.gb.community.domain.post.dto.request;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Size;
-import java.util.List;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -26,8 +25,4 @@ public class PostUpdateRequest {
 
     @Schema(description = "변경할 본문(선택)", example = "본문을 수정합니다")
     private String content;
-
-    /** 이미지 URL 목록(선택). 작성과 동일하게 현재 미저장 — TODO: post_images 확정 시 반영. */
-    @Schema(description = "이미지 URL 목록(현재 미저장)")
-    private List<String> imageUrls;
 }

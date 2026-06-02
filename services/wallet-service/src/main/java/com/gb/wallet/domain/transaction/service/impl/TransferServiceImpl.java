@@ -188,7 +188,6 @@ public class TransferServiceImpl implements TransferService {
                             .nickname(member.nickname())
                             .nationality(member.nationality())
                             .isVerified(member.isVerified())
-                            .temperatureGrade(member.temperatureGrade())
                             .lastCurrencyCode(lastCurrency != null ? lastCurrency.name() : null)
                             .lastTransferredAt(RecentRecipientsResponse.toUtcZ(p.getLastTransferredAt()))
                             .build();

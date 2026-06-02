@@ -102,9 +102,9 @@ class TransferServiceTest {
                 .willReturn(List.of(linhWallet, mariaWallet));
 
         given(memberClient.getMember("linh-uuid"))
-                .willReturn(new MemberInfo("linh-uuid",  "linh-test@example.com",  "Linh",  "VN", true, "GREEN"));
+                .willReturn(new MemberInfo("linh-uuid",  "linh-test@example.com",  "Linh",  "VN", true));
         given(memberClient.getMember("maria-uuid"))
-                .willReturn(new MemberInfo("maria-uuid", "maria-test@example.com", "Maria", "PH", true, "BLUE"));
+                .willReturn(new MemberInfo("maria-uuid", "maria-test@example.com", "Maria", "PH", true));
 
         RecentRecipientsResponse response =
                 transferService.getRecentInternalRecipients(SENDER_PUBLIC_ID);
@@ -115,12 +115,11 @@ class TransferServiceTest {
                             RecipientItem::getNickname,
                             RecipientItem::getNationality,
                             RecipientItem::isVerified,
-                            RecipientItem::getTemperatureGrade,
                             RecipientItem::getLastCurrencyCode,
                             RecipientItem::getLastTransferredAt)
                 .containsExactly(
-                        tuple("linh-uuid",  "Linh",  "VN", true, "GREEN", "KRW", "2026-05-25T10:00:00Z"),
-                        tuple("maria-uuid", "Maria", "PH", true, "BLUE",  "VND", "2026-05-22T10:00:00Z"));
+                        tuple("linh-uuid",  "Linh",  "VN", true, "KRW", "2026-05-25T10:00:00Z"),
+                        tuple("maria-uuid", "Maria", "PH", true, "VND", "2026-05-22T10:00:00Z"));
     }
 
     @Test
@@ -162,8 +161,7 @@ class TransferServiceTest {
                 email,
                 "Linh",
                 "VN",
-                true,
-                "GREEN");
+                true);
         given(memberClient.findByEmail(email)).willReturn(Optional.of(linh));
 
         ValidateMemberResponse response = transferService.validateMember(email);
