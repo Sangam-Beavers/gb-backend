@@ -8,6 +8,7 @@ import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
 import com.gb.wallet.domain.transaction.dto.request.TransferExecuteRequest;
 import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
+import com.gb.wallet.domain.transaction.dto.request.ValidateScheduledRequest;
 import com.gb.wallet.domain.transaction.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse.AccountItem;
@@ -19,6 +20,7 @@ import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferFeeResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferReceiptResponse;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
+import com.gb.wallet.domain.transaction.dto.response.ValidateScheduledResponse;
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import com.gb.wallet.domain.transaction.entity.TransactionAuditLog;
 import com.gb.wallet.domain.transaction.repository.ReceiverCurrencyProjection;
@@ -597,6 +599,68 @@ public class TransferServiceImpl implements TransferService {
         }
 
         return TransferReceiptResponse.of(tx, senderName, bankAccount);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // 정기 송금 대상 유효성 검증 (POST /api/v1/transfers/scheduled/validate)
+    // 사전 검증 — 도메인 검증 미통과는 200 + is_valid=false + reason.
+    // 입력·계좌·통화 enum 오류 등은 도메인 에러(400/403/404)로 BusinessException 전파.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /** 1·2단계 same-currency 강제로 인한 미통과 사유. 3단계(다통화) 도입 시 본 메시지 갱신. */
+    private static final String REASON_SAME_CURRENCY_REQUIRED =
+            "1·2단계는 같은 통화 송금만 지원합니다. 다통화는 3단계 도입 후 지원 예정.";
+
+    @Override
+    @Transactional(readOnly = true)
+    public ValidateScheduledResponse validateScheduled(String userPublicId, ValidateScheduledRequest request) {
+        // (1) transfer_type 파싱 — 허용 유형(INTERNAL_TRANSFER/REMITTANCE) 외는 TRANSFER4003.
+        TransactionType type = TransactionType.fromCode(request.transferType())
+                .filter(ALLOWED_TRANSFER_TYPES::contains)
+                .orElseThrow(() -> new BusinessException(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE));
+
+        // (2) 통화 enum 검증 — 미지원 통화는 TRANSFER4002.
+        CurrencyType currency = CurrencyType.fromCode(request.currencyCode())
+                .orElseThrow(() -> new BusinessException(TransferErrorCode.UNSUPPORTED_CURRENCY));
+        CurrencyType receiveCurrency = CurrencyType.fromCode(request.receiveCurrencyCode())
+                .orElseThrow(() -> new BusinessException(TransferErrorCode.UNSUPPORTED_CURRENCY));
+
+        // (3) 도메인별 대상 검증. 조건부 필수 필드는 Bean Validation으로 표현이 까다로워 여기서 검증.
+        if (type == TransactionType.REMITTANCE) {
+            // bank_account_public_id 필수 → 누락 시 COMMON4001.
+            String accountPublicId = request.bankAccountPublicId();
+            if (accountPublicId == null || accountPublicId.isBlank()) {
+                throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+            }
+            // 본인 소유 + 활성 계좌만 통과 (사유 미구분으로 정보 누설 방지 — REMITTANCE 송금 정책 동일).
+            BankAccount account = bankAccountRepository
+                    .findByPublicIdAndUserPublicIdAndIsActiveTrue(accountPublicId, userPublicId)
+                    .orElseThrow(() -> new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND));
+            // 계좌 인증 토큰 검증 — 송금 실행 시 차단되는 케이스를 사전 단계에서 미리 알린다.
+            if (account.getMockAccountToken() == null) {
+                throw new BusinessException(AccountErrorCode.UNVERIFIED_ACCOUNT);
+            }
+        } else {
+            // INTERNAL_TRANSFER → receiver_public_id 필수.
+            String receiverPublicId = request.receiverPublicId();
+            if (receiverPublicId == null || receiverPublicId.isBlank()) {
+                throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+            }
+            // 자기 자신 차단(송금 실행 정책 동일).
+            if (receiverPublicId.equals(userPublicId)) {
+                throw new BusinessException(TransferErrorCode.SELF_TRANSFER_NOT_ALLOWED);
+            }
+            // 수신자 wallet 존재 확인 — 없으면 송금 자체 불가능하므로 사전 단계에서 차단.
+            walletRepository.findByUserPublicId(receiverPublicId)
+                    .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+        }
+
+        // (4) same-currency 검증 — 1·2단계 강제. 다르면 미통과(200 + reason). 3단계 도입 시 분기 완화.
+        if (currency != receiveCurrency) {
+            return ValidateScheduledResponse.invalid(REASON_SAME_CURRENCY_REQUIRED);
+        }
+
+        return ValidateScheduledResponse.valid();
     }
 
     @Override

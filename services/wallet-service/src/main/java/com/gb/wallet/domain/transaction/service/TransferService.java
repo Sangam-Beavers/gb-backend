@@ -2,6 +2,7 @@ package com.gb.wallet.domain.transaction.service;
 
 import com.gb.wallet.domain.transaction.dto.request.TransferExecuteRequest;
 import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
+import com.gb.wallet.domain.transaction.dto.request.ValidateScheduledRequest;
 import com.gb.wallet.domain.transaction.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
@@ -10,6 +11,7 @@ import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferFeeResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferReceiptResponse;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
+import com.gb.wallet.domain.transaction.dto.response.ValidateScheduledResponse;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionType;
 
@@ -109,4 +111,19 @@ public interface TransferService {
      * @return 확인증 응답 DTO. REMITTANCE면 bank/account 정보 포함, INTERNAL이면 null.
      */
     TransferReceiptResponse getReceipt(String userPublicId, String transferPublicId);
+
+    /**
+     * 정기 송금 대상 유효성 사전 검증 — 정기 송금 설정 전 (수취 대상, 금액, 통화) 조합이 정합한지 확인한다.
+     *
+     * <p>송금 실행({@link #execute})과 동일하게 두 유형(INTERNAL_TRANSFER · REMITTANCE)을 한 엔드포인트에서
+     * {@code transferType}으로 분기한다. 대상 식별자는 유형별로 다름:
+     * <ul>
+     *   <li>INTERNAL_TRANSFER → {@code receiverPublicId} 필수. 수신자 wallet 존재 + 자기 자신 차단 검증.</li>
+     *   <li>REMITTANCE → {@code bankAccountPublicId} 필수. 본인 소유 + 활성 + 인증 토큰 검증.</li>
+     * </ul>
+     *
+     * <p>도메인 검증(통화 정합성 등) 미통과는 200 + {@code is_valid=false} + {@code reason}으로 응답한다.
+     * 입력 형식·계좌 미존재·미인증·자기송금 등은 도메인 에러(400/403/404)로 응답된다.
+     */
+    ValidateScheduledResponse validateScheduled(String userPublicId, ValidateScheduledRequest request);
 }

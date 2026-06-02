@@ -29,7 +29,7 @@
 | 송금 비밀번호 검증 (※ 미구현) | POST | `/api/v1/transfers/verify-password` | ✅ |
 | **송금 실행** | POST | `/api/v1/transfers` | ✅ |
 | 송금 확인증 조회 | GET | `/api/v1/transfers/{id}/receipt` | ✅ |
-| 정기 송금 대상 검증 | GET | `/api/v1/transfers/scheduled/validate` | ✅ |
+| 정기 송금 대상 검증 | POST | `/api/v1/transfers/scheduled/validate` | ✅ |
 | 정기 송금 지원 통화 | GET | `/api/v1/transfers/scheduled/supported-currencies` | ✅ |
 | 정기 송금 설정 | POST | `/api/v1/transfers/scheduled` | ✅ |
 | 정기 송금 내역 조회 | GET | `/api/v1/transfers/scheduled` | ✅ |
@@ -346,7 +346,75 @@ snapshot 방식이라 회원이 본명을 바꾸거나 외부 계좌의 명의�
 
 ### 7-2. 정기 송금
 
-- 정기 송금: `validate`(대상 검증, GET) → `supported-currencies`(GET) → `scheduled`(설정 POST / 내역 GET) → `scheduled/{id}/history`(진행 완료 GET).
+전체 흐름: `validate`(대상 검증, POST) → `supported-currencies`(GET) → `scheduled`(설정 POST / 내역 GET) → `scheduled/{id}/history`(진행 완료 GET).
+
+#### 7-2-1. 정기 송금 대상 유효성 검증 ★
+
+`POST /api/v1/transfers/scheduled/validate` · Auth ✅
+
+정기 송금 설정 화면에서 본 설정 전에 (수취 대상, 금액, 통화) 조합이 정합한지 사전 검증한다.
+
+**대상 송금 유형**: `INTERNAL_TRANSFER` · `REMITTANCE` 둘 다 (송금 실행 API와 동일하게 `transfer_type`으로 분기).
+
+**Request Body**
+| 필드 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `transfer_type` | string | O | `INTERNAL_TRANSFER` / `REMITTANCE` |
+| `receiver_public_id` | string | △ | INTERNAL_TRANSFER 필수 (수신자 회원 UUID) |
+| `bank_account_public_id` | string | △ | REMITTANCE 필수 (수신 은행 계좌 UUID) |
+| `amount` | string | O | 회차당 송금액 (string 십진수, 소수점 최대 4자리) |
+| `currency_code` | string | O | 출금 통화 코드 |
+| `receive_currency_code` | string | O | 수취 통화 코드 |
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `is_valid` | boolean | N | 검증 통과 여부 |
+| `reason` | string | Y | 미통과 사유. `is_valid=true`면 null |
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (Body 검증 실패, 조건부 필수 필드 누락 포함) |
+| 400 | TRANSFER4002 | 지원하지 않는 통화입니다. |
+| 400 | TRANSFER4003 | 지원하지 않는 송금 유형입니다. (CHARGE/EXCHANGE 등) |
+| 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. (INTERNAL_TRANSFER 한정) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 403 | ACCOUNT4006 | 인증되지 않은 계좌입니다. (REMITTANCE — `mock_account_token` 미발급) |
+| 404 | ACCOUNT4001 | 존재하지 않는 계좌입니다. (REMITTANCE — 본인 + active 미매칭) |
+| 404 | WALLET4001 | 존재하지 않는 지갑입니다. (INTERNAL — 수신자 wallet 부재) |
+
+**검증 흐름**
+
+1. `transfer_type` 파싱 → 허용 유형(INTERNAL_TRANSFER/REMITTANCE)이 아니면 `TRANSFER4003`
+2. 통화 enum 파싱 → 미지원이면 `TRANSFER4002`
+3. 도메인별 대상 검증:
+    - **REMITTANCE**: `bank_account_public_id` 누락 시 `COMMON4001`. 본인 소유 + 활성 계좌 검증(`ACCOUNT4001`). 계좌 인증 토큰 검증(`ACCOUNT4006`).
+    - **INTERNAL_TRANSFER**: `receiver_public_id` 누락 시 `COMMON4001`. 자기 자신 송금 차단(`TRANSFER4004`). 수신자 wallet 존재 검증(`WALLET4001`).
+4. `currency_code == receive_currency_code` 검증 — 1·2단계는 same-currency 강제, 다르면 200 + `is_valid=false` + `reason="1·2단계는 같은 통화 송금만 지원합니다. 다통화는 3단계 도입 후 지원 예정."`. 3단계(다통화) 도입 시 본 검증 조건 완화.
+
+**mock data (통과)**
+```json
+{
+  "success": true,
+  "data": { "is_valid": true, "reason": null },
+  "message": "요청이 성공적으로 처리되었습니다."
+}
+```
+
+**mock data (미통과 — currency 불일치)**
+```json
+{
+  "success": true,
+  "data": {
+    "is_valid": false,
+    "reason": "1·2단계는 같은 통화 송금만 지원합니다. 다통화는 3단계 도입 후 지원 예정."
+  },
+  "message": "요청이 성공적으로 처리되었습니다."
+}
+```
+
+> 외부 호출 없음 — 우리 DB만으로 사전 검증한다(빠른 검증). 정기 송금 실제 실행(`POST /scheduled`) 시점에 외부 은행 호출이 일어난다.
 
 ---
 

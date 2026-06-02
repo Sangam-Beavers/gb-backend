@@ -4,6 +4,7 @@ import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
 import com.gb.wallet.domain.transaction.dto.request.TransferExecuteRequest;
 import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
+import com.gb.wallet.domain.transaction.dto.request.ValidateScheduledRequest;
 import com.gb.wallet.domain.transaction.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
@@ -12,6 +13,7 @@ import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferFeeResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferReceiptResponse;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
+import com.gb.wallet.domain.transaction.dto.response.ValidateScheduledResponse;
 import com.gb.wallet.domain.transaction.service.TransferService;
 import com.gb.wallet.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
@@ -410,5 +412,51 @@ public class TransferController {
             @CurrentUserPublicId String userPublicId,
             @PathVariable("transferPublicId") @NotBlank @Size(max = 36) String transferPublicId) {
         return ApiResponse.success(transferService.getReceipt(userPublicId, transferPublicId));
+    }
+
+    /** 정기 송금 대상 유효성 사전 검증. 🔒 JWT 필요. INTERNAL_TRANSFER · REMITTANCE 둘 다 지원. */
+    @Operation(
+            summary = "정기 송금 대상 유효성 검증",
+            description = "정기 송금 설정 전 (수취 대상, 금액, 통화) 조합이 유효한지 사전 검증한다. "
+                    + "도메인 검증(통화 정합성 등) 미통과는 200 + is_valid=false + reason으로 응답되며, "
+                    + "입력 형식·계좌 미존재·미인증·자기송금 등은 도메인 에러(400/403/404)로 응답된다. "
+                    + "송금 실행 API와 동일하게 transfer_type으로 INTERNAL_TRANSFER/REMITTANCE 분기.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "검증 자체는 성공. is_valid=true면 통과, false면 reason에 사유."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 요청 값이 올바르지 않습니다(필수 필드 누락·형식 오류) "
+                            + "/ TRANSFER4002 - 지원하지 않는 통화입니다 / TRANSFER4003 - 지원하지 않는 송금 유형입니다 "
+                            + "/ TRANSFER4004 - 자기 자신에게 송금할 수 없습니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_COMMON4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "ACCOUNT4006 - 인증되지 않은 계좌입니다(REMITTANCE — mock_account_token 미발급).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "ACCOUNT4001 - 존재하지 않는 계좌입니다(REMITTANCE — 본인 + active 미매칭) "
+                            + "/ WALLET4001 - 존재하지 않는 지갑입니다(INTERNAL — 수신자 wallet 부재).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_WALLET4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_COMMON5000)))
+    })
+    @PostMapping("/scheduled/validate")
+    public ApiResponse<ValidateScheduledResponse> validateScheduled(
+            @CurrentUserPublicId String userPublicId,
+            @Valid @RequestBody ValidateScheduledRequest request) {
+        return ApiResponse.success(transferService.validateScheduled(userPublicId, request));
     }
 }

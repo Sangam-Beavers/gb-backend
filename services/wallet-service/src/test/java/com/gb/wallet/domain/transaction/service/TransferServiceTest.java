@@ -13,6 +13,7 @@ import com.gb.wallet.domain.account.entity.Bank;
 import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
 import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
+import com.gb.wallet.domain.transaction.dto.request.ValidateScheduledRequest;
 import com.gb.wallet.domain.transaction.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse.AccountItem;
@@ -594,6 +595,117 @@ class TransferServiceTest {
                 .isEqualTo(TransferErrorCode.TRANSFER_NOT_FOUND);
 
         verifyNoInteractions(bankAccountRepository, memberClient);
+    }
+
+    // ==========================================================================
+    // validateScheduled(userPublicId, request) — 정기 송금 대상 유효성 검증
+    // ==========================================================================
+
+    private static final String BANK_ACC_PUB_ID = "bank-acc-pub-7g8h9i0j";
+    private static final String RECEIVER_PUB_ID = "11111111-1111-1111-1111-111111111111";
+
+    @Test
+    @DisplayName("validateScheduled REMITTANCE 정상: 본인 활성 계좌 + 토큰 있음 + same-currency → is_valid=true")
+    void validateScheduled_REMITTANCE_정상() {
+        BankAccount account = bankAccount(50L, bank("020", "Quokka Bank"), "1002345678901");
+        ReflectionTestUtils.setField(account, "mockAccountToken", "tok-abc");
+        given(bankAccountRepository
+                .findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACC_PUB_ID, SENDER_PUBLIC_ID))
+                .willReturn(Optional.of(account));
+
+        var resp = transferService.validateScheduled(SENDER_PUBLIC_ID, remittanceReq("KRW", "KRW"));
+
+        assertThat(resp.isValid()).isTrue();
+        assertThat(resp.reason()).isNull();
+    }
+
+    @Test
+    @DisplayName("validateScheduled INTERNAL_TRANSFER 정상: 수신자 wallet 존재 + same-currency → is_valid=true")
+    void validateScheduled_INTERNAL_정상() {
+        given(walletRepository.findByUserPublicId(RECEIVER_PUB_ID))
+                .willReturn(Optional.of(wallet(99L, RECEIVER_PUB_ID)));
+
+        var resp = transferService.validateScheduled(SENDER_PUBLIC_ID, internalReq("KRW", "KRW"));
+
+        assertThat(resp.isValid()).isTrue();
+        assertThat(resp.reason()).isNull();
+    }
+
+    @Test
+    @DisplayName("validateScheduled: same-currency 위반(KRW→VND) → 200 + is_valid=false + reason 메시지")
+    void validateScheduled_currency_불일치_미통과() {
+        BankAccount account = bankAccount(50L, bank("020", "Quokka Bank"), "1002345678901");
+        ReflectionTestUtils.setField(account, "mockAccountToken", "tok-abc");
+        given(bankAccountRepository
+                .findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACC_PUB_ID, SENDER_PUBLIC_ID))
+                .willReturn(Optional.of(account));
+
+        var resp = transferService.validateScheduled(SENDER_PUBLIC_ID, remittanceReq("KRW", "VND"));
+
+        assertThat(resp.isValid()).isFalse();
+        assertThat(resp.reason()).contains("같은 통화 송금", "3단계");
+    }
+
+    @Test
+    @DisplayName("validateScheduled REMITTANCE: 본인/활성 계좌 미매칭 → ACCOUNT4001")
+    void validateScheduled_REMITTANCE_계좌없음_ACCOUNT4001() {
+        given(bankAccountRepository
+                .findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACC_PUB_ID, SENDER_PUBLIC_ID))
+                .willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> transferService.validateScheduled(SENDER_PUBLIC_ID, remittanceReq("KRW", "KRW")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.ACCOUNT_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("validateScheduled REMITTANCE: 미인증 계좌(토큰 null) → ACCOUNT4006")
+    void validateScheduled_REMITTANCE_미인증_ACCOUNT4006() {
+        BankAccount account = bankAccount(50L, bank("020", "Quokka Bank"), "1002345678901");
+        // mockAccountToken은 builder 기본값 null
+        given(bankAccountRepository
+                .findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACC_PUB_ID, SENDER_PUBLIC_ID))
+                .willReturn(Optional.of(account));
+
+        assertThatThrownBy(() -> transferService.validateScheduled(SENDER_PUBLIC_ID, remittanceReq("KRW", "KRW")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.UNVERIFIED_ACCOUNT);
+    }
+
+    @Test
+    @DisplayName("validateScheduled INTERNAL: 자기 자신 송금 → TRANSFER4004")
+    void validateScheduled_INTERNAL_self_TRANSFER4004() {
+        var req = new ValidateScheduledRequest(
+                "INTERNAL_TRANSFER", SENDER_PUBLIC_ID, null, "10000.0000", "KRW", "KRW");
+
+        assertThatThrownBy(() -> transferService.validateScheduled(SENDER_PUBLIC_ID, req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.SELF_TRANSFER_NOT_ALLOWED);
+    }
+
+    @Test
+    @DisplayName("validateScheduled: 미지원 통화(EUR) → TRANSFER4002")
+    void validateScheduled_미지원통화_TRANSFER4002() {
+        var req = new ValidateScheduledRequest(
+                "REMITTANCE", null, BANK_ACC_PUB_ID, "10000.0000", "EUR", "EUR");
+
+        assertThatThrownBy(() -> transferService.validateScheduled(SENDER_PUBLIC_ID, req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.UNSUPPORTED_CURRENCY);
+    }
+
+    private ValidateScheduledRequest remittanceReq(String currency, String receiveCurrency) {
+        return new ValidateScheduledRequest(
+                "REMITTANCE", null, BANK_ACC_PUB_ID, "500000.0000", currency, receiveCurrency);
+    }
+
+    private ValidateScheduledRequest internalReq(String currency, String receiveCurrency) {
+        return new ValidateScheduledRequest(
+                "INTERNAL_TRANSFER", RECEIVER_PUB_ID, null, "10000.0000", currency, receiveCurrency);
     }
 
     /** getReceipt 테스트용 Transaction 헬퍼. */
