@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>⚠️ 환율 값은 임시 고정값이다. 운영 정책/실시간 환율과 무관하며, 외부 API 연동 시 대체된다.
  */
-@Profile({"dev", "stage", "test"})
+@Profile({"dev", "test"})
 @Component
 public class MockExchangeRateClient implements ExchangeRateClient {
 
