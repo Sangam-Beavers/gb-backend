@@ -1,6 +1,7 @@
 package com.gb.community.domain.comment.service.impl;
 
 import com.gb.common.exception.BusinessException;
+import com.gb.community.domain.comment.dto.request.CreateCommentRequest;
 import com.gb.community.domain.comment.dto.response.CommentListResponse;
 import com.gb.community.domain.comment.dto.response.CommentResponse;
 import com.gb.community.domain.comment.entity.Comment;
@@ -60,6 +61,33 @@ public class CommentServiceImpl implements CommentService {
 
         return CommentListResponse.of(items, result.getNumber(), result.getSize(),
                 result.getTotalElements(), result.getTotalPages());
+    }
+
+    @Override
+    @Transactional
+    public CommentResponse createComment(String postPublicId, String userPublicId,
+                                         CreateCommentRequest request) {
+        // (1) 활성 게시글 조회 — 없거나 삭제됐으면 COMMUNITY4001(목록 조회와 동일 정책).
+        Post post = getActivePostOrThrow(postPublicId);
+
+        // (2) Comment INSERT — 본 사이클은 최상위 댓글만(parentId=null). 대댓글은 별도 이슈.
+        //     public_id는 builder가 자동 생성(Comment.builder 주석 참고), like_count=0.
+        Comment comment = commentRepository.save(Comment.builder()
+                .post(post)
+                .userPublicId(userPublicId)
+                .parentId(null)
+                .content(request.getContent())
+                .build());
+
+        // (3) 게시글 comment_count +1 — dirty checking으로 UPDATE(같은 트랜잭션이라 자동 반영).
+        post.increaseCommentCount();
+
+        // (4) 작성자 표시 정보(닉네임/인증배지) MemberClient로 조회.
+        //     MockMemberClient는 미존재 시 fallback "Unknown" 반환하므로 null 우려 없음.
+        //     실서비스 RealMemberClient 도입 후엔 HTTP 장애 시 BusinessException 가능.
+        MemberInfo author = memberClient.getMember(userPublicId);
+
+        return CommentResponse.from(comment, author, post.getPublicId());
     }
 
     // ----- helpers -----

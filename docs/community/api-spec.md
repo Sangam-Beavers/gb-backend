@@ -119,28 +119,38 @@
 
 `POST /api/v1/community/posts/{postId}/comments` · Auth ✅
 
-**Path Variable**: `postId` = 게시글 public_id (UUID)
+게시글에 댓글을 작성한다. 작성자는 JWT `public_id` claim에서 식별된다.
+
+**대댓글은 본 사이클 범위 밖** — 모든 댓글이 최상위(`parent_id=null`)로 INSERT된다. 향후 대댓글 도입 시 Request에 `parent_comment_public_id` 필드 추가 + Service에 부모 검증·1-depth 강제 로직을 추가한다 (Comment.parent_id 컬럼·Response.parent_comment_public_id 필드는 이미 준비됨).
+
+**Path Variable**: `postId` = 게시글 public_id (UUID), 최대 36자
 
 **Request Body**
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `content` | string | O | 댓글 내용 |
-| `parent_comment_public_id` | string | X | 부모 댓글 UUID. null이면 최상위, 있으면 대댓글 |
+| `content` | string | O | 댓글 내용 (1~2000자, 공백만 입력 차단) |
 
 **Response 201** — `data`
 | 필드 | 타입 | nullable | 설명 |
 | --- | --- | --- | --- |
 | `public_id` | string | N | 댓글 UUID |
 | `post_public_id` | string | N | 게시글 UUID |
-| `parent_comment_public_id` | string | Y | 부모 댓글 UUID. 최상위면 null |
+| `parent_comment_public_id` | string | Y | 부모 댓글 UUID. **현 사이클은 항상 null** (대댓글 미지원) |
 | `content` | string | N | 댓글 내용 |
-| `author_nickname` | string | N | 작성자 닉네임 |
+| `author_nickname` | string | N | 작성자 닉네임 (MemberClient 조회) |
 | `author_is_verified` | boolean | N | 작성자 인증 배지 여부 |
-| `created_at` | string | N | 작성 시각(UTC Z) |
+| `created_at` | string | N | 작성 시각 (ISO 8601 UTC `Z`) |
 
-작성 성공 시 게시글 `comment_count` +1.
+작성 성공 시 게시글 `comment_count`가 1 증가한다 (같은 트랜잭션 내 dirty checking).
 
-**Error**: 401 AUTH4011 / 404 COMMUNITY4001(게시글 없음) / 404 COMMUNITY4002(부모 댓글 없음)
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (content 빈값/2000자 초과/path variable 형식 위반) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | COMMUNITY4001 | 존재하지 않는 게시글입니다. |
+
+> COMMUNITY4002(부모 댓글 없음)는 대댓글 도입 시 활성화. 현재는 사용 안 함.
 
 ---
 

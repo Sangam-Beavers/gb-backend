@@ -2,14 +2,19 @@ package com.gb.community.domain.comment.controller;
 
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
+import com.gb.common.response.SuccessStatus;
+import com.gb.community.domain.comment.dto.request.CreateCommentRequest;
 import com.gb.community.domain.comment.dto.response.CommentListResponse;
+import com.gb.community.domain.comment.dto.response.CommentResponse;
 import com.gb.community.domain.comment.service.CommentService;
+import com.gb.community.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -18,6 +23,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -91,5 +98,46 @@ public class CommentController {
             // size 상한(100)은 명세에 없지만 과도한 조회를 막는 방어적 가드(Post/Like 목록과 동일).
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return ApiResponse.success(commentService.getComments(postPublicId, page, size));
+    }
+
+    /** 댓글 작성. 🔒 JWT 필요. 본인 명의로 INSERT + 게시글 comment_count +1. */
+    @Operation(
+            summary = "댓글 작성",
+            description = "게시글에 댓글을 작성한다. 작성자는 JWT public_id claim에서 식별된다. "
+                    + "작성 성공 시 게시글의 comment_count가 1 증가한다. "
+                    + "대댓글은 본 사이클 범위 밖 — 모든 댓글이 최상위로 INSERT된다(parent_comment_public_id 응답은 항상 null). "
+                    + "없거나 삭제된 게시글이면 404 COMMUNITY4001.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "작성 성공. data에 CommentResponse가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 잘못된 요청 (content 빈값/길이 초과/path variable 형식 위반).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "COMMUNITY4001 - 존재하지 않는 게시글입니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMUNITY4001", value = EX_COMMUNITY4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000)))
+    })
+    @PostMapping("/{id}/comments")
+    public ApiResponse<CommentResponse> createComment(
+            @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId,
+            @CurrentUserPublicId String userPublicId,
+            @Valid @RequestBody CreateCommentRequest request) {
+        return ApiResponse.success(SuccessStatus.CREATED,
+                commentService.createComment(postPublicId, userPublicId, request));
     }
 }

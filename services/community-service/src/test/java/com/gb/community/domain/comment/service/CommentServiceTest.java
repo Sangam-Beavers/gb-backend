@@ -9,7 +9,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.gb.common.exception.BusinessException;
+import com.gb.community.domain.comment.dto.request.CreateCommentRequest;
 import com.gb.community.domain.comment.dto.response.CommentListResponse;
+import com.gb.community.domain.comment.dto.response.CommentResponse;
 import com.gb.community.domain.comment.entity.Comment;
 import com.gb.community.domain.comment.repository.CommentRepository;
 import com.gb.community.domain.comment.service.impl.CommentServiceImpl;
@@ -149,6 +151,64 @@ class CommentServiceTest {
         assertThat(res.getComments().get(1).isAuthorIsVerified()).isFalse();
         verify(memberClient).getMember(USER);
         verify(memberClient).getMember(OTHER);
+    }
+
+    // ==========================================================================
+    // createComment(postPublicId, userPublicId, request) — 댓글 작성
+    // ==========================================================================
+
+    @Test
+    @DisplayName("createComment 정상: Comment INSERT + Post.commentCount +1 + 응답 매핑")
+    void createComment_정상() {
+        Post post = post(PID);
+        int beforeCount = post.getCommentCount();
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(commentRepository.save(any(Comment.class))).willAnswer(inv -> {
+            Comment c = inv.getArgument(0);
+            ReflectionTestUtils.setField(c, "id", 100L);
+            ReflectionTestUtils.setField(c, "createdAt", LocalDateTime.of(2026, 5, 26, 4, 15, 30));
+            return c;
+        });
+        given(memberClient.getMember(USER)).willReturn(MINH);
+
+        CreateCommentRequest req = createRequest("좋은 정보 감사합니다!");
+        CommentResponse resp = service.createComment(PID, USER, req);
+
+        // 응답 매핑 확인
+        assertThat(resp.getPostPublicId()).isEqualTo(PID);
+        assertThat(resp.getContent()).isEqualTo("좋은 정보 감사합니다!");
+        assertThat(resp.getAuthorNickname()).isEqualTo("Minh");
+        assertThat(resp.isAuthorIsVerified()).isTrue();
+        assertThat(resp.getParentCommentPublicId()).as("대댓글 미지원 — 항상 null").isNull();
+
+        // commentCount 증가 (dirty checking으로 UPDATE)
+        assertThat(post.getCommentCount()).isEqualTo(beforeCount + 1);
+
+        // Comment INSERT 시 parentId는 null (최상위만)
+        ArgumentCaptor<Comment> commentCaptor = ArgumentCaptor.forClass(Comment.class);
+        verify(commentRepository).save(commentCaptor.capture());
+        assertThat(commentCaptor.getValue().getParentId()).isNull();
+        assertThat(commentCaptor.getValue().getUserPublicId()).isEqualTo(USER);
+        assertThat(commentCaptor.getValue().getContent()).isEqualTo("좋은 정보 감사합니다!");
+    }
+
+    @Test
+    @DisplayName("createComment: 없거나 삭제된 게시글 → COMMUNITY4001, 댓글 INSERT·작성자 조회 없음")
+    void createComment_게시글없음_COMMUNITY4001() {
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.createComment(PID, USER, createRequest("내용")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommunityErrorCode.POST_NOT_FOUND);
+
+        verifyNoInteractions(commentRepository, memberClient);
+    }
+
+    private CreateCommentRequest createRequest(String content) {
+        CreateCommentRequest req = new CreateCommentRequest();
+        ReflectionTestUtils.setField(req, "content", content);
+        return req;
     }
 
     // ----- helpers -----
