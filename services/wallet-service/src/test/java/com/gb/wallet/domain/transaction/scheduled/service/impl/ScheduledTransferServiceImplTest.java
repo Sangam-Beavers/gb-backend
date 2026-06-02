@@ -11,12 +11,15 @@ import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.account.entity.Bank;
 import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
+import com.gb.wallet.domain.transaction.entity.Transaction;
+import com.gb.wallet.domain.transaction.repository.TransactionRepository;
 import com.gb.wallet.domain.transaction.scheduled.dto.request.CreateScheduledTransferRequest;
 import com.gb.wallet.domain.transaction.scheduled.entity.ScheduledTransfer;
 import com.gb.wallet.domain.transaction.scheduled.repository.ScheduledTransferRepository;
 import com.gb.wallet.domain.transaction.scheduled.service.NextRunDateCalculator;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
+import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.MemberInfo;
 import com.gb.wallet.global.common.enums.ScheduledTransferStatus;
@@ -47,6 +50,7 @@ class ScheduledTransferServiceImplTest {
     @Mock private ScheduledTransferRepository scheduledTransferRepository;
     @Mock private BankAccountRepository bankAccountRepository;
     @Mock private WalletRepository walletRepository;
+    @Mock private TransactionRepository transactionRepository;
     @Mock private MemberClient memberClient;
     @Mock private NextRunDateCalculator nextRunDateCalculator;
     @InjectMocks private ScheduledTransferServiceImpl service;
@@ -270,6 +274,125 @@ class ScheduledTransferServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+    }
+
+    // ==========================================================================
+    // getHistory(userPublicId, transferPublicId, page, size) — 회차 실행 이력 조회
+    // ==========================================================================
+
+    private static final String ST_PUBLIC_ID = "st-pub-uuid-123";
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("getHistory 정상: 본인 정기송금 + 회차 transactions 페이지 응답")
+    void getHistory_정상() {
+        ScheduledTransfer st = stampScheduled(200L, ScheduledTransferStatus.ACTIVE, "NGUYEN VAN A");
+        ReflectionTestUtils.setField(st, "publicId", ST_PUBLIC_ID);
+        given(scheduledTransferRepository.findByPublicId(ST_PUBLIC_ID)).willReturn(Optional.of(st));
+
+        Transaction tx1 = stampTx(900L, "tx-pub-1", new java.math.BigDecimal("500000"));
+        Transaction tx2 = stampTx(901L, "tx-pub-2", new java.math.BigDecimal("500000"));
+        org.springframework.data.domain.Page<Transaction> txPage =
+                new org.springframework.data.domain.PageImpl<>(
+                        java.util.List.of(tx1, tx2),
+                        org.springframework.data.domain.PageRequest.of(0, 20),
+                        2L);
+        given(transactionRepository.findByIdempotencyKeyStartingWith(
+                org.mockito.ArgumentMatchers.eq("scheduled:" + ST_PUBLIC_ID + ":"),
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .willReturn(txPage);
+
+        var resp = service.getHistory(SENDER, ST_PUBLIC_ID, 0, 20);
+
+        assertThat(resp.histories()).hasSize(2);
+        assertThat(resp.histories().get(0).publicId()).isEqualTo("tx-pub-1");
+        assertThat(resp.histories().get(0).status()).isEqualTo("COMPLETED");
+        assertThat(resp.totalElements()).isEqualTo(2L);
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("getHistory: 정기송금 미존재 → TRANSFER4001 (정보 누설 방지)")
+    void getHistory_정기송금_없음_TRANSFER4001() {
+        given(scheduledTransferRepository.findByPublicId(ST_PUBLIC_ID)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.getHistory(SENDER, ST_PUBLIC_ID, 0, 20))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.TRANSFER_NOT_FOUND);
+
+        // 본인 검증 실패라 transactions 조회 미진입.
+        org.mockito.Mockito.verifyNoInteractions(transactionRepository);
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("getHistory: 다른 사용자의 정기송금 → TRANSFER4001 (cross-user 차단)")
+    void getHistory_본인아님_TRANSFER4001() {
+        // 다른 사용자 소유 ScheduledTransfer
+        ScheduledTransfer otherUserSt = ScheduledTransfer.builder()
+                .publicId(ST_PUBLIC_ID)
+                .userPublicId("other-user-uuid")  // SENDER 아님
+                .transferType(TransactionType.REMITTANCE)
+                .bankAccountId(BANK_ACC_ID)
+                .amount(new java.math.BigDecimal("500000"))
+                .currencyCode(com.gb.wallet.global.common.enums.CurrencyType.KRW)
+                .receiveCurrencyCode(com.gb.wallet.global.common.enums.CurrencyType.KRW)
+                .frequency(TransferFrequency.MONTHLY)
+                .scheduleDay(25)
+                .nextRunDate(FIXED_NEXT)
+                .status(ScheduledTransferStatus.ACTIVE)
+                .build();
+        given(scheduledTransferRepository.findByPublicId(ST_PUBLIC_ID))
+                .willReturn(Optional.of(otherUserSt));
+
+        assertThatThrownBy(() -> service.getHistory(SENDER, ST_PUBLIC_ID, 0, 20))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.TRANSFER_NOT_FOUND);
+
+        org.mockito.Mockito.verifyNoInteractions(transactionRepository);
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("getHistory 회차 0개: 빈 배열 + total_elements=0")
+    void getHistory_회차_없음() {
+        ScheduledTransfer st = stampScheduled(201L, ScheduledTransferStatus.ACTIVE, "NGUYEN VAN A");
+        ReflectionTestUtils.setField(st, "publicId", ST_PUBLIC_ID);
+        given(scheduledTransferRepository.findByPublicId(ST_PUBLIC_ID)).willReturn(Optional.of(st));
+
+        org.springframework.data.domain.Page<Transaction> empty =
+                new org.springframework.data.domain.PageImpl<>(
+                        java.util.List.of(),
+                        org.springframework.data.domain.PageRequest.of(0, 20),
+                        0L);
+        given(transactionRepository.findByIdempotencyKeyStartingWith(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .willReturn(empty);
+
+        var resp = service.getHistory(SENDER, ST_PUBLIC_ID, 0, 20);
+
+        assertThat(resp.histories()).isEmpty();
+        assertThat(resp.totalElements()).isZero();
+        assertThat(resp.totalPages()).isZero();
+    }
+
+    /** getHistory 테스트용 Transaction 헬퍼. */
+    private Transaction stampTx(long id, String publicId, java.math.BigDecimal amount) {
+        Transaction tx = Transaction.builder()
+                .publicId(publicId)
+                .wallet(wallet(1L, SENDER))
+                .type(TransactionType.REMITTANCE)
+                .amount(amount)
+                .currencyCode(com.gb.wallet.global.common.enums.CurrencyType.KRW)
+                .fee(new java.math.BigDecimal("3000"))
+                .status(com.gb.wallet.global.common.enums.TransactionStatus.COMPLETED)
+                .idempotencyKey("scheduled:" + ST_PUBLIC_ID + ":2026-06-25")
+                .bankAccountId(BANK_ACC_ID)
+                .receiveAmount(amount)
+                .receiveCurrencyCode(com.gb.wallet.global.common.enums.CurrencyType.KRW)
+                .build();
+        ReflectionTestUtils.setField(tx, "id", id);
+        ReflectionTestUtils.setField(tx, "createdAt", java.time.LocalDateTime.of(2026, 6, 25, 12, 0));
+        return tx;
     }
 
     /** list 테스트용 ScheduledTransfer 헬퍼. */

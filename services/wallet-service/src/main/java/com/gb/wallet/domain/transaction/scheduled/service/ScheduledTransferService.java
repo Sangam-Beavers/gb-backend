@@ -1,6 +1,7 @@
 package com.gb.wallet.domain.transaction.scheduled.service;
 
 import com.gb.wallet.domain.transaction.scheduled.dto.request.CreateScheduledTransferRequest;
+import com.gb.wallet.domain.transaction.scheduled.dto.response.ScheduledTransferHistoryResponse;
 import com.gb.wallet.domain.transaction.scheduled.dto.response.ScheduledTransferListResponse;
 import com.gb.wallet.domain.transaction.scheduled.dto.response.ScheduledTransferResponse;
 
@@ -40,4 +41,21 @@ public interface ScheduledTransferService {
      * @param size         페이지 크기
      */
     ScheduledTransferListResponse list(String userPublicId, String statusFilter, int page, int size);
+
+    /**
+     * 특정 정기 송금의 회차별 실행 이력(transactions) 페이지 조회.
+     *
+     * <p>회차 거래는 스케줄러가 {@code idempotency_key = "scheduled:{publicId}:{today}"} 형태로 INSERT한
+     * transactions 행이다. {@code idempotency_key} prefix({@code "scheduled:{publicId}:"})로 검색한다.
+     *
+     * <p>본인 검증: 정기 송금이 미존재이거나 요청자 소유가 아니면 동일 {@code TRANSFER4001}로 모호 매핑
+     * (정보 누설 방지). 회차가 0건이면 빈 배열 + total_elements=0으로 200 응답.
+     *
+     * @param userPublicId      요청자(JWT public_id)
+     * @param transferPublicId  정기 송금 식별자(UUID)
+     * @param page              0-base 페이지 번호
+     * @param size              페이지 크기
+     */
+    ScheduledTransferHistoryResponse getHistory(
+            String userPublicId, String transferPublicId, int page, int size);
 }

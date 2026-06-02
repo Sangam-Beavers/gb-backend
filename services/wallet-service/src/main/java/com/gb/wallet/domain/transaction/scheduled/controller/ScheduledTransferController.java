@@ -3,6 +3,7 @@ package com.gb.wallet.domain.transaction.scheduled.controller;
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
 import com.gb.wallet.domain.transaction.scheduled.dto.request.CreateScheduledTransferRequest;
+import com.gb.wallet.domain.transaction.scheduled.dto.response.ScheduledTransferHistoryResponse;
 import com.gb.wallet.domain.transaction.scheduled.dto.response.ScheduledTransferListResponse;
 import com.gb.wallet.domain.transaction.scheduled.dto.response.ScheduledTransferResponse;
 import com.gb.wallet.domain.transaction.scheduled.service.ScheduledTransferService;
@@ -15,10 +16,13 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -126,5 +130,46 @@ public class ScheduledTransferController {
             @Max(value = 100, message = "size는 100 이하이어야 합니다") int size) {
         return ApiResponse.success(
                 scheduledTransferService.list(userPublicId, status, page, size));
+    }
+
+    /** 특정 정기송금의 회차별 실행 이력 조회. 🔒 JWT 필요. 송신자 본인만 조회 가능. */
+    @Operation(
+            summary = "정기 송금 회차 실행 이력 조회",
+            description = "특정 정기 송금의 회차별 실행 이력(transactions)을 페이지 단위로 조회한다. "
+                    + "회차 거래는 스케줄러가 idempotency_key='scheduled:{publicId}:{today}' 형태로 INSERT한 행. "
+                    + "송신자 본인만 조회 가능하며, 미존재·본인 아님 모두 TRANSFER4001로 모호 매핑(정보 누설 방지). "
+                    + "현 단계는 status가 항상 COMPLETED — 송금 실패 시 transactions INSERT 자체 안 됨.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "조회 성공. data에 ScheduledTransferHistoryResponse가 담긴다(회차 0건이면 빈 배열)."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 요청 값이 올바르지 않습니다 (page·size 범위 위반·path variable 형식).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "TRANSFER4001 - 존재하지 않는 송금 내역입니다 (미존재·본인 아님 동일 매핑).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @GetMapping("/{transferPublicId}/history")
+    public ApiResponse<ScheduledTransferHistoryResponse> getHistory(
+            @CurrentUserPublicId String userPublicId,
+            @PathVariable("transferPublicId") @NotBlank @Size(max = 36) String transferPublicId,
+            @RequestParam(value = "page", required = false, defaultValue = "0")
+            @Min(value = 0, message = "page는 0 이상이어야 합니다") int page,
+            @RequestParam(value = "size", required = false, defaultValue = "20")
+            @Min(value = 1, message = "size는 1 이상이어야 합니다")
+            @Max(value = 100, message = "size는 100 이하이어야 합니다") int size) {
+        return ApiResponse.success(
+                scheduledTransferService.getHistory(userPublicId, transferPublicId, page, size));
     }
 }

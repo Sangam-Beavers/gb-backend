@@ -568,6 +568,63 @@ wallet:
 
 스케줄러 도입과 함께 `last_run_at` 필드가 §7-2-2(설정) / §7-2-3(목록) 응답에 추가됨 — 사용자가 "마지막 실행이 언제?" 확인 가능. 최초 실행 전이면 `null`.
 
+#### 7-2-5. 정기 송금 회차 실행 이력 조회 ★
+
+`GET /api/v1/transfers/scheduled/{transferPublicId}/history` · Auth ✅
+
+특정 정기 송금의 회차별 실행 이력을 페이지 단위로 조회한다. 회차 거래는 `transactions` 테이블의 송금 거래 중 스케줄러가 `idempotency_key = "scheduled:{publicId}:{date}"` 형태로 INSERT한 행 — `idempotency_key` prefix 검색(UNIQUE 인덱스 활용)으로 잡는다.
+
+**Path Variable**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `transferPublicId` | string | O | 정기송금 식별자(UUID, `scheduled_transfers.public_id`). 최대 36자 |
+
+**Query Parameter**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `page` | integer | X | 페이지 번호 (0-base, 기본 0) |
+| `size` | integer | X | 페이지 크기 (기본 20, 최대 100) |
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `histories` | array | N | 회차 실행 이력 목록 (회차 0건이면 빈 배열) |
+| `histories[].public_id` | string | N | 회차 거래 식별자(UUID, `transactions.public_id`) |
+| `histories[].amount` | string | N | 송금 금액 (string 십진수) |
+| `histories[].currency_code` | string | N | 출금 통화 |
+| `histories[].fee` | string | N | 수수료 (string 십진수) |
+| `histories[].receive_amount` | string | N | 수취 금액 (string 십진수) |
+| `histories[].receive_currency_code` | string | N | 수취 통화 |
+| `histories[].status` | string | N | 거래 상태 (`COMPLETED` / `FAILED`). **현 단계는 COMPLETED만** — 송금 실패 시 transactions INSERT 자체 안 일어남 (FAILED 흔적은 `remittance_attempts`에만). 향후 FAILED 저장 도입 시 자연스럽게 노출 |
+| `histories[].executed_at` | string | N | 실행 시각 (ISO 8601 UTC `Z`) = `transactions.created_at` |
+| `page` | integer | N | 현재 페이지 (0-base) |
+| `size` | integer | N | 페이지 크기 |
+| `total_elements` | integer | N | 전체 회차 건수 |
+| `total_pages` | integer | N | 전체 페이지 수 |
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (page·size 범위 위반·path variable 형식 위반) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | TRANSFER4001 | 존재하지 않는 송금 내역입니다. (정기송금 미존재 / 본인 아님 모두 동일 매핑 — 정보 누설 방지) |
+
+**정렬**
+
+`executed_at DESC` (= `transactions.created_at DESC`) — 최근 실행 우선.
+
+**본인 검증**
+
+정기송금 조회 후 `userPublicId` 일치 확인. 불일치 시 미존재와 동일한 `TRANSFER4001`로 모호 매핑 (충전 `rebuildFromPrior` / 송금 확인증 정책 답습).
+
+**구현 노트 — idempotency_key prefix 검색**
+
+회차 거래를 정기송금과 연결하기 위해 `transactions.scheduled_transfer_id` 같은 FK 컬럼을 추가하는 대안도 있었으나, 다음 이유로 prefix 검색 채택:
+- 정기송금 회차는 보통 수~수십(월 1회 × 1년 = 12개) — 인덱스 효율 큰 차이 없음
+- `idempotency_key` UNIQUE 인덱스의 prefix 검색이 RDBMS에서 활용됨 (`LIKE 'prefix%'`)
+- transactions 테이블 변경·스케줄러 변경 없이 가능
+- 운영에서 회차가 비대화하면 그때 FK 컬럼으로 전환 검토
+
 ---
 
 ## 8. 환전 견적 조회·검증

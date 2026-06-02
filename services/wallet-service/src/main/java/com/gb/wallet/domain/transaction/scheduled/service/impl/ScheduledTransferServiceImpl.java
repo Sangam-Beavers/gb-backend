@@ -4,13 +4,17 @@ import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
+import com.gb.wallet.domain.transaction.entity.Transaction;
+import com.gb.wallet.domain.transaction.repository.TransactionRepository;
 import com.gb.wallet.domain.transaction.scheduled.dto.request.CreateScheduledTransferRequest;
+import com.gb.wallet.domain.transaction.scheduled.dto.response.ScheduledTransferHistoryResponse;
 import com.gb.wallet.domain.transaction.scheduled.dto.response.ScheduledTransferListResponse;
 import com.gb.wallet.domain.transaction.scheduled.dto.response.ScheduledTransferResponse;
 import com.gb.wallet.domain.transaction.scheduled.entity.ScheduledTransfer;
 import com.gb.wallet.domain.transaction.scheduled.repository.ScheduledTransferRepository;
 import com.gb.wallet.domain.transaction.scheduled.service.NextRunDateCalculator;
 import com.gb.wallet.domain.transaction.scheduled.service.ScheduledTransferService;
+import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.MemberInfo;
@@ -51,6 +55,7 @@ public class ScheduledTransferServiceImpl implements ScheduledTransferService {
     private final ScheduledTransferRepository scheduledTransferRepository;
     private final BankAccountRepository bankAccountRepository;
     private final WalletRepository walletRepository;
+    private final TransactionRepository transactionRepository;
     private final MemberClient memberClient;
     private final NextRunDateCalculator nextRunDateCalculator;
 
@@ -184,5 +189,36 @@ public class ScheduledTransferServiceImpl implements ScheduledTransferService {
         } catch (IllegalArgumentException e) {
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 회차 실행 이력 조회 (GET /api/v1/transfers/scheduled/{id}/history)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** 스케줄러가 회차마다 박는 idempotency_key prefix — Repository 검색에 사용. */
+    private static final String SCHEDULED_KEY_PREFIX = "scheduled:";
+
+    @Override
+    @Transactional(readOnly = true)
+    public ScheduledTransferHistoryResponse getHistory(
+            String userPublicId, String transferPublicId, int page, int size) {
+
+        // (1) 정기송금 조회 — 본인 검증 통합. 미존재·본인 아님 모두 TRANSFER4001로 모호 매핑(정보 누설 방지).
+        //     충전 rebuildFromPrior / 송금 확인증과 동일 정책.
+        ScheduledTransfer scheduled = scheduledTransferRepository.findByPublicId(transferPublicId)
+                .orElseThrow(() -> new BusinessException(TransferErrorCode.TRANSFER_NOT_FOUND));
+
+        if (!scheduled.getUserPublicId().equals(userPublicId)) {
+            throw new BusinessException(TransferErrorCode.TRANSFER_NOT_FOUND);
+        }
+
+        // (2) 회차 이력 페이지 조회 — idempotency_key가 "scheduled:{publicId}:" prefix로 시작하는 transactions.
+        //     정렬: created_at DESC (= 실행 시각 역순).
+        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        String keyPrefix = SCHEDULED_KEY_PREFIX + transferPublicId + ":";
+        Page<Transaction> historyPage = transactionRepository
+                .findByIdempotencyKeyStartingWith(keyPrefix, pageable);
+
+        return ScheduledTransferHistoryResponse.from(historyPage);
     }
 }

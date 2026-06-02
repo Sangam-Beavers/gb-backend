@@ -4,6 +4,7 @@ import com.gb.wallet.domain.transaction.scheduled.entity.ScheduledTransfer;
 import com.gb.wallet.global.common.enums.ScheduledTransferStatus;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -27,6 +28,9 @@ public interface ScheduledTransferRepository extends JpaRepository<ScheduledTran
     /** 사용자의 status 필터링 페이지 조회. */
     Page<ScheduledTransfer> findByUserPublicIdAndStatus(
             String userPublicId, ScheduledTransferStatus status, Pageable pageable);
+
+    /** 외부 노출 식별자(public_id, UUID)로 단건 조회. 회차 이력·취소·재개 등 단건 API에서 사용. */
+    Optional<ScheduledTransfer> findByPublicId(String publicId);
 
     /**
      * 스케줄러가 실행 대상으로 가져갈 행 — {@code status} == ACTIVE & {@code next_run_date <= today}.
