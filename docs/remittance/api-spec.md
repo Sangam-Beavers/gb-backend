@@ -26,7 +26,7 @@
 | 지원 은행 목록 | GET | `/api/v1/transfers/supported-banks` | ✅ |
 | 예금주 실명 조회 | GET | `/api/v1/transfers/account-holder?bankCode={}&accountNumber={}` | ✅ |
 | 송금 수수료 조회 | POST | `/api/v1/transfers/fee` | ✅ |
-| 송금 비밀번호 검증 | POST | `/api/v1/transfers/verify-password` | ✅ |
+| 송금 비밀번호 검증 (※ 미구현) | POST | `/api/v1/transfers/verify-password` | ✅ |
 | **송금 실행** | POST | `/api/v1/transfers` | ✅ |
 | 송금 확인증 조회 | GET | `/api/v1/transfers/{id}/receipt` | ✅ |
 | 정기 송금 대상 검증 | GET | `/api/v1/transfers/scheduled/validate` | ✅ |
@@ -146,7 +146,7 @@
 
 - 앱 사용자 검증: `GET /api/v1/transfers/validate-member?email={}` → `data: { receiver_public_id, nickname, is_verified }`
 - 예금주 실명 조회: `GET /api/v1/transfers/account-holder?bankCode={}&accountNumber={}` → `data: { account_holder_name }`
-- 송금 비밀번호 검증: `POST /api/v1/transfers/verify-password` (Body: `password`) → 200/실패
+- 송금 비밀번호 검증: `POST /api/v1/transfers/verify-password` (Body: `password`) → 200/실패. **(※ 미구현 — 별도 작업)**
 
 ---
 
