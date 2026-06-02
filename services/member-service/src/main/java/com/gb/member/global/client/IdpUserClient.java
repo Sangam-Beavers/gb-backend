@@ -29,4 +29,14 @@ public interface IdpUserClient {
      * @return IdP가 부여한 사용자 식별자(Authentik의 경우 user uuid)
      */
     String provisionUser(String email, String name, String rawPassword, String publicId);
+
+    /**
+     * 탈퇴 처리: IdP의 해당 사용자를 비활성화한다({@code is_active=false}). 이후 IdP 로그인/토큰 발급이 막힌다.
+     *
+     * <p>하드 삭제가 아니라 비활성화다 — 로컬 soft delete(deleted_at)와 의미를 맞춰 복구·감사 기록을 보존한다.
+     * 대상 사용자가 IdP에 없으면(이미 삭제 등) 멱등 통과한다(예외로 올리지 않음 — 팀 결정).
+     *
+     * @param authProviderId 가입 시 저장한 IdP 사용자 식별자(= Authentik user uuid). {@code members.auth_provider_id}.
+     */
+    void deactivateUser(String authProviderId);
 }

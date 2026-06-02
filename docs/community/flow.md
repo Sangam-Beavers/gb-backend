@@ -23,13 +23,13 @@
 ```
 [게시글 상세]
 게시글 단건 조회  GET /api/v1/community/posts/{id}
-  → 본문 + 작성자(닉네임/인증배지/온도) + like_count/comment_count
+  → 본문 + 작성자(닉네임/인증배지) + like_count/comment_count
   │
   ├─ 번역 보기  GET /api/v1/community/posts/{id}/translation?language=
   │
 [작성]
 게시글 작성  POST /api/v1/community/posts
-  Body: { category, title, content, image_urls? }
+  Body: { category, title, content }
   → 201 { public_id, ... , like_count:0, comment_count:0 }
   │
 [수정]
@@ -73,41 +73,10 @@
 
 ---
 
-## 5. 신고
-
-```
-게시글 신고  POST /api/v1/community/posts/{postId}/reports
-  Body: { reason(SPAM/INAPPROPRIATE/MISINFORMATION/HATE/OTHER), detail? }
-  → 201 { public_id, post_public_id, reason, created_at }
-  → 중복 신고 시 409 COMMON4091
-  │
-댓글 신고    POST /api/v1/community/posts/{postId}/comments/{commentId}/reports
-  Body: { reason, detail? }
-  → 201
-```
-
----
-
-## 6. 이웃 온도 (조회 / 평가)
-
-```
-이웃 온도 조회  GET /api/v1/community/members/{memberId}/temperature
-  → { member_public_id, nickname, temperature_grade, average_score, review_count }
-  (게시글 카드/상세의 작성자 온도 배지 표시용)
-  │
-이웃 온도 평가  POST /api/v1/community/members/{memberId}/temperature
-  Body: { score(1~5), comment? }
-    - 자기 평가 불가, 중복 평가 불가
-  → user_reviews INSERT → 대상 회원 temperature_grade 재집계
-```
-
----
-
-## 7. 상태/예외 처리 포인트
+## 5. 상태/예외 처리 포인트
 
 - 게시글 없음 → `COMMUNITY4001`(404), 댓글 없음 → `COMMUNITY4002`(404).
 - 본인 글/댓글이 아닌데 수정·삭제 → `COMMON4031`(403).
-- 중복 좋아요/신고/평가 → `COMMON4091`(409) 또는 멱등 처리.
+- 중복 좋아요 → `COMMON4091`(409) 또는 멱등 처리.
 - 잘못된 카테고리/정렬/사유 값 → `COMMON4001`(400).
-- 회원 없음(온도 조회) → `MEMBER4001`(404).
-- 작성/신고/평가 등 생성 계열은 모두 `201 Created`.
+- 작성 등 생성 계열은 모두 `201 Created`.

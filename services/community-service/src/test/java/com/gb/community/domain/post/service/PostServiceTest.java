@@ -53,12 +53,12 @@ class PostServiceTest {
     private static final String OTHER = "00000000-0000-0000-0000-000000000009";
     private static final String PID = "post-uuid-1";
 
-    private static final MemberInfo MINH = new MemberInfo("Minh", true, "GREEN");
+    private static final MemberInfo MINH = new MemberInfo("Minh", true);
 
     // ----- create -----
 
     @Test
-    @DisplayName("작성 정상: 저장 + 작성자 정보 매핑, image_urls는 빈 배열, category 문자열 매핑")
+    @DisplayName("작성 정상: 저장 + 작성자 정보 매핑, category 문자열 매핑")
     void createPost_정상() {
         Post saved = Post.of(USER, PostCategory.JOB, "제목", "본문");
         given(postRepository.save(any(Post.class))).willReturn(saved);
@@ -69,10 +69,8 @@ class PostServiceTest {
         assertThat(res.getCategory()).isEqualTo("JOB");
         assertThat(res.getTitle()).isEqualTo("제목");
         assertThat(res.getContent()).isEqualTo("본문");
-        assertThat(res.getImageUrls()).isEmpty();
         assertThat(res.getAuthorNickname()).isEqualTo("Minh");
         assertThat(res.isAuthorIsVerified()).isTrue();
-        assertThat(res.getAuthorTemperature()).isEqualTo("GREEN");
         verify(postRepository).save(any(Post.class));
     }
 
@@ -296,7 +294,7 @@ class PostServiceTest {
         Page<Post> page = new PageImpl<>(List.of(p1, p2), PageRequest.of(0, 20), 2);
         given(postRepository.search(any(), any(), any())).willReturn(page);
         given(memberClient.getMember(USER)).willReturn(MINH);
-        given(memberClient.getMember(OTHER)).willReturn(new MemberInfo("Sokha", false, "YELLOW"));
+        given(memberClient.getMember(OTHER)).willReturn(new MemberInfo("Sokha", false));
 
         PostListResponse res = service.getPosts(null, null, "latest", 0, 20);
 

@@ -1,7 +1,7 @@
 # 데이터베이스 설계 (Database)
 
 > **DB:** MySQL 8.0 (Aurora MySQL = 운영/스테이징 · 온프렘 MySQL = 개발, 공통 스키마)
-> **총 테이블 수:** 15개
+> **총 테이블 수:** 14개
 > **AI 분석 결과:** MySQL `document_results`에 **직접 저장** — **DynamoDB 미사용**
 > Claude Code는 Entity/Repository를 만들 때 이 스키마와 참조 규칙을 그대로 따른다.
 
@@ -11,13 +11,13 @@
 
 ### (1) MSA 경계 참조 = `user_public_id` (UUID, 물리 FK 없음)
 
-- **member 도메인(`users`, `user_verifications`) 내부**에서는 `users.id`(BIGINT FK)를 쓴다.
+- **member 도메인(`members`, `user_verifications`) 내부**에서는 `members.id`(BIGINT FK)를 쓴다.
 - **member 도메인 밖**(wallet/document/community)에서 회원을 가리킬 때는 **`user_public_id`(VARCHAR(36), 물리 FK 없음, 논리 참조)** 만 쓴다.
-- `users.id`(BIGINT 순번)는 **member 도메인 경계를 절대 벗어나지 않는다.** → 순번 노출/추측 차단 + 향후 물리 DB 분리 대비.
+- `members.id`(BIGINT 순번)는 **member 도메인 경계를 절대 벗어나지 않는다.** → 순번 노출/추측 차단 + 향후 물리 DB 분리 대비.
 
 > 현재는 단일 Aurora 안에 스키마만 분리한 상태다. 이 규칙의 실효는 "지금 장애 격리"가 아니라 "미래에 wallet/community/document를 별도 물리 DB로 승급할 때 무비용 대비"다.
 
-대상(밖에서 `user_public_id`로 참조): `wallets`, `bank_accounts`, `transaction_audit_logs`, `document_submissions`, `posts`, `comments`, `likes`, `user_reviews(reviewer/reviewee)`.
+대상(밖에서 `user_public_id`로 참조): `wallets`, `bank_accounts`, `transaction_audit_logs`, `document_submissions`, `posts`, `comments`, `likes`.
 
 ### (2) 금융 무결성
 
@@ -33,7 +33,7 @@
 
 | # | 도메인 | 테이블 | 핵심 역할 |
 | --- | --- | --- | --- |
-| 1 | member | `users` | 회원 기본 정보 + 이웃 온도 등급 |
+| 1 | member | `members` | 회원 기본 정보 |
 | 2 | member | `user_verifications` | 신분증 인증 → 인증 배지 근거 |
 | 3 | wallet | `banks` | 은행 마스터 (Beaver/Quokka Bank 포함) |
 | 4 | wallet | `wallets` | 사용자 주머니 메타 |
@@ -47,7 +47,6 @@
 | 12 | community | `posts` | 게시글 + 번역 캐시 |
 | 13 | community | `comments` | 댓글 + 대댓글 |
 | 14 | community | `likes` | 게시글/댓글 좋아요 통합 |
-| 15 | community | `user_reviews` | 이웃 온도 평가 기록 |
 
 > **통화 마스터 테이블 없음** — 지원 통화 4개(KRW/USD/PHP/VND) 고정. `currency_code`를 VARCHAR로 직접 저장.
 
@@ -55,8 +54,10 @@
 
 ## 2. member 도메인
 
-### `users`
+### `members`
 > 모든 도메인이 참조하는 기반 테이블. `public_id`가 회원의 유일한 대외 식별자.
+> 엔티티 `@Table(name = "members")`가 SSOT다(과거 표기 `users`에서 정정). `created_at`/`updated_at`은
+> `BaseEntity`(JPA Auditing), `deleted_at`은 엔티티가 직접 채운다(탈퇴 soft delete).
 
 | 컬럼 | 타입 | 제약 | 설명 |
 | --- | --- | --- | --- |
@@ -64,10 +65,11 @@
 | `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | 대외 UUID. 타 도메인은 이 값으로만 회원 참조 |
 | `auth_provider_id` | VARCHAR(255) | UNIQUE, NOT NULL | JWT sub. 개발(Authentik)/운영(Cognito) 공통 컬럼 |
 | `email` | VARCHAR(255) | UNIQUE, NOT NULL | 이메일 |
+| `name` | VARCHAR(100) | NOT NULL | 이름 |
 | `nickname` | VARCHAR(50) | NOT NULL | 닉네임 |
 | `nationality` | VARCHAR(10) | NOT NULL | 국적 코드 (KR, VN, PH 등) |
+| `language` | VARCHAR(10) | NOT NULL | 주 사용 언어 (BCP 47 소문자, 예: "vi") |
 | `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | 인증 배지 여부 |
-| `temperature_grade` | VARCHAR(10) | NOT NULL, DEFAULT 'GREEN' | 이웃 온도 (RED/YELLOW/GREEN/PURPLE/BLUE) |
 | `created_at` | DATETIME | NOT NULL | |
 | `updated_at` | DATETIME | NOT NULL | |
 | `deleted_at` | DATETIME | NULL | soft delete |
@@ -75,12 +77,12 @@
 > 환경별 `auth_provider_id`: 개발 `"authentik|..."`, 운영 `"ap-northeast-2_...|..."`. Spring은 `issuer-uri` 설정만 다르게.
 
 ### `user_verifications`
-> 신분증 인증. APPROVED 시 `users.is_verified = TRUE`. **member 내부 테이블 → `user_id`는 BIGINT FK 유지.**
+> 신분증 인증. APPROVED 시 `members.is_verified = TRUE`. **member 내부 테이블 → `user_id`는 BIGINT FK 유지.**
 
 | 컬럼 | 타입 | 제약 | 설명 |
 | --- | --- | --- | --- |
 | `id` | BIGINT | PK, AI | |
-| `user_id` | BIGINT | FK → users.id, NOT NULL | member 내부 참조 → BIGINT FK |
+| `user_id` | BIGINT | FK → members.id, NOT NULL | member 내부 참조 → BIGINT FK |
 | `document_type` | VARCHAR(30) | NOT NULL | 신분증 유형 (ALIEN_REGISTRATION/PASSPORT/NATIONAL_ID) ※ API에선 `identity_document_type` |
 | `document_number` | VARCHAR(100) | NOT NULL | **AES-256 암호화 저장** |
 | `s3_key` | VARCHAR(500) | NOT NULL | 신분증 이미지 S3 경로 |
@@ -321,26 +323,12 @@
 
 > `(user_public_id, target_type, target_id)` 복합 UNIQUE.
 
-### `user_reviews`
-> 이웃 온도 평가. 집계는 `users.temperature_grade`에 반영.
-
-| 컬럼 | 타입 | 제약 | 설명 |
-| --- | --- | --- | --- |
-| `id` | BIGINT | PK, AI | |
-| `reviewer_public_id` | VARCHAR(36) | NOT NULL | **평가자 논리 참조** |
-| `reviewee_public_id` | VARCHAR(36) | NOT NULL | **피평가자 논리 참조** |
-| `score` | INT | NOT NULL | 1~5 |
-| `comment` | VARCHAR(500) | NULL | |
-| `created_at` | DATETIME | NOT NULL | |
-
-> `(reviewer_public_id, reviewee_public_id)` 복합 UNIQUE.
-
 ---
 
 ## 6. 공통 컬럼 규약
 
 - `created_at` / `updated_at` 모든 테이블 공통 (DATETIME, NOT NULL)
-- soft delete 대상: `users`, `posts`, `comments` (`deleted_at` NULL이면 활성)
+- soft delete 대상: `members`, `posts`, `comments` (`deleted_at` NULL이면 활성)
 - 외부 노출 식별자: `public_id` (UUID, VARCHAR(36))
 
 ---
