@@ -206,7 +206,7 @@ message: "회원가입이 완료되었습니다."
 | `profile_image_url` | string | Y | 프로필 사진 URL (미설정 시 null) |
 | `created_at` | string | N | 가입 일시 (ISO 8601 UTC Z) |
 
-**Error**: 401 COMMON4011 / 404 MEMBER4001
+**Error**: 401 AUTH4011 / 404 MEMBER4001
 
 ---
 
@@ -216,6 +216,23 @@ message: "회원가입이 완료되었습니다."
 - 프로필 사진: `PATCH /api/v1/members/me/profile-image` → 200
 - 알림 설정 조회/저장: `GET`/`PATCH /api/v1/members/me/notification-settings`
 - 언어 설정 조회/변경: `GET`/`PATCH /api/v1/members/me/language`
+
+### 10-1. 언어 설정 (구현됨)
+
+주 사용 언어는 자유 문자열(BCP 47, 예 `"vi"`, `"ko"`)로 저장한다(지원 언어 화이트리스트/enum 미정의 — 검증은 필수 여부만). 본인 식별은 JWT claim `public_id`.
+
+- **조회** `GET /api/v1/members/me/language` · Auth ✅
+  **Response 200** — `data`: `{ "language": "vi" }`
+- **변경** `PATCH /api/v1/members/me/language` · Auth ✅
+  **Request** `{ "language": "ko" }` (필수, 빈 값 불가)
+  **Response 200** — `data`: `{ "language": "ko" }`
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (language 누락/빈 값) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | MEMBER4001 | 존재하지 않는 회원입니다. |
 
 ---
 
@@ -237,7 +254,7 @@ message: "신분증 인증 요청이 접수되었습니다. 검토 후 결과를
 | HTTP | code | message |
 | --- | --- | --- |
 | 400 | COMMON4001 | 요청 값이 올바르지 않습니다. |
-| 401 | COMMON4011 | 인증 정보가 유효하지 않습니다. |
+| 401 | AUTH4011 | 인증이 필요합니다. |
 | 409 | COMMON4091 | 이미 존재하는 리소스입니다. (이미 검토 중/완료) |
 
 ---
@@ -254,13 +271,27 @@ message: "신분증 인증 요청이 접수되었습니다. 검토 후 결과를
 | `reviewed_at` | string | Y | 검토 시각 (미검토 시 null) |
 | `created_at` | string | N | 요청 시각 |
 
-**Error**: 401 COMMON4011 / 404 MEMBER4001
+**Error**: 401 AUTH4011 / 404 MEMBER4001
 
 ---
 
 ## 13. 탈퇴
 
-`DELETE /api/v1/members/me` · Auth ✅ → soft delete(`users.deleted_at` SET). 200.
+`DELETE /api/v1/members/me` · Auth ✅ → 200 (요청/응답 바디 없음, `data`는 null).
+
+탈퇴는 두 가지를 함께 처리한다:
+1. **로컬 soft delete** — `members.deleted_at`을 현재 시각으로 세팅(row는 보존). 이후 `findByPublicIdAndDeletedAtIsNull` 조회에서 제외된다.
+2. **외부 IdP(Authentik) 사용자 비활성화** — 저장된 `auth_provider_id`(= Authentik user uuid)로 사용자를 찾아 `is_active=false`로 PATCH한다. 이후 IdP 로그인/토큰 발급이 막힌다(하드 삭제 아님 — 복구·감사 보존). 대상이 IdP에 이미 없으면 멱등 통과한다.
+
+> IdP 비활성화 호출은 서비스 트랜잭션의 마지막 단계라, 실패하면 `@Transactional`이 롤백되어 로컬 soft delete도 반영되지 않는다(정합성).
+> 탈퇴자 `email`/`nickname`은 여전히 "사용 중"으로 취급되어 동일 값 재가입은 막힌다(`existsBy*`는 `deleted_at`을 필터하지 않음 — 의도된 동작).
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | MEMBER4001 | 존재하지 않는 회원입니다. |
+| 500 | COMMON5000 | 서버 내부 오류입니다. (IdP 연동 실패) |
 
 ---
 

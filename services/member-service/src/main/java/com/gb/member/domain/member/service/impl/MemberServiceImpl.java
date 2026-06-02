@@ -3,6 +3,7 @@ package com.gb.member.domain.member.service.impl;
 import com.gb.common.exception.BusinessException;
 import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
+import com.gb.member.domain.member.dto.response.LanguageResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
@@ -70,5 +71,35 @@ public class MemberServiceImpl implements MemberService {
     public CheckAvailabilityResponse checkNickname(String nickname) {
         boolean available = !memberRepository.existsByNickname(nickname);
         return CheckAvailabilityResponse.of(available);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public LanguageResponse getLanguage(String userPublicId) {
+        return LanguageResponse.from(getActiveMemberOrThrow(userPublicId));
+    }
+
+    @Override
+    @Transactional
+    public LanguageResponse updateLanguage(String userPublicId, String language) {
+        Member member = getActiveMemberOrThrow(userPublicId);
+        member.changeLanguage(language);          // dirty checking + Auditing(updatedAt) 자동 갱신
+        return LanguageResponse.from(member);
+    }
+
+    @Override
+    @Transactional
+    public void withdraw(String userPublicId) {
+        Member member = getActiveMemberOrThrow(userPublicId);
+        member.softDelete();                      // 로컬 deleted_at 세팅(아직 커밋 전)
+        // 외부 호출은 "마지막 단계"로 — IdP 비활성화가 실패하면 BusinessException이 올라와
+        // @Transactional이 롤백되어 로컬 soft delete도 반영되지 않는다(정합성, 지시서 §F).
+        idpUserClient.deactivateUser(member.getAuthProviderId());
+    }
+
+    /** 탈퇴하지 않은(활성) 회원을 publicId로 조회한다. 없으면 MEMBER4001. */
+    private Member getActiveMemberOrThrow(String userPublicId) {
+        return memberRepository.findByPublicIdAndDeletedAtIsNull(userPublicId)
+                .orElseThrow(() -> new BusinessException(MemberErrorCode.MEMBER_NOT_FOUND));
     }
 }

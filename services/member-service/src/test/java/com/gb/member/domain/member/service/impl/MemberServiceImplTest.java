@@ -5,19 +5,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.gb.common.exception.BusinessException;
+import com.gb.common.exception.CommonErrorCode;
 import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
+import com.gb.member.domain.member.dto.response.LanguageResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
 import com.gb.member.global.client.IdpUserClient;
 import com.gb.member.global.exception.code.MemberErrorCode;
+import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -154,5 +158,117 @@ class MemberServiceImplTest {
 
         assertThat(response.isAvailable()).isFalse();
         verifyNoInteractions(idpUserClient);
+    }
+
+    // ───────────────────────── 언어 조회/변경 ─────────────────────────
+
+    @Test
+    @DisplayName("getLanguage: 활성 회원의 주 사용 언어를 반환한다")
+    void getLanguage_성공() {
+        Member member = memberWithLanguage("vi");
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
+
+        LanguageResponse response = memberService.getLanguage("pub-1");
+
+        assertThat(response.getLanguage()).isEqualTo("vi");
+        // 조회만 — IdP를 건드리지 않아야 한다.
+        verifyNoInteractions(idpUserClient);
+    }
+
+    @Test
+    @DisplayName("getLanguage: 없는(탈퇴 포함) 회원이면 MEMBER4001")
+    void getLanguage_없는회원_MEMBER4001() {
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("nope")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> memberService.getLanguage("nope"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
+
+        verifyNoInteractions(idpUserClient);
+    }
+
+    @Test
+    @DisplayName("updateLanguage: 변경 후 새 언어를 반환하고 엔티티 값도 바뀐다(dirty checking)")
+    void updateLanguage_성공() {
+        Member member = memberWithLanguage("vi");
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
+
+        LanguageResponse response = memberService.updateLanguage("pub-1", "ko");
+
+        assertThat(response.getLanguage()).isEqualTo("ko");
+        assertThat(member.getLanguage()).as("dirty checking 대상 엔티티도 변경됨").isEqualTo("ko");
+        verifyNoInteractions(idpUserClient);
+    }
+
+    @Test
+    @DisplayName("updateLanguage: 없는(탈퇴 포함) 회원이면 MEMBER4001")
+    void updateLanguage_없는회원_MEMBER4001() {
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("nope")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> memberService.updateLanguage("nope", "ko"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
+
+        verifyNoInteractions(idpUserClient);
+    }
+
+    // ───────────────────────────── 탈퇴 ─────────────────────────────
+
+    @Test
+    @DisplayName("withdraw: 로컬 soft delete 후 IdP 비활성화(deactivateUser)를 호출한다")
+    void withdraw_성공() {
+        Member member = memberWithLanguage("vi");
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
+
+        memberService.withdraw("pub-1");
+
+        assertThat(member.getDeletedAt()).as("로컬 soft delete(deleted_at) 세팅됨").isNotNull();
+        // IdP에는 가입 시 저장한 authProviderId(=user uuid)로 비활성화 요청이 나가야 한다.
+        verify(idpUserClient).deactivateUser("idp-sub-uuid-1");
+    }
+
+    @Test
+    @DisplayName("withdraw: 없는(탈퇴 포함) 회원이면 MEMBER4001 + IdP를 건드리지 않는다")
+    void withdraw_없는회원_MEMBER4001() {
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("nope")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> memberService.withdraw("nope"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
+
+        // 없는 회원에게는 IdP 비활성화를 시도하지 않는다(로컬 조회가 먼저).
+        verifyNoInteractions(idpUserClient);
+    }
+
+    @Test
+    @DisplayName("withdraw: IdP 비활성화 실패(COMMON5000) 시 예외를 전파한다(@Transactional 롤백 영역)")
+    void withdraw_IdP실패_예외전파() {
+        Member member = memberWithLanguage("vi");
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
+        doThrow(new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR))
+                .when(idpUserClient).deactivateUser("idp-sub-uuid-1");
+
+        assertThatThrownBy(() -> memberService.withdraw("pub-1"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INTERNAL_SERVER_ERROR);
+
+        verify(idpUserClient).deactivateUser("idp-sub-uuid-1");
+    }
+
+    /** publicId="pub-1", authProviderId="idp-sub-uuid-1" 고정. 언어만 바꿔가며 쓴다. */
+    private Member memberWithLanguage(String language) {
+        return Member.builder()
+                .publicId("pub-1")
+                .email("a@example.com")
+                .name("홍길동")
+                .nickname("gildong")
+                .nationality("VN")
+                .language(language)
+                .authProviderId("idp-sub-uuid-1")
+                .build();
     }
 }
