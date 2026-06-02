@@ -105,12 +105,12 @@ public class BankAccountServiceImpl implements BankAccountService {
     @Override
     @Transactional
     public AccountResponse registerAccountLocked(String userPublicId, RegisterAccountRequest request) {
-        // TODO: DB UNIQUE 최종 안전망은 별도 마이그레이션 이슈로 연기(redis-refactor §5-③/§5-1). 현재는
-        //       lock:account-register:{user} 분산락이 user 단위 직렬화로 중복 계좌·다중 주계좌를 막는다.
+        // TODO: DB UNIQUE 최종 안전망은 별도 마이그레이션 이슈로 연기. 현재는 lock:account-register:{user}
+        //       분산락이 user 단위 직렬화로 중복 계좌·다중 주계좌를 막는다.
         //       후속: bank_accounts에 (user_public_id, bank_id, account_number) UNIQUE 제약 추가(중복 등록의
         //       최종 안전망) — MySQL은 부분 유니크 인덱스 미지원이라 is_primary 단일성은 제약만으론 못 막고
-        //       락이 담당한다. 명세에 UNIQUE 정의가 없어(database.md §131 합의 + dev DB 중복 정리 + soft-delete
-        //       재등록 정책이 얽혀 있음) Redis 작업과 분리해 마이그레이션 이슈에서 도입한다.
+        //       락이 담당한다. database.md UNIQUE 정의 합의 + dev DB 중복 정리 + soft-delete 재등록 정책이
+        //       얽혀 있어 Redis 작업과 분리해 마이그레이션 이슈에서 도입한다.
         if (bankAccountRepository.existsByUserPublicIdAndBank_CodeAndAccountNumberAndIsActiveTrue(
                 userPublicId, request.getBankCode(), request.getAccountNumber())) {
             throw new BusinessException(AccountErrorCode.ACCOUNT_ALREADY_REGISTERED);

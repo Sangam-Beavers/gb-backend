@@ -13,8 +13,7 @@ import org.springframework.context.annotation.Configuration;
  *
  * <p>인증은 OAuth2 Resource Server(방식 B)로, 모든 요청에 IdP가 발급한 Bearer JWT가 필요하다
  * (문서/헬스체크 제외). Swagger UI의 "Authorize" 버튼에 액세스 토큰을 넣어 보호 엔드포인트를 호출할 수 있도록
- * Bearer 보안 스키마를 전역으로 선언한다. 본인 식별자는 토큰 {@code public_id} claim에서 추출되며,
- * 더 이상 {@code X-User-Public-Id} 헤더를 입력하지 않는다.
+ * Bearer 보안 스키마를 전역으로 선언한다. 본인 식별자는 토큰 {@code public_id} claim에서 추출된다.
  */
 @Configuration
 public class SwaggerConfig {

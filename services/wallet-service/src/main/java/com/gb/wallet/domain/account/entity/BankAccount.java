@@ -24,8 +24,7 @@ import lombok.NoArgsConstructor;
  * {@code @ManyToOne} 매핑하지 않는다. 사용자별 목록 조회가 핵심 액세스 패턴이라
  * {@code user_public_id} 단일 컬럼 인덱스를 둔다.
  *
- * <p>{@code account_number}는 현재 평문 저장이며 응답 직전 마스킹만 적용된다.
- * 실제 컬럼 암호화는 후속 보안 이슈에서 다룬다.
+ * <p>{@code account_number}는 평문 저장이며 응답 직전 마스킹만 적용된다.
  */
 @Entity
 @Getter

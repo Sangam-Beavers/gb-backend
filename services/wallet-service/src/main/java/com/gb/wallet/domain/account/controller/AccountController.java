@@ -146,7 +146,7 @@ public class AccountController {
             description = "은행 코드/계좌번호/예금주명으로 외부 Mock 은행에 자동이체 인증을 요청해 "
                     + "account_token을 발급받는다. 본체 DB에는 아무것도 쓰지 않으며, "
                     + "이어지는 POST /accounts 호출 시 클라이언트가 이 토큰을 함께 보내야 한다. "
-                    + "실제 자동이체 인증은 미구현(Mock/화면용).")
+                    + "자동이체 인증은 Mock 은행 시뮬레이션으로 처리된다(실 은행 연동 전).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
