@@ -34,6 +34,13 @@ public class RemittanceAttemptWriterImpl implements RemittanceAttemptWriter {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(String idempotencyKey, String userPublicId, Long bankAccountId,
                        BigDecimal amount, CurrencyType currency) {
+        // (1) 사전 체크 — 흔적이 이미 있으면 INSERT 자체를 건너뛴다(WalletBalanceWriterImpl 동일 패턴).
+        //     멱등성 재요청·재시도 케이스에서 결정적이라 대부분의 UNIQUE 위반이 여기서 회피된다.
+        if (remittanceAttemptRepository.existsByIdempotencyKey(idempotencyKey)) {
+            return;
+        }
+        // (2) 잔여 race 흡수 — 사전 체크 직후 다른 트랜잭션이 같은 키로 먼저 INSERT한 경우에만 도달한다.
+        //     REQUIRES_NEW로 분리돼 있어 본 트랜잭션만 rollback되고 메인은 정상 진행한다.
         try {
             remittanceAttemptRepository.saveAndFlush(RemittanceAttempt.builder()
                     .idempotencyKey(idempotencyKey)
@@ -45,7 +52,7 @@ public class RemittanceAttemptWriterImpl implements RemittanceAttemptWriter {
                     .build());
         } catch (DataIntegrityViolationException concurrentAttempt) {
             // 같은 idempotency_key로 다른 트랜잭션이 먼저 흔적을 남겼다 → 흔적은 존재하므로 무시.
-            // 멱등성 재요청/race에서 정상 경로다. 본 호출자(메인 트랜잭션)는 영향 없이 외부 호출로 진행한다.
+            // 본 호출자(메인 트랜잭션)는 영향 없이 외부 호출로 진행한다.
         }
     }
 }
