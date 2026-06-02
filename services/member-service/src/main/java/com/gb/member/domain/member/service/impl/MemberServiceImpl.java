@@ -93,7 +93,10 @@ public class MemberServiceImpl implements MemberService {
         Member member = getActiveMemberOrThrow(userPublicId);
         member.softDelete();                      // 로컬 deleted_at 세팅(아직 커밋 전)
         // 외부 호출은 "마지막 단계"로 — IdP 비활성화가 실패하면 BusinessException이 올라와
-        // @Transactional이 롤백되어 로컬 soft delete도 반영되지 않는다(정합성, 지시서 §F).
+        // @Transactional이 롤백되어 로컬 soft delete도 반영되지 않는다(정합성).
+        // TODO(알려진 한계): IdP 비활성화 성공 직후 DB 커밋이 실패하는 드문 구간은 이중 쓰기(dual-write)라
+        //   완전 원자적이지 않다(IdP만 비활성·로컬 활성). 완전 해소는 PENDING_WITHDRAWAL 상태 +
+        //   outbox/재시도 워커(saga)가 필요하나 인프라 비용이 커 v1 범위 밖으로 보류한다.
         idpUserClient.deactivateUser(member.getAuthProviderId());
     }
 
