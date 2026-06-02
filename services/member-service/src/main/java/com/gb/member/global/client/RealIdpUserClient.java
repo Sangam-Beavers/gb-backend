@@ -103,6 +103,38 @@ public class RealIdpUserClient implements IdpUserClient {
         }
     }
 
+    @Override
+    public void changePassword(String email, String newPassword) {
+        try {
+            // 1) email(=username)으로 사용자 조회 → pk 확보. Authentik: GET /core/users/?username={email}
+            UserListResponse list = restClient.get()
+                    .uri(apiBaseUri + "/core/users/?username=" + email)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)
+                    .retrieve()
+                    .body(UserListResponse.class);
+
+            if (list == null || list.results() == null || list.results().isEmpty()
+                    || list.results().get(0).pk() == null) {
+                // IdP에 해당 사용자가 없음 — 우리 DB엔 있는데 IdP엔 없는 비정상이거나 잘못된 이메일.
+                log.error("Authentik 사용자 조회 실패(비번 변경): email={}", email);
+                throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+            }
+
+            // 2) 그 pk로 비밀번호 설정(204).
+            restClient.post()
+                    .uri(apiBaseUri + "/core/users/" + list.results().get(0).pk() + "/set_password/")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(toJson(Map.of("password", newPassword)))
+                    .retrieve()
+                    .toBodilessEntity();
+
+        } catch (RestClientException e) {
+            log.error("Authentik 비밀번호 변경 실패: email={}, msg={}", email, e.getMessage());
+            throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+        }
+    }
+
     /** 요청 본문 맵을 JSON 문자열로 직렬화한다. 실패는 연동 불가이므로 COMMON5000으로 변환. */
     private String toJson(Map<String, Object> body) {
         try {
@@ -117,5 +149,13 @@ public class RealIdpUserClient implements IdpUserClient {
     private record CreateUserResponse(
             @JsonProperty("pk") Integer pk,
             @JsonProperty("uuid") String uuid) {
+    }
+
+    /** 사용자 목록 조회 응답(필요한 필드만). username 필터로 조회 시 results[0].pk를 쓴다. */
+    private record UserListResponse(
+            @JsonProperty("results") java.util.List<UserItem> results) {
+    }
+
+    private record UserItem(@JsonProperty("pk") Integer pk) {
     }
 }

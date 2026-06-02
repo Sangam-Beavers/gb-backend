@@ -29,4 +29,15 @@ public interface IdpUserClient {
      * @return IdP가 부여한 사용자 식별자(Authentik의 경우 user uuid)
      */
     String provisionUser(String email, String name, String rawPassword, String publicId);
+
+    /**
+     * 기존 IdP 사용자의 비밀번호를 새 값으로 변경한다(비밀번호 재설정용).
+     *
+     * <p>비밀번호는 IdP가 보유하므로 변경도 IdP 관리 API(set_password)로 한다. 회원가입과 달리
+     * 기존 사용자라 pk를 모르므로, email(=username)로 사용자를 먼저 조회해 pk를 얻은 뒤 set_password를 호출한다.
+     *
+     * @param email       대상 사용자 이메일(IdP username 겸용)
+     * @param newPassword 새 평문 비밀번호(IdP에만 저장된다)
+     */
+    void changePassword(String email, String newPassword);
 }
