@@ -48,13 +48,18 @@
 
 ---
 
-## 4. 인증 기술 메모
+## 4. 인증 기술 메모 (방식 B = 외부 IdP 검증 전용)
 
-- **JWT 기반.** Access / Refresh 토큰 발급.
-- 환경별 Provider: 개발 = Authentik, 운영/스테이징 = Cognito. (Spring은 `issuer-uri` 설정만 다름)
-- `users.auth_provider_id`에 JWT `sub` 저장 (환경 무관 동일 컬럼).
-- 로그아웃 시 토큰을 **Redis 블랙리스트**에 등록(즉시 무효화).
-- 로그인 실패는 **Redis Rate Limiting**으로 브루트포스 차단.
+- **토큰 발급·비밀번호 보관은 외부 IdP가 담당**, 백엔드는 검증만(OAuth2 Resource Server). 자체 JWT 발급 안 함.
+- 로그인은 프론트가 IdP와 직접(Authorization Code flow). 백엔드 로그인/재발급 엔드포인트 없음.
+- 환경별 IdP: 개발 = Authentik, 운영/스테이징 = Cognito. (Spring은 `issuer-uri` 설정만 다름)
+- `users.auth_provider_id`에 JWT `sub`(IdP 식별자) 저장. 본인 식별용 `public_id`는 가입 시 IdP attribute로
+  저장해 토큰 custom claim(`public_id`)으로 노출 → `@CurrentUserPublicId`로 추출(#83).
+- ⚠️ 아래는 방식 B에서 재정의/확인이 필요한 항목 (팀 논의):
+  - 로그아웃 무효화 방식 (로컬삭제 / IdP end-session / 블랙리스트 중 택1)
+  - 비밀번호 재설정·이메일 인증 → IdP 경유 + SMTP(메일 발송) 인프라 선행
+  - 로그인 실패 Rate Limiting → 로그인이 IdP에서 일어나므로 적용 위치 재검토
+  - 상세: [`spec-realignment-auth-b.md`](./spec-realignment-auth-b.md)
 
 ---
 

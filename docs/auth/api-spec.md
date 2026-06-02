@@ -4,24 +4,29 @@
 > 전역 규칙(응답 래퍼/에러 코드/금액·식별자·시각)은 [`../conventions.md`](../conventions.md)를 따른다.
 > 모든 성공 응답은 `{ "success": true, "data": {...}, "message": "..." }` 래퍼로 감싼다. 아래 표의 필드는 `data` 내부 필드다.
 >
-> ⚠️ **인증 현황:** 표의 `Auth ✅`는 최종 설계상 인증이 필요한 엔드포인트라는 뜻이다. **인증은 현재 미구현**이므로, 본인 식별이 필요한 API(`/members/me*` 등)는 지금 단계에서 JWT 추출 대신 **`@RequestHeader("X-User-Public-Id")` + TODO**로 처리한다. 상세: [`../conventions.md`](../conventions.md) §14.
+> ⚠️ **인증 방식 = 방식 B (외부 IdP 검증 전용 + Authorization Code flow).** 토큰 발급·비밀번호 보관은 외부 IdP(개발=Authentik, 운영=Cognito)가 담당하고, 백엔드는 들어온 JWT를 **검증만** 한다(OAuth2 Resource Server). 로그인은 프론트(앱)가 IdP와 직접 수행하며, 백엔드에는 로그인/토큰발급 엔드포인트가 없다.
+>
+> 본인 식별은 JWT custom claim **`public_id`**(UUID)에서 추출한다 — 컨트롤러에서 `@CurrentUserPublicId String userPublicId`로 주입받는다(`X-User-Public-Id` 헤더 임시처리는 인증 적용 완료된 서비스에서 대체됨). claim 누락/토큰 무효는 `AUTH4011`로 fail-fast. 회원가입 시 우리 `public_id`를 IdP 사용자 attribute로 저장해 토큰 claim으로 노출한다(토큰 sub ↔ publicId 매핑). 상세: [`../conventions.md`](../conventions.md) §9·§14, [`login-authorization-code.md`](./login-authorization-code.md), [`spec-realignment-auth-b.md`](./spec-realignment-auth-b.md).
+>
+> 🔧 **방식 B 정합화 진행 중:** 아래 명세 중 일부는 방식 A(백엔드 자체 JWT 발급) 기준 잔재가 남아 있다. **확정된 변경**(로그인·토큰재발급 폐기, 회원가입 IdP 프로비저닝)은 반영했고, **팀 논의가 필요한 항목**(Google 로그인·로그아웃·비번 재설정·이메일 인증)은 "⚠️ 재정의 필요"로 표시만 했다. 결정 후 확정 반영한다.
 
 ---
 
 ## 엔드포인트 목록
 
 ### 인증 (/auth)
-| API | Method | Endpoint | Auth |
-| --- | --- | --- | --- |
-| 이메일 로그인 | POST | `/api/v1/auth/login` | ❌ |
-| 회원가입 | POST | `/api/v1/auth/register` | ❌ |
-| Google 소셜 로그인 | POST | `/api/v1/auth/login/google` | ❌ |
-| 토큰 재발급 | POST | `/api/v1/auth/reissue` | ❌ (refresh_token 자격) |
-| 로그아웃 | POST | `/api/v1/auth/logout` | ✅ |
-| 가입 인증 이메일 발송 | POST | `/api/v1/auth/email/verify-request` | ❌ |
-| 재설정 링크 발송 | POST | `/api/v1/auth/password/reset-request` | ❌ |
-| 비밀번호 재설정 | POST | `/api/v1/auth/password/reset` | ❌ |
-| 서버 health check | GET | `/health` | ❌ |
+| API | Method | Endpoint | Auth | 비고 |
+| --- | --- | --- | --- | --- |
+| ~~이메일 로그인~~ | ~~POST~~ | ~~`/api/v1/auth/login`~~ | — | ❌ **폐기** — 로그인은 프론트가 IdP와 직접(Authorization Code flow). 백엔드 엔드포인트 없음 |
+| 회원가입 | POST | `/api/v1/auth/register` | ❌ | ✅ 구현 완료 (IdP 프로비저닝 + publicId attribute 저장) |
+| Google 소셜 로그인 | POST | `/api/v1/auth/login/google` | ❌ | ⚠️ 방식 B 재정의 필요 (Authentik 소셜 연동 중개로 전환 검토 — 팀 논의) |
+| ~~토큰 재발급~~ | ~~POST~~ | ~~`/api/v1/auth/reissue`~~ | — | ❌ **폐기 검토** — 토큰 갱신은 IdP 소관. (Kyubo 담당 확인) |
+| 로그아웃 | POST | `/api/v1/auth/logout` | ✅ | ⚠️ 방식 B 재정의 필요 (Stateless라 무효화 방식 재논의 — 로컬삭제/IdP end-session/블랙리스트) |
+| 가입 인증 이메일 발송 | POST | `/api/v1/auth/email/verify-request` | ❌ | ⚠️ SMTP(메일 발송) 인프라 선행 필요 |
+| 재설정 링크 발송 | POST | `/api/v1/auth/password/reset-request` | ❌ | ⚠️ SMTP 선행 + 비번은 IdP 보관 → IdP 경유 재설정 |
+| 비밀번호 재설정 | POST | `/api/v1/auth/password/reset` | ❌ | ⚠️ SMTP 선행 + IdP set_password 경유 |
+| 서버 health check | GET | `/health` | ❌ | |
+| 이메일/닉네임 중복 확인 | GET | `/api/v1/members/check-*` | ❌ | ✅ 구현 완료 |
 
 ### 회원 (/members)
 | API | Method | Endpoint | Auth |
@@ -42,31 +47,13 @@
 
 ---
 
-## 1. 이메일 로그인
+## 1. 이메일 로그인 — ❌ 폐기 (방식 B)
 
-`POST /api/v1/auth/login` · Auth ❌
-
-**Request Body**
-| 필드 | 타입 | 필수 | 설명 |
-| --- | --- | --- | --- |
-| `email` | string | O | 로그인 이메일 |
-| `password` | string | O | 비밀번호 |
-
-**Response 200** — `data`
-| 필드 | 타입 | nullable | 설명 |
-| --- | --- | --- | --- |
-| `access_token` | string | N | JWT 액세스 토큰 |
-| `refresh_token` | string | N | JWT 리프레시 토큰 |
-| `token_type` | string | N | 항상 "Bearer" |
-| `expires_in` | integer | N | 액세스 토큰 만료(초) |
-
-**Error**
-| HTTP | code | message |
-| --- | --- | --- |
-| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. |
-| 401 | AUTH4001 | 이메일 또는 비밀번호가 올바르지 않습니다. |
-| 403 | AUTH4004 | 이메일 인증이 완료되지 않은 계정입니다. |
-| 429 | COMMON4291 | 요청 횟수를 초과했습니다. 잠시 후 다시 시도해주세요. |
+> **이 엔드포인트는 폐기되었다.** 방식 B에서 로그인은 프론트(앱)가 IdP 로그인 페이지에서 직접
+> 수행하고(Authorization Code flow), 백엔드는 토큰을 발급·중계하지 않는다. 따라서 `POST /api/v1/auth/login`,
+> `access_token`/`refresh_token` 발급, `AUTH4001`(비밀번호 불일치) 등 방식 A 잔재는 모두 제거된다.
+> 백엔드는 들어온 토큰을 OAuth2 Resource Server로 검증만 한다(검증 실패 → AUTH4011).
+> 상세: [`login-authorization-code.md`](./login-authorization-code.md).
 
 ---
 
@@ -86,8 +73,14 @@
 | `terms_agreed` | boolean | O | 이용약관 동의 |
 | `privacy_agreed` | boolean | O | 개인정보 처리방침 동의 |
 
-**Response 201** — `data`: `{ "email": "user@example.com" }`
-message: "회원가입이 완료되었습니다. 이메일 인증을 진행해주세요."
+**Response 201** — `data`: `{ "public_id": "...", "email": "user@example.com", "nickname": "..." }`
+message: "회원가입이 완료되었습니다."
+
+> ✅ **구현 완료 (방식 B).** 비밀번호는 우리 DB에 저장하지 않고 IdP(Authentik)가 보유·검증한다.
+> 가입 흐름: ① 이메일/닉네임 중복 검사 → ② `public_id`(UUID) 선생성 → ③ IdP에 사용자 프로비저닝
+> (`IdpUserClient`, 비밀번호 설정 + `attributes.public_id` 저장) → ④ 받은 IdP sub를 `authProviderId`로
+> 우리 DB에 저장. IdP의 `public_id` attribute는 로그인 토큰의 custom claim(`public_id`)으로 노출돼
+> "토큰 sub ↔ 우리 회원" 매핑에 쓰인다(#83).
 
 **Error**
 | HTTP | code | message |
@@ -95,11 +88,17 @@ message: "회원가입이 완료되었습니다. 이메일 인증을 진행해�
 | 400 | COMMON4001 | 요청 값이 올바르지 않습니다. |
 | 409 | MEMBER4002 | 이미 사용 중인 이메일입니다. |
 | 409 | MEMBER4003 | 이미 사용 중인 닉네임입니다. |
-| 422 | COMMON4221 | 처리할 수 없는 요청입니다. |
+| 500 | COMMON5000 | IdP 프로비저닝 실패 등 서버 오류. |
 
 ---
 
-## 3. Google 소셜 로그인
+## 3. Google 소셜 로그인 — ⚠️ 방식 B 재정의 필요 (팀 논의)
+
+> 아래는 방식 A(백엔드가 Google 인가코드 받아 자체 토큰 발급) 기준 잔재다. 방식 B에서는
+> **Authentik의 소셜 로그인(Source/Federation) 기능으로 Google을 연동**하는 방안을 검토한다 —
+> 사용자는 IdP 로그인 페이지에서 "Google로 로그인"을 누르고, 이후는 일반 로그인과 동일(백엔드는 토큰 검증만).
+> 이 경우 `POST /auth/login/google`(백엔드가 auth_code 처리)·`AUTH4006`은 불필요해진다.
+> 신규 소셜 회원의 도메인 필드 보완(`social-profile`)만 우리 API가 담당. **확정 전까지 아래 명세는 참고용.**
 
 `POST /api/v1/auth/login/google` · Auth ❌
 
@@ -128,7 +127,11 @@ message: "회원가입이 완료되었습니다. 이메일 인증을 진행해�
 
 ---
 
-## 4. 토큰 재발급
+## 4. 토큰 재발급 — ❌ 폐기 검토 (방식 B / Kyubo 담당 확인)
+
+> 방식 B에서 토큰 발급·갱신은 IdP 소관이므로 백엔드 재발급 엔드포인트는 불필요하다.
+> 프론트가 IdP와 토큰 갱신(refresh)을 직접 처리한다. 아래는 방식 A 잔재이며 폐기 대상.
+> (이 엔드포인트는 Kyubo 담당분이므로 폐기 확정은 담당자 확인 후.)
 
 `POST /api/v1/auth/reissue` · Auth ❌ (Body의 refresh_token이 자격증명)
 
@@ -150,26 +153,33 @@ message: "회원가입이 완료되었습니다. 이메일 인증을 진행해�
 
 ---
 
-## 5. 로그아웃
+## 5. 로그아웃 — ⚠️ 방식 B 재정의 필요 (팀 논의)
 
 `POST /api/v1/auth/logout` · Auth ✅
 
-해당 토큰을 Redis 블랙리스트(`blacklist:{token}`, TTL=남은 만료)에 등록. Response 200.
+> 방식 A 기준 "Redis 블랙리스트 등록"은 방식 B(Stateless)와 전제가 다르다. 백엔드가 토큰을 보관하지
+> 않으므로 무효화 방식을 팀이 정해야 한다. 선택지: ① 클라이언트 로컬 토큰 삭제만(가장 단순) /
+> ② IdP end-session 연동(IdP 세션까지 종료) / ③ Redis 블랙리스트 별도 도입(즉시 무효화가 꼭 필요할 때).
+> **확정 후 반영.** (참고: [`spec-realignment-auth-b.md`](./spec-realignment-auth-b.md) §3)
 
 ---
 
-## 6. 비밀번호 찾기/재설정
+## 6. 비밀번호 찾기/재설정 — ⚠️ 방식 B 재정의 + SMTP 선행 필요
 
 - 재설정 링크 발송: `POST /api/v1/auth/password/reset-request` (Body: `email`) → 이메일 발송. 200.
 - 비밀번호 재설정: `POST /api/v1/auth/password/reset` (Body: `token`, `new_password`) → 200.
 
-> 작업표 CSV에는 `reset-email`도 등장한다. 정본 경로는 `reset-request`(링크 발송) + `reset`(실제 재설정). 구현 시 둘 중 하나로 통일.
+> 방식 B에서 비밀번호는 IdP가 보관하므로 재설정도 IdP를 경유한다(Authentik recovery flow 위임 또는
+> 백엔드가 IdP `set_password` 호출). 어느 쪽이든 **재설정 메일 발송용 SMTP 인프라가 선행**돼야 한다.
+> SMTP 가용 여부 확인 + 방식 결정 후 구현. (참고: [`spec-realignment-auth-b.md`](./spec-realignment-auth-b.md) §4)
 
 ---
 
-## 7. 가입 인증 이메일 발송
+## 7. 가입 인증 이메일 발송 — ⚠️ SMTP 선행 필요
 
 `POST /api/v1/auth/email/verify-request` · Auth ❌ (Body: `email`) → 인증 메일 발송. 200.
+
+> 메일 발송(SMTP) 인프라가 선행돼야 구현 가능. 개발기 SMTP 가용 여부 확인 필요.
 
 ---
 
@@ -182,7 +192,7 @@ message: "회원가입이 완료되었습니다. 이메일 인증을 진행해�
 
 ## 9. 내 프로필 조회
 
-`GET /api/v1/members/me` · Auth ✅ (본인 식별: 최종은 JWT sub, 현재는 `X-User-Public-Id` 헤더 — conventions §14)
+`GET /api/v1/members/me` · Auth ✅ (본인 식별: JWT custom claim `public_id` → `@CurrentUserPublicId`. 인증 미적용 서비스는 `X-User-Public-Id` 헤더 임시처리 — conventions §9·§14)
 
 **Response 200** — `data`
 | 필드 | 타입 | nullable | 설명 |
