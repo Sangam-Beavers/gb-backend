@@ -3,14 +3,24 @@ package com.gb.member.domain.member.service;
 import com.gb.member.domain.member.dto.request.PasswordResetEmailRequest;
 import com.gb.member.domain.member.dto.request.PasswordResetRequest;
 import com.gb.member.domain.member.dto.request.SignupRequest;
+import com.gb.member.domain.member.dto.request.SocialProfileRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.LanguageResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
+import com.gb.member.domain.member.dto.response.SocialProfileResponse;
 
 public interface MemberService {
 
     /** 신규 회원을 등록하고 가입 결과(publicId/email/nickname)를 반환한다. */
     SignupResponse signup(SignupRequest request);
+
+    /**
+     * 소셜(Google) 신규 회원의 추가 정보(닉네임/국적/언어)를 받아 members row를 최초 생성한다(JIT).
+     * publicId/email/name/authProviderId는 검증된 토큰(JWT claim)에서 받아 채운다.
+     */
+    SocialProfileResponse completeSocialProfile(
+            String publicId, String email, String name, String authProviderId,
+            SocialProfileRequest request);
 
     /** 이메일이 사용 가능한지(중복이 아닌지) 확인한다. */
     CheckAvailabilityResponse checkEmail(String email);

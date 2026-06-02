@@ -1,12 +1,15 @@
 package com.gb.member.domain.member.service.impl;
 
 import com.gb.common.exception.BusinessException;
+import com.gb.common.exception.CommonErrorCode;
 import com.gb.member.domain.member.dto.request.PasswordResetEmailRequest;
 import com.gb.member.domain.member.dto.request.PasswordResetRequest;
 import com.gb.member.domain.member.dto.request.SignupRequest;
+import com.gb.member.domain.member.dto.request.SocialProfileRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.LanguageResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
+import com.gb.member.domain.member.dto.response.SocialProfileResponse;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
 import com.gb.member.domain.member.service.MemberService;
@@ -67,6 +70,47 @@ public class MemberServiceImpl implements MemberService {
         Member savedMember = memberRepository.save(member);
 
         return SignupResponse.from(savedMember);
+    }
+
+    @Override
+    @Transactional
+    public SocialProfileResponse completeSocialProfile(
+            String publicId, String email, String name, String authProviderId,
+            SocialProfileRequest request) {
+
+        // 1) 이미 프로필 완료(=members row 존재)면 재생성 거절.
+        //    소셜 신규회원은 토큰(public_id)은 있어도 row가 없는 "미완료" 상태로 시작하므로,
+        //    row가 이미 있으면 완료된 회원이다(중복 호출/이중 제출).
+        if (memberRepository.existsByPublicId(publicId)) {
+            throw new BusinessException(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
+        }
+
+        // 2) 이메일 중복(다른 계정이 이미 사용). 정책상 소셜-기존 계정 자동연결은 안 하므로(거부),
+        //    Authentik Source 단계에서 일차 차단되지만 정합성을 위해 여기서도 방어한다.
+        if (memberRepository.existsByEmail(email)) {
+            throw new BusinessException(MemberErrorCode.EMAIL_ALREADY_EXISTS);
+        }
+
+        // 3) 닉네임 중복(회원가입과 동일 정책).
+        if (memberRepository.existsByNickname(request.getNickname())) {
+            throw new BusinessException(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
+        }
+
+        // 4) members row 최초 생성. publicId/email/name/authProviderId는 검증된 토큰 claim에서,
+        //    닉네임/국적/언어는 요청에서 채운다. 모든 필드가 갖춰진 시점에 한 번에 INSERT(이메일 가입과 일관).
+        Member member = Member.builder()
+                .publicId(publicId)
+                .email(email)
+                .name(name)
+                .nickname(request.getNickname())
+                .nationality(request.getNationality())
+                .language(request.getLanguage())
+                .authProviderId(authProviderId)
+                .build();
+
+        Member savedMember = memberRepository.save(member);
+
+        return SocialProfileResponse.from(savedMember);
     }
 
     @Override
