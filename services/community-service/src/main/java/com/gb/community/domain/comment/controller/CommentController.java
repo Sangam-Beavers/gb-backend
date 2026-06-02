@@ -21,6 +21,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -56,6 +57,10 @@ public class CommentController {
             "{\"success\":false,\"code\":\"COMMON5000\",\"message\":\"서버 오류가 발생했습니다.\"}";
     private static final String EX_COMMUNITY4001 =
             "{\"success\":false,\"code\":\"COMMUNITY4001\",\"message\":\"존재하지 않는 게시글입니다.\"}";
+    private static final String EX_COMMUNITY4002 =
+            "{\"success\":false,\"code\":\"COMMUNITY4002\",\"message\":\"존재하지 않는 댓글입니다.\"}";
+    private static final String EX_COMMON4031 =
+            "{\"success\":false,\"code\":\"COMMON4031\",\"message\":\"접근 권한이 없습니다.\"}";
 
     private final CommentService commentService;
 
@@ -139,5 +144,56 @@ public class CommentController {
             @Valid @RequestBody CreateCommentRequest request) {
         return ApiResponse.success(SuccessStatus.CREATED,
                 commentService.createComment(postPublicId, userPublicId, request));
+    }
+
+    /** 댓글 삭제(soft delete). 🔒 JWT 필요. 본인 댓글만 삭제 가능 + 게시글 comment_count -1. */
+    @Operation(
+            summary = "댓글 삭제",
+            description = "본인이 작성한 댓글을 soft delete한다(deleted_at만 갱신, row 보존). "
+                    + "삭제 성공 시 게시글의 comment_count가 1 감소한다(같은 트랜잭션 내). "
+                    + "응답 body는 data: null. 본인이 아닌 경우 403 COMMON4031. "
+                    + "이미 삭제된 댓글의 재삭제는 404 COMMUNITY4002로 응답한다(deleted_at IS NULL 필터). "
+                    + "URL의 postId와 댓글의 실제 게시글이 다르면 404 COMMUNITY4002로 통일.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "삭제 성공. data는 null."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - path variable 형식 위반(빈값/36자 초과).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "COMMON4031 - 본인이 작성한 댓글이 아닙니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4031", value = EX_COMMON4031))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "COMMUNITY4001 - 존재하지 않는 게시글입니다. / "
+                            + "COMMUNITY4002 - 존재하지 않는 댓글입니다(미존재·이미 삭제됨·URL 불일치).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = {
+                                    @ExampleObject(name = "COMMUNITY4001", value = EX_COMMUNITY4001),
+                                    @ExampleObject(name = "COMMUNITY4002", value = EX_COMMUNITY4002)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000)))
+    })
+    @DeleteMapping("/{postId}/comments/{commentId}")
+    public ApiResponse<Void> deleteComment(
+            @PathVariable("postId") @NotBlank @Size(max = 36) String postPublicId,
+            @PathVariable("commentId") @NotBlank @Size(max = 36) String commentPublicId,
+            @CurrentUserPublicId String userPublicId) {
+        commentService.deleteComment(postPublicId, commentPublicId, userPublicId);
+        return ApiResponse.success(null);
     }
 }

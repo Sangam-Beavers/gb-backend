@@ -154,10 +154,44 @@
 
 ---
 
-## 7. 댓글 목록 / 삭제
+## 7. 댓글 목록 조회
 
-- 목록: `GET /api/v1/community/posts/{id}/comments?page=&size=` → 댓글 배열(+ `parent_comment_public_id`로 대댓글 구조) + 페이지 메타.
-- 삭제: `DELETE /api/v1/community/posts/{postId}/comments/{commentId}` (본인만) → comment_count -1.
+`GET /api/v1/community/posts/{id}/comments?page=&size=` · Auth ✅ → 댓글 배열(+ `parent_comment_public_id`, 현재는 항상 null — 대댓글 미지원) + 페이지 메타.
+
+---
+
+## 7-2. 댓글 삭제
+
+`DELETE /api/v1/community/posts/{postId}/comments/{commentId}` · Auth ✅
+
+본인이 작성한 댓글을 soft delete한다(`deleted_at` 갱신, row 보존). 삭제 성공 시 게시글의 `comment_count`가 1 감소한다(같은 트랜잭션 내 dirty checking, 음수 방지 가드). 작성자는 JWT `public_id` claim에서 식별된다.
+
+**대댓글은 본 사이클 범위 밖** — "삭제된 댓글이 부모면 자식 유지" 같은 정책은 대댓글 도입 시 활성화한다.
+
+**Path Variable**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `postId` | string | O | 게시글 public_id (UUID), 최대 36자 |
+| `commentId` | string | O | 댓글 public_id (UUID), 최대 36자 |
+
+**Response 200** — `data: null`
+
+```json
+{ "success": true, "data": null, "message": "요청이 성공적으로 처리되었습니다." }
+```
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (path variable 빈값/36자 초과) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 403 | COMMON4031 | 본인이 작성한 댓글이 아닙니다. |
+| 404 | COMMUNITY4001 | 존재하지 않는 게시글입니다. |
+| 404 | COMMUNITY4002 | 존재하지 않는 댓글입니다. |
+
+> **COMMUNITY4002 통합 처리**: (a) 댓글 publicId 미존재, (b) 이미 soft delete된 댓글의 재삭제, (c) URL의 `postId`와 댓글의 실제 게시글이 다른 경우 — 셋 다 COMMUNITY4002로 통일한다. 의미상 모두 "이 게시글에 그런 댓글 없음"이며, RESTful 자원 경로 일관성 보장 + 권한 문제(COMMON4031)와 혼동을 피한다.
+>
+> **참고 (v2 명세 캡처 정정)**: Notion 명세에 `COMMON4011`(401)로 적혀 있던 부분은 표준 `AUTH4011`로 정정(CLAUDE.md §9 + 공통 표준). "이미 삭제된 댓글 재삭제"는 별도 코드 신설 대신 COMMUNITY4002로 통합 처리(404 의미상 동일).
 
 ---
 

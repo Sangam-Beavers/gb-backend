@@ -1,6 +1,7 @@
 package com.gb.community.domain.comment.service.impl;
 
 import com.gb.common.exception.BusinessException;
+import com.gb.common.exception.CommonErrorCode;
 import com.gb.community.domain.comment.dto.request.CreateCommentRequest;
 import com.gb.community.domain.comment.dto.response.CommentListResponse;
 import com.gb.community.domain.comment.dto.response.CommentResponse;
@@ -88,6 +89,35 @@ public class CommentServiceImpl implements CommentService {
         MemberInfo author = memberClient.getMember(userPublicId);
 
         return CommentResponse.from(comment, author, post.getPublicId());
+    }
+
+    @Override
+    @Transactional
+    public void deleteComment(String postPublicId, String commentPublicId, String userPublicId) {
+        // (1) 활성 게시글 조회 — 없거나 삭제됐으면 COMMUNITY4001(목록·작성과 동일 정책).
+        //     게시글이 삭제된 상태에서 댓글만 만지는 건 의미 없으므로 상위 자원부터 검증.
+        Post post = getActivePostOrThrow(postPublicId);
+
+        // (2) 활성 댓글 조회 — 없거나 이미 soft delete된 경우 COMMUNITY4002.
+        //     이미 삭제된 댓글의 재삭제는 deleted_at IS NULL 필터로 자동 404가 된다(별도 분기 없음).
+        Comment comment = commentRepository.findByPublicIdAndDeletedAtIsNull(commentPublicId)
+                .orElseThrow(() -> new BusinessException(CommunityErrorCode.COMMENT_NOT_FOUND));
+
+        // (3) URL 일관성 검증 — path의 postId와 댓글의 실제 post가 일치해야 한다.
+        //     불일치는 권한 문제가 아니라 "이 게시글에는 그런 댓글이 없음"이므로 COMMUNITY4002로 통일.
+        //     내부 id로 비교(post는 LAZY지만 id 접근은 proxy 초기화 없이 가능).
+        if (!comment.getPost().getId().equals(post.getId())) {
+            throw new BusinessException(CommunityErrorCode.COMMENT_NOT_FOUND);
+        }
+
+        // (4) 본인 작성 여부 검증 — 본인만 삭제 가능. 타인 댓글이면 COMMON4031.
+        if (!comment.getUserPublicId().equals(userPublicId)) {
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
+
+        // (5) Soft delete + 카운터 캐시 -1. 같은 트랜잭션이라 dirty checking으로 두 UPDATE 자동 반영.
+        comment.softDelete();
+        post.decreaseCommentCount();
     }
 
     // ----- helpers -----

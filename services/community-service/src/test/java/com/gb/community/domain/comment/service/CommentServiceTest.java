@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.gb.common.exception.BusinessException;
+import com.gb.common.exception.CommonErrorCode;
 import com.gb.community.domain.comment.dto.request.CreateCommentRequest;
 import com.gb.community.domain.comment.dto.response.CommentListResponse;
 import com.gb.community.domain.comment.dto.response.CommentResponse;
@@ -55,6 +56,7 @@ class CommentServiceTest {
     private static final String USER = "00000000-0000-0000-0000-000000000001";
     private static final String OTHER = "00000000-0000-0000-0000-000000000002";
     private static final String PID = "post-uuid-1";
+    private static final String C_PID = "comment-uuid-1";
 
     private static final MemberInfo MINH = new MemberInfo("Minh", true);
     private static final MemberInfo SOKHA = new MemberInfo("Sokha", false);
@@ -209,6 +211,100 @@ class CommentServiceTest {
         CreateCommentRequest req = new CreateCommentRequest();
         ReflectionTestUtils.setField(req, "content", content);
         return req;
+    }
+
+    // ==========================================================================
+    // deleteComment(postPublicId, commentPublicId, userPublicId) — 댓글 삭제
+    // ==========================================================================
+
+    @Test
+    @DisplayName("deleteComment 정상: softDelete + post.commentCount -1, MemberClient 호출 없음")
+    void deleteComment_정상() {
+        Post post = post(PID);
+        // 시드 commentCount = 5 → 4로 감소해야 함
+        ReflectionTestUtils.setField(post, "commentCount", 5);
+        Comment c = comment(post, USER, "내용", LocalDateTime.of(2026, 5, 26, 4, 15, 30));
+        ReflectionTestUtils.setField(c, "publicId", C_PID);
+
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(commentRepository.findByPublicIdAndDeletedAtIsNull(C_PID)).willReturn(Optional.of(c));
+
+        service.deleteComment(PID, C_PID, USER);
+
+        assertThat(c.isDeleted()).as("softDelete로 deleted_at이 설정됨").isTrue();
+        assertThat(post.getCommentCount()).as("comment_count -1 (dirty checking)").isEqualTo(4);
+        verifyNoInteractions(memberClient); // 삭제는 작성자 정보 조회 불필요
+    }
+
+    @Test
+    @DisplayName("deleteComment: 게시글 없거나 삭제됨 → COMMUNITY4001, 댓글 조회 없음")
+    void deleteComment_게시글없음_COMMUNITY4001() {
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.deleteComment(PID, C_PID, USER))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommunityErrorCode.POST_NOT_FOUND);
+
+        verifyNoInteractions(commentRepository, memberClient);
+    }
+
+    @Test
+    @DisplayName("deleteComment: 댓글 없거나 이미 삭제됨 → COMMUNITY4002")
+    void deleteComment_댓글없음_COMMUNITY4002() {
+        Post post = post(PID);
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(commentRepository.findByPublicIdAndDeletedAtIsNull(C_PID)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.deleteComment(PID, C_PID, USER))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommunityErrorCode.COMMENT_NOT_FOUND);
+
+        // 검증 단계라 commentCount는 변하지 않아야 함
+        assertThat(post.getCommentCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("deleteComment: URL 불일치 (댓글이 다른 게시글 소속) → COMMUNITY4002, softDelete 안 됨")
+    void deleteComment_URL불일치_COMMUNITY4002() {
+        // path의 게시글(id=1)과 댓글의 실제 게시글(id=2)이 다르다 — URL 일관성 위반.
+        Post pathPost = post(PID); // id=1
+        Post otherPost = post("other-post-pid");
+        ReflectionTestUtils.setField(otherPost, "id", 2L); // 다른 id 부여
+        Comment c = comment(otherPost, USER, "내용", LocalDateTime.of(2026, 5, 26, 5, 0, 0));
+        ReflectionTestUtils.setField(c, "publicId", C_PID);
+
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(pathPost));
+        given(commentRepository.findByPublicIdAndDeletedAtIsNull(C_PID)).willReturn(Optional.of(c));
+
+        assertThatThrownBy(() -> service.deleteComment(PID, C_PID, USER))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommunityErrorCode.COMMENT_NOT_FOUND);
+
+        assertThat(c.isDeleted()).as("URL 검증에서 막혀 softDelete 호출 안 됨").isFalse();
+    }
+
+    @Test
+    @DisplayName("deleteComment: 본인 아님 → COMMON4031, softDelete 안 됨")
+    void deleteComment_본인아님_COMMON4031() {
+        Post post = post(PID);
+        ReflectionTestUtils.setField(post, "commentCount", 3);
+        Comment c = comment(post, USER, "내용", LocalDateTime.of(2026, 5, 26, 5, 0, 0));
+        ReflectionTestUtils.setField(c, "publicId", C_PID);
+
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(commentRepository.findByPublicIdAndDeletedAtIsNull(C_PID)).willReturn(Optional.of(c));
+
+        // OTHER가 USER의 댓글을 삭제 시도
+        assertThatThrownBy(() -> service.deleteComment(PID, C_PID, OTHER))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.FORBIDDEN);
+
+        assertThat(c.isDeleted()).as("권한 검증에서 막혀 softDelete 호출 안 됨").isFalse();
+        assertThat(post.getCommentCount()).as("commentCount도 변하지 않음").isEqualTo(3);
     }
 
     // ----- helpers -----

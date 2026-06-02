@@ -29,4 +29,15 @@ public interface CommentService {
      * SELECT는 MSA 경계 위반(CLAUDE.md §7).
      */
     CommentResponse createComment(String postPublicId, String userPublicId, CreateCommentRequest request);
+
+    /**
+     * 댓글 삭제(soft delete). 본인이 작성한 댓글만 삭제 가능하며, 게시글의 {@code comment_count}를
+     * 1 감소시킨다(같은 트랜잭션 내). 응답 본문은 없다(컨트롤러가 200 OK + data:null).
+     *
+     * <p>검증 순서(상위→하위): ① 게시글 활성 → COMMUNITY4001, ② 댓글 활성 → COMMUNITY4002,
+     * ③ 댓글이 해당 게시글 소속인지(URL 일관성) → COMMUNITY4002,
+     * ④ 본인 작성 여부 → COMMON4031. "이미 삭제된 댓글의 재삭제"는 ② 단계에서 자동 COMMUNITY4002로
+     * 떨어진다(deleted_at IS NULL 필터).
+     */
+    void deleteComment(String postPublicId, String commentPublicId, String userPublicId);
 }

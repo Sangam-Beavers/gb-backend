@@ -2,6 +2,7 @@ package com.gb.community.domain.comment.repository;
 
 import com.gb.community.domain.comment.entity.Comment;
 import com.gb.community.domain.post.entity.Post;
+import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -26,4 +27,13 @@ public interface CommentRepository extends JpaRepository<Comment, Long> {
      * count 쿼리는 Spring Data가 본 쿼리에서 자동 파생한다(단순 조건이라 안정적).
      */
     Page<Comment> findByPostAndDeletedAtIsNull(Post post, Pageable pageable);
+
+    /**
+     * publicId(UUID)로 활성(미삭제) 댓글 1건 조회. 댓글 삭제 API에서 사용.
+     *
+     * <p>{@code deleted_at IS NULL} 필터로 "이미 soft delete된 댓글의 재삭제"는 자동으로 빈 결과가 되어
+     * 서비스에서 {@code COMMUNITY4002}로 변환된다(별도 분기 불필요). path의 postId와 댓글의 실제
+     * post 일치 여부는 서비스 책임이라 여기선 검증하지 않는다(post 무관 단건 조회).
+     */
+    Optional<Comment> findByPublicIdAndDeletedAtIsNull(String publicId);
 }
