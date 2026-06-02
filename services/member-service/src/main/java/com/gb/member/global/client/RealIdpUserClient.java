@@ -124,6 +124,12 @@ public class RealIdpUserClient implements IdpUserClient {
      */
     @Override
     public void deactivateUser(String authProviderId) {
+        // authProviderId가 비면 "?uuid=" 빈 요청이 나가므로 HTTP 호출 전에 fail-fast.
+        // 활성 회원인데 IdP 식별자가 없으면 가입 프로비저닝이 깨진 상태(서버측 데이터 정합성 문제)다.
+        if (authProviderId == null || authProviderId.isBlank()) {
+            log.error("IdP 비활성화 불가: authProviderId가 비어 있습니다(가입 프로비저닝 누락 의심).");
+            throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+        }
         try {
             // 1) uuid → pk 해석. uuid 템플릿 변수는 RestClient가 안전하게 인코딩한다.
             UserListResponse list = restClient.get()
