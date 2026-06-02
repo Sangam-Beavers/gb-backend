@@ -41,9 +41,12 @@ import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
+import com.gb.wallet.global.config.TransferRateLimitProperties;
 import com.gb.wallet.global.redis.DistributedLockHelper;
 import com.gb.wallet.global.redis.IdempotencyCacheHelper;
+import com.gb.wallet.global.redis.RateLimitHelper;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -83,6 +86,8 @@ class TransferServiceImplExecuteTest {
     @Mock private BankClient bankClient;
     @Mock private DistributedLockHelper distributedLockHelper;
     @Mock private IdempotencyCacheHelper idempotencyCacheHelper;
+    @Mock private RateLimitHelper rateLimitHelper;
+    @Mock private TransferRateLimitProperties transferRateLimitProperties;
     @Mock private ObjectMapper objectMapper;
     @InjectMocks private TransferServiceImpl service;
 
@@ -99,6 +104,13 @@ class TransferServiceImplExecuteTest {
         // self.executeInTransaction / self.readPriorTransaction이 진짜 메서드를 타도록 자기 자신을 주입한다.
         // (Mock TransferService를 self로 박으면 위임 검증만 가능 — 송금은 catch 안 분기까지 봐야 함)
         ReflectionTestUtils.setField(service, "self", service);
+
+        // Rate-limit은 기본 통과(true) — execute() 최상단에서 차단되지 않도록. 초과 시나리오는 개별 테스트에서 willReturn(false)로 덮어쓴다.
+        // lenient=false(기본)는 stubbed 호출이 한 번도 안 일어나면 strict 모드라 깨지므로, lenient()로 만든다.
+        Mockito.lenient().when(rateLimitHelper.tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class)))
+                .thenReturn(true);
+        Mockito.lenient().when(transferRateLimitProperties.limit()).thenReturn(30);
+        Mockito.lenient().when(transferRateLimitProperties.windowSeconds()).thenReturn(60);
     }
 
     // ===== 정상 흐름 =====
@@ -147,8 +159,8 @@ class TransferServiceImplExecuteTest {
                         tuple("INTERNAL_TRANSFER_SEND",    SENDER_USER,   1),  // before > after (차감)
                         tuple("INTERNAL_TRANSFER_RECEIVE", RECEIVER_USER, -1)); // before < after (증액)
 
-        // 캐시 저장 + 락 해제
-        verify(idempotencyCacheHelper).set(eq(KEY), anyString());
+        // 캐시 저장 + 락 해제. 키는 스코프된 형태(anyString).
+        verify(idempotencyCacheHelper).set(anyString(), anyString());
         verify(lock).unlock();
 
         // 회귀 가드: INTERNAL_TRANSFER 경로는 REMITTANCE 시도 흔적을 박지 않는다(분기 누수 방지).
@@ -397,7 +409,8 @@ class TransferServiceImplExecuteTest {
     @DisplayName("Layer 1(Redis cache hit): 캐시된 응답 그대로 반환, DB/락/외부 호출 0회")
     void execute_Layer1_cacheHit() throws Exception {
         TransferExecuteResponse cached = stubCachedResponse();
-        given(idempotencyCacheHelper.get(KEY)).willReturn(Optional.of("{\"cached\":\"json\"}"));
+        // 스코프된 캐시 키(anyString) hit. 키 스코프 정확성은 별도 케이스에서 검증.
+        given(idempotencyCacheHelper.get(anyString())).willReturn(Optional.of("{\"cached\":\"json\"}"));
         given(objectMapper.readValue(anyString(), eq(TransferExecuteResponse.class))).willReturn(cached);
 
         TransferExecuteResponse result = service.execute(SENDER_USER, KEY, request("10000.0000"));
@@ -417,7 +430,7 @@ class TransferServiceImplExecuteTest {
         Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
         Transaction prior = priorTransaction(sender);
 
-        given(idempotencyCacheHelper.get(KEY)).willReturn(Optional.empty());
+        given(idempotencyCacheHelper.get(anyString())).willReturn(Optional.empty());
         given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.of(prior));
         given(objectMapper.writeValueAsString(any())).willReturn("{}");
 
@@ -428,8 +441,8 @@ class TransferServiceImplExecuteTest {
         // 락/외부 호출 미진입
         verifyNoInteractions(distributedLockHelper, walletBalanceRepository, auditLogRepository);
         verify(walletRepository, never()).findByUserPublicId(anyString());
-        // 캐시 채움(다음 동일 키 요청은 Layer 1로 처리)
-        verify(idempotencyCacheHelper).set(eq(KEY), anyString());
+        // 캐시 채움(다음 동일 키 요청은 Layer 1로 처리). 키는 스코프된 형태(anyString).
+        verify(idempotencyCacheHelper).set(anyString(), anyString());
         // replay 경로는 executeInTransaction 미진입 — ensure도 호출되면 안 된다.
         verify(walletBalanceWriter, never()).ensureBalanceRow(any(), any());
         // 회귀 가드: replay는 어떤 분기로도 흔적을 박지 않는다.
@@ -724,14 +737,83 @@ class TransferServiceImplExecuteTest {
         verify(transactionRepository, never()).save(any());
     }
 
+    // ===== 신규: P1 rate-limit =====
+
+    @Test
+    @DisplayName("Rate-limit 초과(tryAcquire=false) → TRANSFER4006, 캐시/DB/락 모두 미진입")
+    void execute_rateLimit_초과_TRANSFER4006() {
+        // 기본 @BeforeEach가 true로 설정한 stub을 false로 덮어쓴다(이 케이스 한정).
+        given(rateLimitHelper.tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class)))
+                .willReturn(false);
+
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.RATE_LIMIT_EXCEEDED);
+
+        // 진입 최상단에서 차단 — 캐시/DB/락/저장 모두 미진입.
+        verifyNoInteractions(idempotencyCacheHelper, walletRepository,
+                walletBalanceRepository, distributedLockHelper);
+        verify(transactionRepository, never()).findByIdempotencyKey(anyString());
+        verify(transactionRepository, never()).save(any());
+    }
+
+    // ===== 신규: P0-② rebuildFromPrior cross-user/scope 검증 =====
+
+    @Test
+    @DisplayName("Layer 2 hit인데 prior 거래의 sender가 요청자와 다름(cross-user) → WALLET4001로 모호 매핑, 응답 노출 차단")
+    void execute_Layer2_crossUser_blocked() {
+        Wallet otherSender = wallet(999L, "other-user-uuid");
+        Transaction prior = priorTransaction(otherSender);
+
+        given(idempotencyCacheHelper.get(anyString())).willReturn(Optional.empty());
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.of(prior));
+
+        // 다른 사용자(SENDER_USER)가 같은 idempotency_key로 요청 → 검증 실패로 INTERNAL_TRANSFER 사유 매핑.
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_NOT_FOUND);
+
+        // 검증 실패라 캐시 set·executeInTransaction 진입 0.
+        verify(idempotencyCacheHelper, never()).set(anyString(), anyString());
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Layer 2 hit인데 prior 거래의 receiver가 요청 receiver와 다름(cross-scope) → WALLET4001로 모호 매핑")
+    void execute_Layer2_crossReceiverScope_blocked() {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        // prior의 receiver는 RECEIVER_USER인데, 요청 receiver는 다른 사용자.
+        Transaction prior = priorTransaction(sender);
+
+        given(idempotencyCacheHelper.get(anyString())).willReturn(Optional.empty());
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.of(prior));
+
+        TransferExecuteRequest req = new TransferExecuteRequest(
+                "INTERNAL_TRANSFER", "10000.0000", "KRW", "KRW", "메모",
+                "different-receiver-uuid", null);
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_NOT_FOUND);
+
+        verify(idempotencyCacheHelper, never()).set(anyString(), anyString());
+        verify(transactionRepository, never()).save(any());
+    }
+
     // ===== helpers — stub blocks =====
 
     private void stubCacheMiss() {
-        given(idempotencyCacheHelper.get(KEY)).willReturn(Optional.empty());
+        // 캐시 키는 도메인·user·scope로 스코프된 형태(remittance:.../internal_transfer:...)라
+        // 정확한 키 매칭 대신 anyString()으로 통과 — 키 스코프 정확성은 별도 케이스에서 검증.
+        // lenient: 입력 검증 단계에서 차단되는 케이스(미지원 통화/유형, REMITTANCE 필수 필드 누락 등)는
+        // 캐시 조회까지 도달하지 않으므로 strict stub로 두면 UnnecessaryStubbingException이 난다.
+        Mockito.lenient().when(idempotencyCacheHelper.get(anyString())).thenReturn(Optional.empty());
     }
 
     private void stubDbMiss() {
-        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.empty());
+        Mockito.lenient().when(transactionRepository.findByIdempotencyKey(KEY)).thenReturn(Optional.empty());
     }
 
     private void stubWalletLookups(Wallet sender, Wallet receiver) {

@@ -44,9 +44,13 @@ import com.gb.wallet.global.common.util.AccountNumberMasker;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.MemberErrorCode;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
+import com.gb.wallet.global.config.TransferRateLimitProperties;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import com.gb.wallet.global.redis.DistributedLockHelper;
 import com.gb.wallet.global.redis.IdempotencyCacheHelper;
+import com.gb.wallet.global.redis.RateLimitHelper;
+
+import java.time.Duration;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
@@ -60,12 +64,14 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -77,7 +83,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class TransferServiceImpl implements TransferService {
 
-    /** 명세상 고정 10명. 페이지네이션 없음. */
+    /**
+     * 명세상 고정 10명. 페이지네이션 없음.
+     */
     private static final int RECENT_LIMIT = 10;
 
     // 송금 수수료 정책 상수.
@@ -86,9 +94,17 @@ public class TransferServiceImpl implements TransferService {
     private static final BigDecimal REMITTANCE_FEE_RATE = new BigDecimal("0.005");
     private static final int FEE_SCALE = 4;
 
-    /** 수수료 API가 허용하는 송금 유형. TransactionType 중 CHARGE/EXCHANGE는 거부. */
+    /**
+     * 수수료 API가 허용하는 송금 유형. TransactionType 중 CHARGE/EXCHANGE는 거부.
+     */
     private static final Set<TransactionType> ALLOWED_TRANSFER_TYPES =
             EnumSet.of(TransactionType.INTERNAL_TRANSFER, TransactionType.REMITTANCE);
+
+    /**
+     * 송금 락 경합(데드락·락 타임아웃)으로 트랜잭션이 롤백됐을 때 executeInTransaction 재시도 최대 횟수.
+     * 소진 시 COMMON5031(503). 충전 {@code ChargeServiceImpl.MAX_CHARGE_ATTEMPTS} 패턴 답습.
+     */
+    private static final int MAX_TRANSFER_ATTEMPTS = 3;
 
     private final WalletRepository walletRepository;
     private final WalletBalanceRepository walletBalanceRepository;
@@ -101,7 +117,14 @@ public class TransferServiceImpl implements TransferService {
     private final BankClient bankClient;
     private final DistributedLockHelper distributedLockHelper;
     private final IdempotencyCacheHelper idempotencyCacheHelper;
+    private final RateLimitHelper rateLimitHelper;
+    private final TransferRateLimitProperties transferRateLimitProperties;
     private final ObjectMapper objectMapper;
+
+    /**
+     * 송금 rate-limit 카운터 키 prefix(user 단위).
+     */
+    private static final String TRANSFER_RATE_LIMIT_PREFIX = "ratelimit:transfer:";
 
     /**
      * self-injection: {@code @Transactional}이 적용되려면 {@link #executeInTransaction}/{@link #readPriorTransaction}을
@@ -306,70 +329,214 @@ public class TransferServiceImpl implements TransferService {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public TransferExecuteResponse execute(String userPublicId, String idempotencyKey,
                                            TransferExecuteRequest request) {
-        // 1) 멱등성 Layer 1 — Redis 캐시 (가장 빠른 경로)
-        Optional<TransferExecuteResponse> cached = readFromCache(idempotencyKey);
-        if (cached.isPresent()) {
-            return cached.get();
+        // 0) Rate-limit — user 단위 고정 윈도. 폭주 차단(외부 자금 이동 보호). Redis 장애 시 fail-open(통과).
+        //    초과 시 TRANSFER4006(429). 캐시·검증 비용을 절감하기 위해 진입 최상단에 둔다.
+        String rateLimitKey = TRANSFER_RATE_LIMIT_PREFIX + userPublicId;
+        boolean allowed = rateLimitHelper.tryAcquire(
+                rateLimitKey,
+                transferRateLimitProperties.limit(),
+                Duration.ofSeconds(transferRateLimitProperties.windowSeconds()));
+        if (!allowed) {
+            throw new BusinessException(TransferErrorCode.RATE_LIMIT_EXCEEDED);
         }
 
-        // 2) 멱등성 Layer 2 — DB 조회 (캐시 미스/만료/장애 대비)
-        Optional<Transaction> existing = transactionRepository.findByIdempotencyKey(idempotencyKey);
-        if (existing.isPresent()) {
-            TransferExecuteResponse resp = TransferExecuteResponse.from(existing.get());
-            writeToCache(idempotencyKey, resp); // Layer 1 채워두기
-            return resp;
-        }
-
-        // 3) 입력 검증 — 형식은 @Valid에서, enum/도메인 검증은 여기서.
+        // 1) 입력 검증을 캐시 조회 전에 먼저 — cacheKey 생성에 transferType·scopeId가 필요하므로.
+        //    enum/도메인 검증은 여기서, 형식은 @Valid에서.
         CurrencyType currency = CurrencyType.fromCode(request.currencyCode())
                 .orElseThrow(() -> new BusinessException(TransferErrorCode.UNSUPPORTED_CURRENCY));
         TransactionType transferType = TransactionType.fromCode(request.transferType())
                 .filter(ALLOWED_TRANSFER_TYPES::contains)
                 .orElseThrow(() -> new BusinessException(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE));
 
-        // 4) 같은 통화만 허용 (2단계까지 same-currency 강제 — 다통화는 3단계).
+        // 2) 같은 통화만 허용 (2단계까지 same-currency 강제 — 다통화는 3단계).
         if (!request.currencyCode().equals(request.receiveCurrencyCode())) {
             throw new BusinessException(TransferErrorCode.UNSUPPORTED_CURRENCY_PAIR);
         }
 
-        // 5) REMITTANCE 분기 — 외부 계좌 송금은 receiver wallet/self-check/분산 락이 의미 없으므로
-        //    별도 경로로 분리. INTERNAL_TRANSFER 경로는 손대지 않는다.
-        if (transferType == TransactionType.REMITTANCE) {
-            return executeRemittancePath(userPublicId, idempotencyKey, request, currency);
+        // 3) 도메인별 스코프 ID 확보 — REMITTANCE는 bank_account.public_id, INTERNAL은 receiver_public_id.
+        //    이 값이 캐시 키 스코프와 race 응답 검증의 양쪽 기준이 된다(같은 idempotency_key를 다른
+        //    (user, scope) 조합으로 재사용하면 cross-user 응답이 노출되지 않게).
+        String scopeId = resolveScopeId(transferType, request);
+        String cacheKey = cacheKey(transferType, idempotencyKey, userPublicId, scopeId);
+
+        // 4) 멱등성 Layer 1 — Redis 캐시 (스코프된 키 hit만 즉시 반환 → cross-user 노출 차단).
+        Optional<TransferExecuteResponse> cached = readFromCache(cacheKey);
+        if (cached.isPresent()) {
+            return cached.get();
         }
 
-        // 6) 송신/수신 wallet 조회 (락 키용 id 확보).
+        // 5) 멱등성 Layer 2 — DB 조회. 같은 idempotency_key 거래가 이미 있으면 rebuildFromPrior로
+        //    소유자/유형/스코프 일치 검증 후 응답한다(검증 실패 시 ACCOUNT4001/WALLET4001로 모호 매핑).
+        Optional<Transaction> existing = transactionRepository.findByIdempotencyKey(idempotencyKey);
+        if (existing.isPresent()) {
+            TransferExecuteResponse resp = rebuildFromPrior(
+                    existing.get(), userPublicId, transferType, scopeId);
+            writeToCache(cacheKey, resp); // Layer 1 채워두기
+            return resp;
+        }
+
+        // 6) 실 처리 + 락 경합 재시도 래퍼 — race(UNIQUE 위반)와 락 경합을 도메인별 분기에 공통 처리.
+        TransferExecuteResponse response = executeWithRetry(
+                userPublicId, idempotencyKey, request, currency, transferType, scopeId);
+
+        // 7) 커밋 이후 Redis 캐시 채우기 (Layer 1).
+        writeToCache(cacheKey, response);
+        return response;
+    }
+
+    /**
+     * 송금 실제 처리 + 동시성 예외 복구 (충전 {@code doChargeWithRetry} 패턴 답습).
+     *
+     * <ul>
+     *   <li><b>{@link DataIntegrityViolationException}</b>(idempotency_key UNIQUE 위반): 다른 트랜잭션이
+     *       같은 키로 먼저 커밋. 별도 readOnly 트랜잭션({@link #readPriorTransaction})으로 첫 결과 재반환.</li>
+     *   <li><b>{@link PessimisticLockingFailureException}</b>(락 경합·데드락): InnoDB가 패자 트랜잭션을
+     *       롤백. 일시적 충돌이라 최대 {@link #MAX_TRANSFER_ATTEMPTS}회 재시도. 소진 시 COMMON5031(503).</li>
+     * </ul>
+     */
+    private TransferExecuteResponse executeWithRetry(
+            String userPublicId, String idempotencyKey, TransferExecuteRequest request,
+            CurrencyType currency, TransactionType transferType, String scopeId) {
+        int attempt = 0;
+        while (true) {
+            try {
+                if (transferType == TransactionType.REMITTANCE) {
+                    return executeRemittancePath(userPublicId, idempotencyKey, request, currency);
+                }
+                return executeInternalTransferPath(userPublicId, idempotencyKey, request, currency, transferType);
+            } catch (DataIntegrityViolationException race) {
+                return self.readPriorTransaction(idempotencyKey, userPublicId, transferType, scopeId);
+            } catch (PessimisticLockingFailureException lockContention) {
+                if (++attempt >= MAX_TRANSFER_ATTEMPTS) {
+                    log.warn("송금 락 경합 재시도 소진({}회) — COMMON5031 매핑. user={}",
+                            MAX_TRANSFER_ATTEMPTS, userPublicId, lockContention);
+                    throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE, lockContention);
+                }
+                log.debug("송금 락 경합 — 재시도 {}/{}. user={}", attempt, MAX_TRANSFER_ATTEMPTS, userPublicId);
+            }
+        }
+    }
+
+    /**
+     * INTERNAL_TRANSFER pre-tx 경로 — wallet 조회·self-check·분산 락 획득 후 트랜잭션 내부로 위임한다.
+     * 원래 {@code execute()} 안에 인라인이었으나, {@link #executeWithRetry}의 분기에서 호출하도록 분리.
+     */
+    private TransferExecuteResponse executeInternalTransferPath(
+            String userPublicId, String idempotencyKey, TransferExecuteRequest request,
+            CurrencyType currency, TransactionType transferType) {
+        // 송신/수신 wallet 조회 (락 키용 id 확보).
         Wallet senderWallet = walletRepository.findByUserPublicId(userPublicId)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
         Wallet receiverWallet = walletRepository.findByUserPublicId(request.receiverPublicId())
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
 
-        // 7) 자기 자신에게 송금 차단 (이후 MultiLock에서 같은 키 2회 잠금 문제 회피도 겸함).
+        // 자기 자신에게 송금 차단 (이후 MultiLock에서 같은 키 2회 잠금 문제 회피도 겸함).
         if (senderWallet.getId().equals(receiverWallet.getId())) {
             throw new BusinessException(TransferErrorCode.SELF_TRANSFER_NOT_ALLOWED);
         }
 
-        // 8) 분산 락 획득 (wallet_id 오름차순 — DistributedLockHelper 내부 정책). 실패 → 503.
+        // 분산 락 획득 (wallet_id 오름차순 — DistributedLockHelper 내부 정책). 실패 → 503.
         RLock lock = distributedLockHelper.tryLockTwoWallets(
                 senderWallet.getId(), receiverWallet.getId());
         if (lock == null) {
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
         try {
-            // 9) 트랜잭션 내 실제 처리 (self-proxy로 호출 — 직접 호출 시 @Transactional 미적용).
-            TransferExecuteResponse response = self.executeInTransaction(
+            // 트랜잭션 내 실제 처리 (self-proxy로 호출 — 직접 호출 시 @Transactional 미적용).
+            return self.executeInTransaction(
                     senderWallet.getId(), receiverWallet.getId(),
                     currency, transferType, idempotencyKey, request);
-
-            // 10) 커밋 이후 Redis 캐시 채우기 (Layer 1 → 다음 동일 키 요청은 DB 미접근).
-            writeToCache(idempotencyKey, response);
-            return response;
         } finally {
             // 락 보유자가 본인인 경우에만 해제 (lease 만료로 다른 스레드가 가진 경우 안전).
             if (lock.isHeldByCurrentThread()) {
                 lock.unlock();
             }
         }
+    }
+
+    // ----- 멱등성 캐시 키 + race 응답 검증 헬퍼 -----
+
+    /**
+     * 도메인별 스코프 ID 추출. 캐시 키와 race 검증의 양쪽 기준.
+     * <ul>
+     *   <li>REMITTANCE → bank_account.public_id (없으면 COMMON4001 — DTO @NotBlank 부재 보완)</li>
+     *   <li>INTERNAL_TRANSFER → receiver_public_id (DTO @NotBlank로 이미 강제됨)</li>
+     * </ul>
+     */
+    private static String resolveScopeId(TransactionType transferType, TransferExecuteRequest request) {
+        return switch (transferType) {
+            case REMITTANCE -> {
+                String bankAccountPublicId = request.bankAccountPublicId();
+                if (bankAccountPublicId == null || bankAccountPublicId.isBlank()) {
+                    throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+                }
+                yield bankAccountPublicId;
+            }
+            case INTERNAL_TRANSFER -> request.receiverPublicId();
+            default -> throw new BusinessException(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE);
+        };
+    }
+
+    /**
+     * 멱등성 캐시 키 — (도메인, idempotency_key, 요청자, 스코프) 4-튜플로 스코프한다.
+     * 같은 idempotency_key라도 (user, scope)가 다르면 캐시 hit이 나지 않아 DB 경로의 rebuildFromPrior로
+     * 흘러 거기서 ACCOUNT4001/WALLET4001로 차단된다 — Layer 1·2·3 모두 cross-user 노출 차단(충전 동일 정책).
+     * {@code IdempotencyCacheHelper}가 {@code idempotency:} prefix를 덧붙이므로 최종 키는
+     * {@code idempotency:{remittance|internal_transfer}:{key}:{user}:{scope}}다.
+     */
+    private static String cacheKey(TransactionType transferType, String idempotencyKey,
+                                   String userPublicId, String scopeId) {
+        String domain = switch (transferType) {
+            case REMITTANCE -> "remittance";
+            case INTERNAL_TRANSFER -> "internal_transfer";
+            default -> throw new BusinessException(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE);
+        };
+        return domain + ":" + idempotencyKey + ":" + userPublicId + ":" + scopeId;
+    }
+
+    /**
+     * 이미 처리된 거래로부터 본 요청의 응답으로 재현해도 되는지 검증한 뒤 응답한다(멱등성 재반환).
+     *
+     * <p>{@code idempotency_key}는 전역 UNIQUE라 다른 사용자/유형/스코프의 거래가 잡힐 수 있다.
+     * 다음을 확인하고, 아니면 도메인 부재 에러로 차단한다(존재 여부 미노출 — 충전 동일 정책):
+     * <ul>
+     *   <li>키 소유자(거래 지갑 주인) == 요청자</li>
+     *   <li>거래 유형 == 요청 유형</li>
+     *   <li>거래의 스코프 == 요청 스코프
+     *       (REMITTANCE면 bank_account.public_id, INTERNAL은 receiver wallet의 user_public_id)</li>
+     * </ul>
+     */
+    private TransferExecuteResponse rebuildFromPrior(
+            Transaction prior, String userPublicId,
+            TransactionType expectedType, String expectedScopeId) {
+        if (!prior.getWallet().getUserPublicId().equals(userPublicId)
+                || prior.getType() != expectedType) {
+            throw new BusinessException(scopeMismatchError(expectedType));
+        }
+        if (expectedType == TransactionType.REMITTANCE) {
+            // REMITTANCE: bank_account_id로 풀어 public_id 비교. 거래엔 internal id만 있음.
+            BankAccount priorAccount = bankAccountRepository.findById(prior.getBankAccountId())
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
+            if (!priorAccount.getPublicId().equals(expectedScopeId)) {
+                throw new BusinessException(scopeMismatchError(expectedType));
+            }
+        } else { // INTERNAL_TRANSFER
+            Wallet priorReceiver = prior.getReceiverWallet();
+            if (priorReceiver == null
+                    || !priorReceiver.getUserPublicId().equals(expectedScopeId)) {
+                throw new BusinessException(scopeMismatchError(expectedType));
+            }
+        }
+        return TransferExecuteResponse.from(prior);
+    }
+
+    /**
+     * race 검증 실패 시 매핑 에러. 충전 정책 답습 — 사유 미구분으로 정보 누설 방지.
+     */
+    private static com.gb.common.exception.ErrorCode scopeMismatchError(TransactionType type) {
+        return type == TransactionType.REMITTANCE
+                ? AccountErrorCode.ACCOUNT_NOT_FOUND
+                : WalletErrorCode.WALLET_NOT_FOUND;
     }
 
     @Override
@@ -379,11 +546,17 @@ public class TransferServiceImpl implements TransferService {
             CurrencyType currency, TransactionType transferType,
             String idempotencyKey, TransferExecuteRequest request) {
 
-        try {
-            // REMITTANCE는 별도 in-tx 경로(외부 계좌 + 단일 송신자 잔액). INTERNAL_TRANSFER 코드는 그대로 유지.
-            if (transferType == TransactionType.REMITTANCE) {
-                return executeRemittanceInTransaction(senderWalletId, currency, idempotencyKey, request);
-            }
+        // 멱등성 Layer 3(idempotency_key UNIQUE 위반) catch는 상위 executeWithRetry로 위임 — 거기서
+        // rebuildFromPrior 검증을 거친 readPriorTransaction(REQUIRES_NEW)으로 첫 결과를 재반환한다.
+        // 본 메서드는 UNIQUE 위반 시 자연스럽게 DataIntegrityViolationException을 throw해 메인 tx가
+        // rollback되도록 한다 (spring @Transactional 자동 rollback).
+
+        // REMITTANCE는 별도 in-tx 경로(외부 계좌 + 단일 송신자 잔액). INTERNAL_TRANSFER 코드는 그대로 유지.
+        if (transferType == TransactionType.REMITTANCE) {
+            return executeRemittanceInTransaction(senderWalletId, currency, idempotencyKey, request);
+        }
+        // INTERNAL_TRANSFER 본체. DataIntegrityViolationException은 상위 executeWithRetry가 잡는다.
+        {
 
             // (1) wallet 재조회 — execute()의 엔티티는 이 트랜잭션 컨텍스트 밖에서 로드돼 detached.
             //     수신자 지갑은 상류 execute()의 findByUserPublicId로 이미 검증된 상태(없으면 거기서 WALLET4001).
@@ -478,21 +651,19 @@ public class TransferServiceImpl implements TransferService {
                     .build());
 
             return TransferExecuteResponse.from(transaction);
-
-        } catch (DataIntegrityViolationException race) {
-            // 멱등성 Layer 3 — 동시 race로 다른 트랜잭션이 같은 idempotency_key를 먼저 커밋한 경우.
-            // 이 트랜잭션은 UNIQUE 위반으로 롤백되며, 별도 트랜잭션(REQUIRES_NEW)에서 첫 결과를 재조회한다.
-            return self.readPriorTransaction(idempotencyKey);
         }
     }
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
-    public TransferExecuteResponse readPriorTransaction(String idempotencyKey) {
+    public TransferExecuteResponse readPriorTransaction(
+            String idempotencyKey, String userPublicId,
+            TransactionType expectedType, String expectedScopeId) {
         Transaction prior = transactionRepository.findByIdempotencyKey(idempotencyKey)
                 // race로 들어왔는데 키가 사라졌다면 일관성이 깨진 비정상 상태 → 서버 오류.
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
-        return TransferExecuteResponse.from(prior);
+        // 키 소유자/유형/스코프 검증 — cross-user 응답 노출 차단.
+        return rebuildFromPrior(prior, userPublicId, expectedType, expectedScopeId);
     }
 
     // ----- Redis 캐시 헬퍼: 캐시 실패는 응답을 막지 않는다(성능 최적화 계층) -----
@@ -542,12 +713,7 @@ public class TransferServiceImpl implements TransferService {
      */
     private TransferExecuteResponse executeRemittancePath(
             String userPublicId, String idempotencyKey, TransferExecuteRequest request, CurrencyType currency) {
-        // bank_account_public_id는 REMITTANCE 전용 필수 — DTO 레벨 @NotBlank가 아니므로 Service에서 검증.
-        // INTERNAL_TRANSFER receiver_public_id는 DTO @NotBlank로 강제되므로 일관성 차원에서 같은 COMMON4001 매핑.
-        String bankAccountPublicId = request.bankAccountPublicId();
-        if (bankAccountPublicId == null || bankAccountPublicId.isBlank()) {
-            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
-        }
+        // bank_account_public_id 존재 검증은 execute() 진입 시 resolveScopeId에서 이미 처리됨.
 
         // 송신자 wallet 조회 (락 키용 id 확보). receiver/lock 없음.
         Wallet senderWallet = walletRepository.findByUserPublicId(userPublicId)
@@ -555,12 +721,9 @@ public class TransferServiceImpl implements TransferService {
 
         // self-proxy로 호출 — 직접 호출 시 @Transactional 미적용(INTERNAL_TRANSFER 경로와 동일).
         // receiverWalletId는 null (외부 계좌). executeInTransaction이 transferType으로 분기.
-        TransferExecuteResponse response = self.executeInTransaction(
+        // 캐시 저장은 execute()가 일괄 처리(race·재시도 시 중복 호출 방지).
+        return self.executeInTransaction(
                 senderWallet.getId(), null, currency, TransactionType.REMITTANCE, idempotencyKey, request);
-
-        // 커밋 이후 Redis 캐시 채우기 (Layer 1) — INTERNAL_TRANSFER 경로와 동일.
-        writeToCache(idempotencyKey, response);
-        return response;
     }
 
     /**
