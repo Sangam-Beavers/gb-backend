@@ -40,6 +40,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -99,7 +100,7 @@ class AccountControllerTest {
     @Test
     @DisplayName("POST /verify 200: 정상 호출 시 ApiResponse(success=true)로 account_token 반환")
     void verify_정상() throws Exception {
-        given(bankAccountService.verifyAccount(any()))
+        given(bankAccountService.verifyAccount(any(), anyString()))
                 .willReturn(VerifyAccountResponse.from(new AccountToken("tok-abcdef")));
 
         mockMvc.perform(post("/api/v1/accounts/verify")
@@ -151,7 +152,7 @@ class AccountControllerTest {
     @DisplayName("POST /verify 400: Mock 은행 인증 실패(ACCOUNT4002)가 그대로 응답된다")
     void verify_은행_인증_실패() throws Exception {
         willThrow(new BusinessException(AccountErrorCode.ACCOUNT_VERIFICATION_FAILED))
-                .given(bankAccountService).verifyAccount(any());
+                .given(bankAccountService).verifyAccount(any(), anyString());
 
         mockMvc.perform(post("/api/v1/accounts/verify")
                         .with(authedJwt())
@@ -177,6 +178,68 @@ class AccountControllerTest {
                 .andExpect(jsonPath("$.code").value("AUTH4011"));
 
         verifyNoInteractions(bankAccountService);
+    }
+
+    @Test
+    @DisplayName("POST /verify 401: 만료/위조 토큰 → AUTH4011 (BearerTokenAuthenticationFilter 경로), service 미호출")
+    void verify_만료토큰_401() throws Exception {
+        // 실제 Authorization 헤더로 보내 BearerTokenAuthenticationFilter가 JwtDecoder.decode를 타게 한다
+        // (jwt() 후처리기는 필터를 우회하므로 이 경로를 검증 못 함). decode가 만료 예외를 던지면
+        // oauth2ResourceServer의 entry point가 AUTH4011로 응답해야 한다(빈 body 기본응답이면 회귀).
+        // BadJwtException = "토큰이 나쁨"(만료·서명·형식) → InvalidBearerTokenException(401)으로 변환돼
+        // entry point를 탄다. 일반 JwtException은 "디코더 장애"로 분류돼 500이 되므로 만료 재현엔 부적합.
+        given(jwtDecoder.decode(anyString()))
+                .willThrow(new BadJwtException("Jwt expired at 2026-06-02T02:27:55Z"));
+
+        mockMvc.perform(post("/api/v1/accounts/verify")
+                        .header("Authorization", "Bearer expired.jwt.token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "bank_code", "004",
+                                "account_number", "1234567890",
+                                "holder_name", "홍길동"))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verifyNoInteractions(bankAccountService);
+    }
+
+    @Test
+    @DisplayName("POST /verify 429: service가 ACCOUNT4005(rate-limit 초과) 던지면 → 429 + code")
+    void verify_rate_limit_429() throws Exception {
+        willThrow(new BusinessException(AccountErrorCode.VERIFICATION_RATE_LIMITED))
+                .given(bankAccountService).verifyAccount(any(), anyString());
+
+        mockMvc.perform(post("/api/v1/accounts/verify")
+                        .with(authedJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "bank_code", "004",
+                                "account_number", "1234567890",
+                                "holder_name", "홍길동"))))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("ACCOUNT4005"));
+    }
+
+    @Test
+    @DisplayName("POST /verify - X-Forwarded-For가 있으면 맨 앞 IP를 clientIp(rate-limit 키)로 service에 전달")
+    void verify_forwardsClientIpFromXff() throws Exception {
+        given(bankAccountService.verifyAccount(any(), anyString()))
+                .willReturn(VerifyAccountResponse.from(new AccountToken("tok")));
+
+        mockMvc.perform(post("/api/v1/accounts/verify")
+                        .with(authedJwt())
+                        .header("X-Forwarded-For", "203.0.113.9, 10.0.0.2")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "bank_code", "004",
+                                "account_number", "1234567890",
+                                "holder_name", "홍길동"))))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<String> ipCaptor = ArgumentCaptor.forClass(String.class);
+        verify(bankAccountService).verifyAccount(any(), ipCaptor.capture());
+        assertThat(ipCaptor.getValue()).isEqualTo("203.0.113.9");
     }
 
     // --- POST /accounts ---

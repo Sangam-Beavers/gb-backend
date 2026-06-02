@@ -1,5 +1,7 @@
 package com.gb.wallet.domain.account.service.impl;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.account.dto.request.ChargeRequest;
@@ -24,16 +26,19 @@ import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.config.ChargeProperties;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
+import com.gb.wallet.global.redis.IdempotencyCacheHelper;
 import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ChargeServiceImpl implements ChargeService {
@@ -55,6 +60,8 @@ public class ChargeServiceImpl implements ChargeService {
     private final TransactionAuditLogRepository auditLogRepository;
     private final BankClient bankClient;
     private final ChargeProperties chargeProperties;
+    private final IdempotencyCacheHelper idempotencyCacheHelper;
+    private final ObjectMapper objectMapper;
 
     /**
      * self-injection: {@code @Transactional}이 적용되려면 {@link #doCharge}/{@link #readPrior}를 AOP
@@ -73,8 +80,22 @@ public class ChargeServiceImpl implements ChargeService {
     @Override
     public ChargeResponse charge(String userPublicId, String accountPublicId,
                                  String idempotencyKey, ChargeRequest request, String clientIp) {
+        // 멱등성 Layer 1 — Redis 캐시(가장 빠른 경로). hit이면 DB·Mock 호출 없이 첫 응답을 즉시 재반환한다.
+        // 캐시 키를 (요청자, 계좌, 충전 도메인) 단위로 스코프(cacheKey)한다 — 같은 idempotency_key라도 다른
+        // 사용자/계좌는 캐시 hit이 나지 않고 캐시 미스 → DB 경로(doCharge → rebuildFromPrior)로 흘러
+        // ACCOUNT4001로 막힌다. 즉 Layer 1은 동일 (user, account, key)의 정상 재요청만 가속하고, 교차
+        // 사용자/계좌/유형 도용을 우회시키지 않는다(DB Layer 2·3의 보안 검증과 동일한 불변식 유지). 또한
+        // 멱등 캐시 prefix(idempotency:)를 송금과 공유하므로, charge 네임스페이스로 분리해 교차 도메인
+        // 역직렬화(송금 응답을 충전 응답으로)도 차단한다. 캐시 실패는 응답을 막지 않는다 — Layer 2·3가 안전망.
+        String cacheKey = cacheKey(idempotencyKey, userPublicId, accountPublicId);
+        Optional<ChargeResponse> cached = readFromCache(cacheKey);
+        if (cached.isPresent()) {
+            return cached.get();
+        }
+
+        ChargeResponse response;
         try {
-            return self.doCharge(userPublicId, accountPublicId, idempotencyKey, request, clientIp);
+            response = self.doCharge(userPublicId, accountPublicId, idempotencyKey, request, clientIp);
         } catch (DataIntegrityViolationException race) {
             // 동시 충전 race: 다른 트랜잭션이 같은 idempotency_key로 먼저 커밋했다(UNIQUE 위반).
             // IDENTITY 전략이라 INSERT가 save() 시점에 즉시 실행되므로 위반은 doCharge 트랜잭션 "안"에서
@@ -88,8 +109,23 @@ public class ChargeServiceImpl implements ChargeService {
             //   있다. 이 경우 현재 catch가 놓쳐 COMMON5031/5000으로 응답될 수 있다. Mock은 같은 키로 첫 응답을
             //   재반환하므로 외부 이중 차감은 없고(§5-2), 클라이언트 재시도로 정합성은 회복되지만, 운영 전환 시
             //   catch를 PessimisticLockingFailureException까지 넓히고 bounded retry를 더하는 것을 검토한다.
-            return self.readPrior(idempotencyKey, accountPublicId, userPublicId);
+            response = self.readPrior(idempotencyKey, accountPublicId, userPublicId);
         }
+
+        // 정상/race 복구 응답을 Layer 1에 채운다(다음 동일 (user, account, key) 요청은 DB·Mock 미접근).
+        // 쓰기 실패는 응답에 영향 없음. 에러(BusinessException)는 위 흐름에서 전파돼 캐시에 들어가지 않는다.
+        writeToCache(cacheKey, response);
+        return response;
+    }
+
+    /**
+     * 충전 멱등성 Layer 1 캐시 키. {@code idempotency_key}를 (요청자, 계좌, 충전 도메인) 단위로 스코프해,
+     * 교차 사용자/계좌/도메인 요청이 같은 {@code idempotency_key}로 캐시 hit을 일으키지 못하게 한다(그 경우
+     * 캐시 미스 → DB 경로의 {@code rebuildFromPrior}가 ACCOUNT4001로 차단). {@code IdempotencyCacheHelper}가
+     * {@code idempotency:} prefix를 덧붙이므로 최종 키는 {@code idempotency:charge:{key}:{user}:{account}}다.
+     */
+    private static String cacheKey(String idempotencyKey, String userPublicId, String accountPublicId) {
+        return "charge:" + idempotencyKey + ":" + userPublicId + ":" + accountPublicId;
     }
 
     @Override
@@ -224,5 +260,32 @@ public class ChargeServiceImpl implements ChargeService {
                 .findFirstByTransaction_IdOrderByIdAsc(prior.getId())
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
         return ChargeResponse.of(prior, accountPublicId, log.getAfterBalance());
+    }
+
+    // ----- Redis 캐시 헬퍼(멱등성 Layer 1): 캐시 실패는 응답을 막지 않는다 — TransferServiceImpl와 동일 패턴 -----
+
+    private Optional<ChargeResponse> readFromCache(String cacheKey) {
+        try {
+            return idempotencyCacheHelper.get(cacheKey).flatMap(json -> {
+                try {
+                    return Optional.of(objectMapper.readValue(json, ChargeResponse.class));
+                } catch (JsonProcessingException e) {
+                    log.warn("Idempotency cache JSON 역직렬화 실패 — Layer 2로 폴백. key={}", cacheKey, e);
+                    return Optional.empty();
+                }
+            });
+        } catch (RuntimeException e) {
+            log.warn("Redis 캐시 조회 실패 — Layer 2로 폴백. key={}", cacheKey, e);
+            return Optional.empty();
+        }
+    }
+
+    private void writeToCache(String cacheKey, ChargeResponse response) {
+        try {
+            idempotencyCacheHelper.set(cacheKey, objectMapper.writeValueAsString(response));
+        } catch (JsonProcessingException | RuntimeException e) {
+            // 캐시 쓰기 실패는 응답에 영향 없음 — 다음 동일 (user, account, key) 요청 시 Layer 2(DB)가 받아준다.
+            log.warn("Idempotency cache 저장 실패. key={}", cacheKey, e);
+        }
     }
 }

@@ -3,12 +3,14 @@ package com.gb.wallet.domain.account.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.account.dto.request.ChargeRequest;
@@ -34,6 +36,7 @@ import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.config.ChargeProperties;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
+import com.gb.wallet.global.redis.IdempotencyCacheHelper;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -65,6 +68,8 @@ class ChargeServiceTest {
     @Mock private TransactionRepository transactionRepository;
     @Mock private TransactionAuditLogRepository auditLogRepository;
     @Mock private BankClient bankClient;
+    @Mock private IdempotencyCacheHelper idempotencyCacheHelper;
+    @Mock private ObjectMapper objectMapper;
     @Mock private ChargeService self;
     @InjectMocks private ChargeServiceImpl service;
 
@@ -75,6 +80,9 @@ class ChargeServiceTest {
     private static final String KEY = "idem-key-1";
     private static final String IP = "127.0.0.1";
     private static final LocalDateTime FIXED = LocalDateTime.of(2026, 5, 30, 4, 15, 30);
+
+    /** 충전 Layer 1 캐시 키는 (key, user, account)로 스코프된다(ChargeServiceImpl.cacheKey와 동일 규칙). */
+    private static final String CACHE_KEY = "charge:" + KEY + ":" + USER + ":" + ACCT;
 
     @BeforeEach
     void injectSelf() {
@@ -485,6 +493,72 @@ class ChargeServiceTest {
 
         assertThat(result).isSameAs(prior);
         verify(self).readPrior(KEY, ACCT, USER);
+    }
+
+    // ===== charge — 멱등성 Layer 1(Redis 캐시) =====
+
+    @Test
+    @DisplayName("charge Layer 1: 캐시 hit이면 doCharge/readPrior·캐시쓰기 없이 캐시 응답 그대로 반환")
+    void charge_캐시_hit() throws Exception {
+        ChargeRequest req = request(new BigDecimal("100"));
+        ChargeResponse cached = stubResponse();
+        // (key, user, account)로 스코프된 키로 조회한다.
+        given(idempotencyCacheHelper.get(CACHE_KEY)).willReturn(Optional.of("{\"cached\":\"json\"}"));
+        given(objectMapper.readValue("{\"cached\":\"json\"}", ChargeResponse.class)).willReturn(cached);
+
+        ChargeResponse result = service.charge(USER, ACCT, KEY, req, IP);
+
+        assertThat(result).isSameAs(cached);
+        verify(self, never()).doCharge(any(), any(), any(), any(), any());
+        verify(self, never()).readPrior(any(), any(), any());
+        verify(idempotencyCacheHelper, never()).set(any(), any());
+    }
+
+    @Test
+    @DisplayName("charge Layer 1: 캐시 miss → doCharge 성공 시 결과를 스코프 키로 캐시에 채운다(set 호출)")
+    void charge_캐시_miss_후_채움() throws Exception {
+        ChargeRequest req = request(new BigDecimal("100"));
+        ChargeResponse expected = stubResponse();
+        given(idempotencyCacheHelper.get(CACHE_KEY)).willReturn(Optional.empty());
+        given(self.doCharge(USER, ACCT, KEY, req, IP)).willReturn(expected);
+        given(objectMapper.writeValueAsString(expected)).willReturn("{\"json\":\"ok\"}");
+
+        ChargeResponse result = service.charge(USER, ACCT, KEY, req, IP);
+
+        assertThat(result).isSameAs(expected);
+        verify(idempotencyCacheHelper).set(CACHE_KEY, "{\"json\":\"ok\"}");
+    }
+
+    @Test
+    @DisplayName("charge Layer 1: 같은 key라도 다른 사용자는 캐시 키가 분리돼 캐시를 우회하고 doCharge로 간다(교차 사용자 격리)")
+    void charge_캐시_사용자_격리() {
+        ChargeRequest req = request(new BigDecimal("100"));
+        ChargeResponse expected = stubResponse();
+        String otherUserKey = "charge:" + KEY + ":" + OTHER_USER + ":" + ACCT;
+        given(idempotencyCacheHelper.get(otherUserKey)).willReturn(Optional.empty());
+        given(self.doCharge(OTHER_USER, ACCT, KEY, req, IP)).willReturn(expected);
+
+        ChargeResponse result = service.charge(OTHER_USER, ACCT, KEY, req, IP);
+
+        assertThat(result).isSameAs(expected);
+        // USER가 저장했을 캐시 키(CACHE_KEY)는 조회조차 하지 않는다 — 다른 사용자는 캐시 격리.
+        verify(idempotencyCacheHelper, never()).get(CACHE_KEY);
+        verify(self).doCharge(OTHER_USER, ACCT, KEY, req, IP);
+    }
+
+    @Test
+    @DisplayName("charge Layer 1: 캐시 조회가 Redis 예외로 실패해도 막지 않고 doCharge로 폴백(fail-safe)")
+    void charge_캐시조회_실패_폴백() {
+        ChargeRequest req = request(new BigDecimal("100"));
+        ChargeResponse expected = stubResponse();
+        given(idempotencyCacheHelper.get(CACHE_KEY))
+                .willThrow(new RuntimeException("redis down"));
+        given(self.doCharge(USER, ACCT, KEY, req, IP)).willReturn(expected);
+
+        ChargeResponse result = service.charge(USER, ACCT, KEY, req, IP);
+
+        assertThat(result).isSameAs(expected);
+        verify(self).doCharge(USER, ACCT, KEY, req, IP);
     }
 
     // ===== helpers =====

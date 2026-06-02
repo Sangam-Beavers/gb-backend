@@ -1,5 +1,7 @@
 package com.gb.wallet.domain.account.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.math.BigDecimal;
@@ -16,6 +18,12 @@ import lombok.Getter;
  * <p>금액({@code amount}/{@code walletBalance})은 명세 §5에 따라 string으로 전송하며 항상 소수 4자리
  * ({@code DECIMAL(18,4)})로 패딩한다(잔액 조회 DTO와 동일 패턴). 식별자는 {@code public_id}만 노출하고
  * 내부 {@code id}는 절대 싣지 않는다(CLAUDE.md §5). 시각은 ISO 8601 UTC {@code Z} 문자열이다.
+ *
+ * <p><b>Jackson 역직렬화:</b> 충전 멱등성 Layer 1(Redis 캐시)이 응답을 JSON으로 저장했다가 동일 키 재요청 시
+ * 다시 객체로 복원한다. record인 {@code TransferExecuteResponse}와 달리 이 클래스는 {@code @Builder} private
+ * 생성자라 Jackson이 creator를 추론하기 모호하므로, 생성자에 {@code @JsonCreator} + 직렬화 키와 1:1인 snake_case
+ * {@code @JsonProperty}를 명시한다. 이로써 {@code -parameters}/{@code ParameterNamesModule} 유무와 무관하게
+ * 같은 ObjectMapper로 round-trip이 보장된다. 직렬화는 기존대로 필드 기반(전역 SNAKE_CASE 전략)이라 출력은 불변.
  */
 @Getter
 public class ChargeResponse {
@@ -43,8 +51,15 @@ public class ChargeResponse {
     private final String createdAt;
 
     @Builder
-    private ChargeResponse(String publicId, String accountPublicId, String amount, String currencyCode,
-                           String walletBalance, String status, String createdAt) {
+    @JsonCreator
+    private ChargeResponse(
+            @JsonProperty("public_id") String publicId,
+            @JsonProperty("account_public_id") String accountPublicId,
+            @JsonProperty("amount") String amount,
+            @JsonProperty("currency_code") String currencyCode,
+            @JsonProperty("wallet_balance") String walletBalance,
+            @JsonProperty("status") String status,
+            @JsonProperty("created_at") String createdAt) {
         this.publicId = publicId;
         this.accountPublicId = accountPublicId;
         this.amount = amount;

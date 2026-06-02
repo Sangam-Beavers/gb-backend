@@ -164,6 +164,10 @@ public class AccountController {
                     description = "ACCOUNT4001 - 존재하지 않는 계좌입니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "429",
+                    description = "ACCOUNT4005 - 계좌 인증 요청 횟수를 초과했습니다(IP 단위 rate-limit).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -174,8 +178,11 @@ public class AccountController {
     })
     @PostMapping("/verify")
     public ApiResponse<VerifyAccountResponse> verifyAccount(
-            @Valid @RequestBody VerifyAccountRequest request) {
-        return ApiResponse.success(bankAccountService.verifyAccount(request));
+            @Valid @RequestBody VerifyAccountRequest request,
+            HttpServletRequest httpRequest) {
+        // rate-limit 카운터 키로 쓸 클라이언트 IP를 추출한다(충전과 동일 — 프록시 뒤 X-Forwarded-For 우선).
+        String clientIp = ClientIpResolver.resolve(httpRequest);
+        return ApiResponse.success(bankAccountService.verifyAccount(request, clientIp));
     }
 
     /** 계좌 등록 최종 완료. 🔒 JWT 필요. */
@@ -202,6 +209,10 @@ public class AccountController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "503",
+                    description = "COMMON5031 - 일시적으로 처리할 수 없습니다(등록 직렬화 분산락 획득 실패).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping
