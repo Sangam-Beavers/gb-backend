@@ -22,7 +22,7 @@
 | 댓글 목록 조회 | GET | `/api/v1/community/posts/{id}/comments?page=&size=` | ✅ |
 | 댓글 작성 | POST | `/api/v1/community/posts/{postId}/comments` | ✅ |
 | 댓글 삭제 | DELETE | `/api/v1/community/posts/{postId}/comments/{commentId}` | ✅ |
-| 주요 QnA/FAQ | GET | `/api/v1/community/faq` | ✅ |
+| 주요 QnA 목록 | GET | `/api/v1/community/qna?category=&size=` | ❌ (공개) |
 
 ---
 
@@ -195,9 +195,52 @@
 
 ---
 
-## 8. 주요 QnA / FAQ
+## 8. 주요 QnA 목록
 
-`GET /api/v1/community/faq` · Auth ✅ → 자주 묻는 질문 목록.
+`GET /api/v1/community/qna` · **Auth ❌ (공개)**
+
+특정 카테고리의 활성 게시글을 답변(댓글) 수 내림차순으로 상위 N건 반환한다. 페이지네이션 메타는 없다(Top N 고정 목록). 작성자 정보·본문은 응답에 포함하지 않으며, 상세는 단건 조회 API(§3 `GET /posts/{id}`)로 별도 조회한다.
+
+> **인증 불필요**: 비로그인 사용자도 인기 질문을 둘러볼 수 있도록 공개로 둔다(SecurityConfig `permitAll`). 본인 식별을 쓰지 않는 read-only Top N 조회라 보안 영향 없음. 다른 community 엔드포인트는 모두 Auth ✅.
+
+**Query Parameter**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `category` | string | X | `LIFE_INFO / JOB / VISA / COUNTRY / RESIDENCE / QUESTION`. 미입력 시 `QUESTION` 카테고리만 반환 |
+| `size` | integer | X | 반환 개수 (기본 5, 가드 1~100) |
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `posts` | array | N | QnA 게시글 목록 (답변 수 내림차순, 동률은 최근 글 우선) |
+| `posts[].public_id` | string | N | 게시글 UUID |
+| `posts[].title` | string | N | 제목 |
+| `posts[].comment_count` | integer | N | 답변(댓글) 수 |
+| `posts[].created_at` | string | N | 작성 시각 (ISO 8601 UTC `Z`) |
+
+```json
+{
+  "success": true,
+  "data": {
+    "posts": [
+      { "public_id": "a1b2c3d4-...", "title": "E-9 비자로 근무지 변경이 가능한가요?", "comment_count": 7, "created_at": "2026-05-20T09:00:00Z" },
+      { "public_id": "b2c3d4e5-...", "title": "건강보험 피부양자 등록은 어떻게 하나요?", "comment_count": 4, "created_at": "2026-05-18T14:20:00Z" }
+    ]
+  },
+  "message": "요청이 성공적으로 처리되었습니다."
+}
+```
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (잘못된 카테고리 / size 범위 1~100 위반) |
+
+> **명세 모호성 해석 (옵션 A)**: 원 명세에 "category = QUESTION 필터"(고정)와 "Query category"(상위 카테고리 필터 — LIFE_INFO 등)가 동시에 적혀 있으나 현 `PostCategory` enum은 단일 카테고리만 갖는다. 가장 자연스러운 운영 의미로 **"category 미입력 → QUESTION 카테고리 / 입력 → 해당 카테고리"** 로 통일했다 (답변 많은 인기글 = QnA의 일반화).
+>
+> **인증 정책**: Notion 명세 캡처에 401 `COMMON4011`(인증 필요)이 적혀 있으나, 본 API는 비로그인 사용자 접근이 가능해야 하므로 SecurityConfig에서 공개 처리 → 401 응답 자체가 발생하지 않는다.
+>
+> **정렬 tie-break**: `comment_count DESC, id DESC` — comment_count 동률에서 최근 글이 위로 오도록 id DESC를 보조 키로 사용한다(id는 외부 비노출, 정렬 키로만).
 
 ---
 
