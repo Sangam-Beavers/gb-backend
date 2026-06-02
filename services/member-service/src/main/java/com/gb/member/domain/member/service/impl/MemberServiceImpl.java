@@ -1,6 +1,8 @@
 package com.gb.member.domain.member.service.impl;
 
 import com.gb.common.exception.BusinessException;
+import com.gb.member.domain.member.dto.request.PasswordResetEmailRequest;
+import com.gb.member.domain.member.dto.request.PasswordResetRequest;
 import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.LanguageResponse;
@@ -10,8 +12,11 @@ import com.gb.member.domain.member.repository.MemberRepository;
 import com.gb.member.domain.member.service.MemberService;
 import com.gb.member.global.client.IdpUserClient;
 import com.gb.member.global.exception.code.MemberErrorCode;
+import com.gb.member.global.mail.EmailSender;
+import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +26,12 @@ public class MemberServiceImpl implements MemberService {
 
     private final MemberRepository memberRepository;
     private final IdpUserClient idpUserClient;
+    private final PasswordResetTokenStore passwordResetTokenStore;
+    private final EmailSender emailSender;
+
+    /** 재설정 링크 베이스 URL(프론트 비번재설정 페이지). yml app.password-reset.base-url로 주입. */
+    @Value("${app.password-reset.base-url}")
+    private String passwordResetBaseUrl;
 
     @Override
     @Transactional
@@ -71,6 +82,44 @@ public class MemberServiceImpl implements MemberService {
     public CheckAvailabilityResponse checkNickname(String nickname) {
         boolean available = !memberRepository.existsByNickname(nickname);
         return CheckAvailabilityResponse.of(available);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public void sendPasswordResetEmail(PasswordResetEmailRequest request) {
+        String email = request.getEmail();
+
+        // 가입 여부 노출 방지(보안): 미가입 이메일이어도 예외/다른 응답 없이 조용히 종료한다.
+        // (공격자가 응답 차이로 "이 이메일 가입돼 있나"를 알아내지 못하게 — 호출 측은 항상 200을 받는다.)
+        if (!memberRepository.existsByEmail(email)) {
+            return;
+        }
+
+        // 일회용 재설정 토큰 생성 → Redis에 TTL 저장(토큰→email). 만료는 Redis가 자동 처리.
+        String token = UUID.randomUUID().toString();
+        passwordResetTokenStore.save(token, email);
+
+        // 재설정 링크를 메일로 발송. 링크는 프론트 비번재설정 페이지로 향한다(토큰을 쿼리로 전달).
+        String link = passwordResetBaseUrl + "?token=" + token;
+        emailSender.send(
+                email,
+                "[Global Bridge] 비밀번호 재설정 안내",
+                "아래 링크에서 비밀번호를 재설정해주세요(30분 내 유효):\n\n" + link
+                        + "\n\n본인이 요청하지 않았다면 이 메일을 무시하세요.");
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public void resetPassword(PasswordResetRequest request) {
+        // 토큰 검증 — Redis에 없으면(만료/무효) 거절.
+        String email = passwordResetTokenStore.findEmail(request.getToken())
+                .orElseThrow(() -> new BusinessException(MemberErrorCode.INVALID_RESET_TOKEN));
+
+        // 비밀번호는 IdP가 보유하므로 IdP 관리 API로 변경한다.
+        idpUserClient.changePassword(email, request.getNewPassword());
+
+        // 사용 완료된 토큰 삭제(재사용 방지).
+        passwordResetTokenStore.delete(request.getToken());
     }
 
     @Override

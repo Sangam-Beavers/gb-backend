@@ -13,6 +13,8 @@ import static org.mockito.Mockito.when;
 
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
+import com.gb.member.domain.member.dto.request.PasswordResetEmailRequest;
+import com.gb.member.domain.member.dto.request.PasswordResetRequest;
 import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.LanguageResponse;
@@ -21,6 +23,8 @@ import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
 import com.gb.member.global.client.IdpUserClient;
 import com.gb.member.global.exception.code.MemberErrorCode;
+import com.gb.member.global.mail.EmailSender;
+import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -41,6 +45,8 @@ import org.springframework.test.util.ReflectionTestUtils;
  * <ul>
  *   <li>회원가입 — IdP에 사용자를 등록하고 받은 sub를 authProviderId에 저장, 비밀번호 미저장, 중복 거절</li>
  *   <li>이메일/닉네임 중복 확인 — existsBy 결과의 반전(존재→사용불가, 없음→사용가능). 조회만 하므로 IdP를 건드리지 않음</li>
+ *   <li>비밀번호 재설정 — 가입 이메일만 발송(가입여부 비노출), 토큰 검증/IdP 변경/토큰 삭제</li>
+ *   <li>언어 조회/변경 · 탈퇴 — 활성 회원 조회(soft delete 제외), dirty checking, IdP 비활성화</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -48,6 +54,8 @@ class MemberServiceImplTest {
 
     @Mock private MemberRepository memberRepository;
     @Mock private IdpUserClient idpUserClient;
+    @Mock private PasswordResetTokenStore passwordResetTokenStore;
+    @Mock private EmailSender emailSender;
 
     @InjectMocks private MemberServiceImpl memberService;
 
@@ -158,6 +166,66 @@ class MemberServiceImplTest {
 
         assertThat(response.isAvailable()).isFalse();
         verifyNoInteractions(idpUserClient);
+    }
+
+    // ──────────────────── 비밀번호 재설정 ────────────────────
+
+    @Test
+    @DisplayName("재설정 메일: 가입된 이메일이면 토큰 저장 + 메일 발송한다")
+    void sendPasswordResetEmail_가입됨_발송() {
+        PasswordResetEmailRequest request = new PasswordResetEmailRequest();
+        ReflectionTestUtils.setField(request, "email", "user@example.com");
+        when(memberRepository.existsByEmail("user@example.com")).thenReturn(true);
+
+        memberService.sendPasswordResetEmail(request);
+
+        verify(passwordResetTokenStore).save(anyString(), eq("user@example.com"));
+        verify(emailSender).send(eq("user@example.com"), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("재설정 메일: 미가입 이메일이면 조용히 종료(토큰/메일 없음 — 가입여부 노출 방지)")
+    void sendPasswordResetEmail_미가입_조용히종료() {
+        PasswordResetEmailRequest request = new PasswordResetEmailRequest();
+        ReflectionTestUtils.setField(request, "email", "nobody@example.com");
+        when(memberRepository.existsByEmail("nobody@example.com")).thenReturn(false);
+
+        memberService.sendPasswordResetEmail(request);
+
+        // 미가입이어도 예외 없이 끝나고, 토큰 저장·메일 발송은 하지 않는다.
+        verify(passwordResetTokenStore, never()).save(anyString(), anyString());
+        verifyNoInteractions(emailSender, idpUserClient);
+    }
+
+    @Test
+    @DisplayName("재설정 실행: 유효한 토큰이면 IdP 비번 변경 후 토큰 삭제")
+    void resetPassword_성공() {
+        PasswordResetRequest request = new PasswordResetRequest();
+        ReflectionTestUtils.setField(request, "token", "valid-token");
+        ReflectionTestUtils.setField(request, "newPassword", "NewP@ssw0rd!");
+        when(passwordResetTokenStore.findEmail("valid-token")).thenReturn(Optional.of("user@example.com"));
+
+        memberService.resetPassword(request);
+
+        verify(idpUserClient).changePassword("user@example.com", "NewP@ssw0rd!");
+        verify(passwordResetTokenStore).delete("valid-token");
+    }
+
+    @Test
+    @DisplayName("재설정 실행: 토큰이 만료/무효(Redis에 없음)면 MEMBER4004, 비번 변경 안 함")
+    void resetPassword_토큰무효() {
+        PasswordResetRequest request = new PasswordResetRequest();
+        ReflectionTestUtils.setField(request, "token", "expired-token");
+        ReflectionTestUtils.setField(request, "newPassword", "NewP@ssw0rd!");
+        when(passwordResetTokenStore.findEmail("expired-token")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> memberService.resetPassword(request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.INVALID_RESET_TOKEN);
+
+        verify(idpUserClient, never()).changePassword(anyString(), anyString());
+        verify(passwordResetTokenStore, never()).delete(anyString());
     }
 
     // ───────────────────────── 언어 조회/변경 ─────────────────────────

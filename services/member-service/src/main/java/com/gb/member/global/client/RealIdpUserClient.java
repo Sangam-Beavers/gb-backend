@@ -104,6 +104,48 @@ public class RealIdpUserClient implements IdpUserClient {
         }
     }
 
+    @Override
+    public void changePassword(String email, String newPassword) {
+        try {
+            // 1) email(=username)으로 사용자 조회 → pk 확보. Authentik: GET /core/users/?username={username}
+            //    email은 URI 템플릿 변수로 넘겨 자동 인코딩한다(@, + 등 특수문자 안전 — 문자열 직접 결합 금지).
+            UserListResponse list = restClient.get()
+                    .uri(apiBaseUri + "/core/users/?username={username}", email)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)
+                    .retrieve()
+                    .body(UserListResponse.class);
+
+            if (list == null || list.results() == null) {
+                log.error("Authentik 사용자 조회 실패(비번 변경): email={}", email);
+                throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+            }
+
+            // ?username 필터가 부분일치/동명을 돌려줄 수 있으므로, username이 "정확히" 일치하는 1건만 사용한다.
+            // (엉뚱한 사용자의 비밀번호를 바꾸지 않도록 방어 — 0건 또는 2건 이상이면 거절)
+            List<UserEntry> matched = list.results().stream()
+                    .filter(u -> email.equals(u.username()) && u.pk() != null)
+                    .toList();
+            if (matched.size() != 1) {
+                log.error("Authentik username 정확 일치가 1건이 아님(비번 변경): email={}, count={}",
+                        email, matched.size());
+                throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+            }
+
+            // 2) 그 pk로 비밀번호 설정(204).
+            restClient.post()
+                    .uri(apiBaseUri + "/core/users/" + matched.get(0).pk() + "/set_password/")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(toJson(Map.of("password", newPassword)))
+                    .retrieve()
+                    .toBodilessEntity();
+
+        } catch (RestClientException e) {
+            log.error("Authentik 비밀번호 변경 실패: email={}, msg={}", email, e.getMessage());
+            throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+        }
+    }
+
     /**
      * 탈퇴 처리: 저장된 user uuid({@code authProviderId})로 사용자를 찾아 {@code is_active=false}로 비활성화한다.
      *
@@ -183,11 +225,13 @@ public class RealIdpUserClient implements IdpUserClient {
             @JsonProperty("uuid") String uuid) {
     }
 
-    /** 사용자 목록 조회 응답(필요한 필드만). uuid 필터로 찾은 사용자의 pk를 PATCH URL에 쓴다. */
+    /** 사용자 목록 조회 응답(필요한 필드만). username/uuid 필터로 찾은 사용자의 pk·username을 쓴다. */
     private record UserListResponse(@JsonProperty("results") List<UserEntry> results) {
     }
 
-    /** 목록 항목(필요한 필드만). */
-    private record UserEntry(@JsonProperty("pk") Integer pk) {
+    /** 목록 항목(필요한 필드만). changePassword는 username 정확 일치 확인에, deactivateUser는 pk에 쓴다. */
+    private record UserEntry(
+            @JsonProperty("pk") Integer pk,
+            @JsonProperty("username") String username) {
     }
 }
