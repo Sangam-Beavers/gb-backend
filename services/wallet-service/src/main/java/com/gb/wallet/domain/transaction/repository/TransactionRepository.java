@@ -32,6 +32,14 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
             String userPublicId, TransactionType type, Pageable pageable);
 
     /**
+     * 회원의 모든 유형 거래(CHARGE/INTERNAL_TRANSFER/REMITTANCE/EXCHANGE)를 페이지로 조회한다.
+     * 마이페이지 거래내역({@code GET /api/v1/wallets/me/transactions})에서 호출하며,
+     * 정렬(최근순)은 {@link Pageable}로 받는다. {@code wallet.userPublicId}로 본인 거래만 필터링한다
+     * (MSA 경계 — public_id 참조).
+     */
+    Page<Transaction> findByWallet_UserPublicId(String userPublicId, Pageable pageable);
+
+    /**
      * 내가 송신자인 INTERNAL_TRANSFER(COMPLETED) 중, 수신자(receiver wallet)별로 가장 최근 송금
      * 한 건씩 골라 최근순으로 N건을 반환한다. {@code N}은 {@link Pageable#getPageSize()}로 제어한다.
      *
