@@ -48,6 +48,8 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/api/v1/members/check-email",
                                 "/api/v1/members/check-nickname").permitAll()
+                        // ⚠️ [임시] 메일 발송 검증용 — 검증 후 MailTestController와 함께 제거
+                        .requestMatchers("/api/v1/mail/test").permitAll()
                         // 문서 · 헬스체크
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/actuator/**").permitAll()
                         // 그 외 전부 인증 필요(로그아웃, /members/me* 등)
