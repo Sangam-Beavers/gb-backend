@@ -40,6 +40,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -168,6 +169,30 @@ class AccountControllerTest {
     @DisplayName("POST /verify 401: 토큰 없음 → AUTH4011 (보호 엔드포인트), service 미호출")
     void verify_토큰_없음_401() throws Exception {
         mockMvc.perform(post("/api/v1/accounts/verify")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "bank_code", "004",
+                                "account_number", "1234567890",
+                                "holder_name", "홍길동"))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verifyNoInteractions(bankAccountService);
+    }
+
+    @Test
+    @DisplayName("POST /verify 401: 만료/위조 토큰 → AUTH4011 (BearerTokenAuthenticationFilter 경로), service 미호출")
+    void verify_만료토큰_401() throws Exception {
+        // 실제 Authorization 헤더로 보내 BearerTokenAuthenticationFilter가 JwtDecoder.decode를 타게 한다
+        // (jwt() 후처리기는 필터를 우회하므로 이 경로를 검증 못 함). decode가 만료 예외를 던지면
+        // oauth2ResourceServer의 entry point가 AUTH4011로 응답해야 한다(빈 body 기본응답이면 회귀).
+        // BadJwtException = "토큰이 나쁨"(만료·서명·형식) → InvalidBearerTokenException(401)으로 변환돼
+        // entry point를 탄다. 일반 JwtException은 "디코더 장애"로 분류돼 500이 되므로 만료 재현엔 부적합.
+        given(jwtDecoder.decode(anyString()))
+                .willThrow(new BadJwtException("Jwt expired at 2026-06-02T02:27:55Z"));
+
+        mockMvc.perform(post("/api/v1/accounts/verify")
+                        .header("Authorization", "Bearer expired.jwt.token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
