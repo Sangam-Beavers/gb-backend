@@ -7,7 +7,7 @@ import com.gb.wallet.domain.account.dto.response.ChargeResponse;
  * 충전 실행 서비스. 등록 계좌의 {@code mock_account_token}으로 Mock 은행에 출금을 요청하고,
  * 성공 시 본체 KRW 잔액을 증액한다. {@code Idempotency-Key}로 멱등성을 보장한다.
  *
- * <p>멱등성 race 처리(§5-1) 때문에 트랜잭션 경계가 메서드별로 갈린다:
+ * <p>멱등성 race 처리 때문에 트랜잭션 경계가 메서드별로 갈린다:
  * <ul>
  *   <li>{@link #charge} — 트랜잭션 <b>밖</b>의 얇은 래퍼. UNIQUE 위반(동시 충전)을 잡아 첫 결과를
  *       재조회한다. 컨트롤러는 이 메서드만 호출한다.</li>
@@ -21,9 +21,9 @@ public interface ChargeService {
     /**
      * 충전 실행 진입점. 정상 흐름은 {@link #doCharge}에 위임하고, 동시 충전으로 인한
      * {@link org.springframework.dao.DataIntegrityViolationException}(idempotency_key UNIQUE 위반)이
-     * 나면 별도 트랜잭션({@link #readPrior})에서 먼저 커밋된 첫 결과를 재반환한다(§5-1).
+     * 나면 별도 트랜잭션({@link #readPrior})에서 먼저 커밋된 첫 결과를 재반환한다.
      *
-     * @param userPublicId   요청 사용자(인증 미구현 — 헤더 수신, CLAUDE.md §9)
+     * @param userPublicId   요청 사용자 public_id(JWT public_id claim)
      * @param accountPublicId 출금 계좌 public_id(요청 path)
      * @param idempotencyKey  멱등성 키(헤더). Mock 은행에도 그대로 forward한다.
      * @param request         충전 요청(amount)

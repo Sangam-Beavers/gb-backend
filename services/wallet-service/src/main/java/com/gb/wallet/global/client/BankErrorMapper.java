@@ -30,6 +30,7 @@ final class BankErrorMapper {
             case "BANK4003" -> new BusinessException(AccountErrorCode.ACCOUNT_VERIFICATION_FAILED, ex);
             case "BANK4010" -> new BusinessException(AccountErrorCode.UNVERIFIED_ACCOUNT, ex);
             case "BANK4004" -> new BusinessException(CommonErrorCode.INVALID_REQUEST, ex);
+            case "BANK4001" -> new BusinessException(CommonErrorCode.INVALID_REQUEST, ex);
             default -> new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE, ex);
         };
     }

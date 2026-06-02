@@ -6,7 +6,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 /**
- * 환전 견적 요청. 금액은 명세 §0에 따라 string으로 받아 Service에서 BigDecimal로 변환한다.
+ * 환전 견적 요청. 금액은 string으로 받아 Service에서 BigDecimal로 변환한다.
  *
  * <p>{@code exchangeType}/{@code from}/{@code to} 통화 코드는 @NotBlank로만 1차 검증하고,
  * 실제 enum/지원 통화 여부는 Service에서 변환 시도 후 실패 시 도메인 에러(TRANSFER4002)로 처리한다

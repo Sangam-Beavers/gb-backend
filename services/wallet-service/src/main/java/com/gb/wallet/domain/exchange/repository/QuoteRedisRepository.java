@@ -1,6 +1,8 @@
 package com.gb.wallet.domain.exchange.repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gb.common.exception.BusinessException;
+import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.exchange.dto.QuoteData;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -20,7 +22,7 @@ import org.springframework.stereotype.Repository;
  * 만료 시각을 별도로 계산·비교할 필요가 없다.
  *
  * <p>QuoteData(record)는 JSON 문자열로 직렬화해 RBucket에 담는다. 직렬화는 ObjectMapper로 처리하며,
- * 실패는 견적 발급/조회를 진행할 수 없는 상황이므로 호출 측에서 서버 오류로 변환한다.
+ * 직렬화 실패는 견적을 진행할 수 없는 상황이라 {@code BusinessException}(COMMON5000)으로 던진다.
  */
 @Slf4j
 @Repository
@@ -45,7 +47,7 @@ public class QuoteRedisRepository {
             bucket.set(json, TTL_MINUTES, TimeUnit.MINUTES);
         } catch (Exception e) {
             log.error("견적 Redis 저장 실패. quotePublicId={}", quote.quotePublicId(), e);
-            throw new IllegalStateException("견적 저장에 실패했습니다.", e);
+            throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR, e);
         }
     }
 

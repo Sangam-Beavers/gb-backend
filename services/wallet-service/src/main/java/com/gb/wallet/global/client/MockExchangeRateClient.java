@@ -39,4 +39,16 @@ public class MockExchangeRateClient implements ExchangeRateClient {
         // 표에 없는 통화는 null 반환 → 호출 측(Service)이 미지원 통화로 판단해 TRANSFER4002 처리.
         return RATES.get(currency);
     }
+
+    /**
+     * Mock 환경에서는 직전 환율 = 현재 환율 (동일 값) 으로 반환한다.
+     * 결과적으로 {@code /wallets/exchange-rates} 응답의 등락률(change_rate) 은 항상 0.
+     *
+     * <p>운영(Real) 에서는 Redis 의 {@code rate:KRW-<통화>:prev} 키 (exchange-updater 가 자정마다 백업)
+     * 를 사용해 전일 대비 등락률을 정확히 산정한다.
+     */
+    @Override
+    public BigDecimal getPrevRateToKrw(CurrencyType currency) {
+        return getRateToKrw(currency);
+    }
 }

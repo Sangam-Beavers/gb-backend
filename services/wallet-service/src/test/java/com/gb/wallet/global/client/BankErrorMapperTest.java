@@ -56,6 +56,14 @@ class BankErrorMapperTest {
     }
 
     @Test
+    @DisplayName("BANK4001 → COMMON4001 (잘못된 요청 = 요청 값 오류)")
+    void map_BANK4001() {
+        BusinessException result = BankErrorMapper.toBusinessException(
+                new BankClientException("BANK4001", HttpStatus.BAD_REQUEST, "잘못된 요청"));
+        assertThat(result.getErrorCode()).isEqualTo(CommonErrorCode.INVALID_REQUEST);
+    }
+
+    @Test
     @DisplayName("BANK5xxx / 알 수 없는 코드 → COMMON5031 (일시 장애)")
     void map_BANK5xxx() {
         BusinessException byBank5000 = BankErrorMapper.toBusinessException(

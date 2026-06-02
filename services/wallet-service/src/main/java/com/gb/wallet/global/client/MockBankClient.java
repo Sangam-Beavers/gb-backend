@@ -31,8 +31,8 @@ import org.springframework.web.client.RestClient;
  * <p><b>어댑터 경계 규칙:</b> 외부 시스템과의 wire-format 매핑(아래 private record)은
  * {@code @JsonProperty}로 <em>명시</em>한다. 본체 응답 DTO와 달리 전역 Jackson 설정
  * ({@code spring.jackson.property-naming-strategy: SNAKE_CASE})에 의존하지 않는다 —
- * 외부 계약은 전역 설정 변경에 영향받지 않아야 한다. 후속 PR에서 {@code withdraw}/{@code payout}용
- * wire-format record를 추가할 때도 동일 패턴을 따른다.
+ * 외부 계약은 전역 설정 변경에 영향받지 않아야 한다. {@code payout}용 wire-format record를 추가할 때도
+ * 동일 패턴을 따른다.
  */
 @Component
 @Profile({"dev", "stage"})
@@ -108,11 +108,10 @@ public class MockBankClient implements BankClient {
     /**
      * 충전 출금(외부 계좌 차감). 본체가 받은 {@code idempotencyKey}를 Mock 은행에 그대로 forward한다 —
      * Mock 은행도 같은 키로 첫 응답을 재반환하므로, 본체에서 race로 두 번째 호출이 일어나도 Mock은
-     * 동일 결과를 돌려준다(§13-1, §5-2). 금액은 string 십진수로 보낸다.
+     * 동일 결과를 돌려준다(§13-1). 금액은 string 십진수로 보낸다.
      *
      * <p>에러 매핑은 {@link #inquiry}/{@link #verify}와 동일 경로 — Mock의 {@code BANK####}는
-     * {@link #translateError} → {@link BankErrorMapper}가 본체 도메인 에러로 변환한다
-     * (BANK4002→ACCOUNT4003, BANK4010→ACCOUNT4006, BANK4040→ACCOUNT4001, 그 외/네트워크→COMMON5031).
+     * {@link #translateError} → {@link BankErrorMapper}(§13-4 매핑 SSOT)가 본체 도메인 에러로 변환한다.
      */
     @Override
     public WithdrawalResult withdraw(String accountToken, BigDecimal amount,

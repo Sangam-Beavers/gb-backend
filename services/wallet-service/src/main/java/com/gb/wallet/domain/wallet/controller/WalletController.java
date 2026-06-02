@@ -2,11 +2,13 @@ package com.gb.wallet.domain.wallet.controller;
 
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
+import com.gb.wallet.domain.wallet.dto.response.ExchangeRateWidgetResponse;
 import com.gb.wallet.domain.wallet.dto.response.WalletBalanceResponse;
 import com.gb.wallet.domain.wallet.dto.response.WalletMeResponse;
 import com.gb.wallet.domain.wallet.service.WalletService;
 import com.gb.wallet.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -15,6 +17,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Wallet", description = "전자지갑/잔액 API")
@@ -114,5 +117,44 @@ public class WalletController {
     public ApiResponse<WalletMeResponse> getMyWallet(
             @CurrentUserPublicId String userPublicId) {
         return ApiResponse.success(walletService.getMyWallet(userPublicId));
+    }
+
+    /** 주요 통화 환율 위젯 조회. 🔒 JWT 필요(본인 식별 값은 쓰지 않고 인증만 요구 — CLAUDE.md §9). */
+    @Operation(
+            summary = "주요 통화 환율 위젯 조회",
+            description = "기준 통화 KRW 대비 주요 통화의 \"1 외화→KRW\" 환율과 전일 대비 등락률(%)을 조회한다. "
+                    + "currency_codes(콤마 구분)로 통화를 선별하며, 생략 시 KRW를 제외한 전체 지원 통화를 반환한다. "
+                    + "환율 소스: dev=고정 환율표(Mock) / stage·prod=Redis(rate:KRW-<통화>, exchange-updater cron 매일 "
+                    + "자정 갱신). 등락률은 직전 값(rate:KRW-<통화>:prev)과 비교해 산정하며 직전 값이 없으면 0. "
+                    + "미지원 통화 코드 입력 시 TRANSFER4002.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "조회 성공. data 에 ExchangeRateWidgetResponse 가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "TRANSFER4002 - 지원하지 않는 통화(미지원 코드 입력 또는 환율 미존재).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "TRANSFER4002", value = EX_TRANSFER4002))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000)))
+    })
+    @GetMapping("/exchange-rates")
+    public ApiResponse<ExchangeRateWidgetResponse> getExchangeRates(
+            @Parameter(description = "조회할 통화 코드 콤마 구분 목록(예: USD,PHP,VND). 생략 시 KRW 제외 전체 지원 통화.",
+                    example = "USD,PHP,VND")
+            @RequestParam(name = "currency_codes", required = false) String currencyCodes) {
+        return ApiResponse.success(walletService.getExchangeRates(currencyCodes));
     }
 }
