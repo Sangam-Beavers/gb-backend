@@ -71,6 +71,13 @@ public class DistributedLockHelper {
     /**
      * 단일 키에 대한 분산 락을 {@code wait 3s / lease 5s}로 획득한다(두-wallet MultiLock과 동일 타이밍 정책).
      *
+     * <p><b>명시적 {@code leaseTime}(5s)은 의도적</b>이다 — Redisson watchdog 자동 갱신을 끈다. critical
+     * section이 짧고(SELECT 몇 개 + INSERT 1), 노드가 try-finally의 {@code unlock} 없이 죽어도 5초 뒤 락이
+     * 자동 해제돼 빠르게 복구된다(watchdog은 {@code lockWatchdogTimeout} 기본 30s까지 락을 붙들어 복구가
+     * 느리다). 더 긴 critical section의 {@link #tryLockTwoWallets}(송금)도 같은 5s lease로 동작한다. 만에
+     * 하나 critical section이 5s를 넘겨 락이 만료되는 좁은 경우의 잔여 위험(중복 등록)은 후속 DB UNIQUE
+     * 제약이 최종 안전망으로 닫는다(현재 범위 밖 — redis-refactor §5-1).
+     *
      * <p>계좌 등록을 user 단위로 직렬화하는 것처럼, 잠글 리소스가 하나뿐이라 Resource Ordering이 필요 없는
      * 경우에 쓴다. 네임스페이스는 호출자가 정한다(키 전체를 넘긴다) — MultiLock 메서드가 {@code lock:wallet:}을
      * 강제하는 것과 달리, 이 메서드는 도메인별 키({@code lock:account-register:{user}} 등)를 받는다.
