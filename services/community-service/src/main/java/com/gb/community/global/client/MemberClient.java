@@ -5,7 +5,7 @@ package com.gb.community.global.client;
  * MSA 경계를 넘어가는 호출이라 식별자는 {@code user_public_id}(UUID)를 사용한다
  * (CLAUDE.md §7 — 경계 넘는 회원 참조는 public_id, 물리 FK·DB 직접 SELECT 금지).
  *
- * <p>커뮤니티 게시글 응답에 작성자 닉네임/인증배지/이웃온도를 실어야 하므로 조회만 필요하다.
+ * <p>커뮤니티 게시글 응답에 작성자 닉네임/인증배지를 실어야 하므로 조회만 필요하다.
  * wallet-service의 {@code MemberClient}와 달리 이메일 조회는 쓰지 않아 {@link #getMember}만 둔다.
  *
  * <p>TODO: member-service 구현 후 실제 HTTP 기반 RealMemberClient(@Profile("!dev"))로 교체.

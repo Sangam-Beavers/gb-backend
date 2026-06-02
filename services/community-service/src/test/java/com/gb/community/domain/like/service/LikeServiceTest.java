@@ -59,7 +59,7 @@ class LikeServiceTest {
     private static final String PID = "post-uuid-1";
     private static final Long POST_ID = 1L;
 
-    private static final MemberInfo MINH = new MemberInfo("Minh", true, "GREEN");
+    private static final MemberInfo MINH = new MemberInfo("Minh", true);
 
     // ----- like -----
 

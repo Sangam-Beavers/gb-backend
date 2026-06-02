@@ -5,6 +5,7 @@ import com.gb.member.domain.member.dto.request.PasswordResetEmailRequest;
 import com.gb.member.domain.member.dto.request.PasswordResetRequest;
 import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
+import com.gb.member.domain.member.dto.response.LanguageResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
@@ -119,5 +120,38 @@ public class MemberServiceImpl implements MemberService {
 
         // 사용 완료된 토큰 삭제(재사용 방지).
         passwordResetTokenStore.delete(request.getToken());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public LanguageResponse getLanguage(String userPublicId) {
+        return LanguageResponse.from(getActiveMemberOrThrow(userPublicId));
+    }
+
+    @Override
+    @Transactional
+    public LanguageResponse updateLanguage(String userPublicId, String language) {
+        Member member = getActiveMemberOrThrow(userPublicId);
+        member.changeLanguage(language);          // dirty checking + Auditing(updatedAt) 자동 갱신
+        return LanguageResponse.from(member);
+    }
+
+    @Override
+    @Transactional
+    public void withdraw(String userPublicId) {
+        Member member = getActiveMemberOrThrow(userPublicId);
+        member.softDelete();                      // 로컬 deleted_at 세팅(아직 커밋 전)
+        // 외부 호출은 "마지막 단계"로 — IdP 비활성화가 실패하면 BusinessException이 올라와
+        // @Transactional이 롤백되어 로컬 soft delete도 반영되지 않는다(정합성).
+        // TODO(알려진 한계): IdP 비활성화 성공 직후 DB 커밋이 실패하는 드문 구간은 이중 쓰기(dual-write)라
+        //   완전 원자적이지 않다(IdP만 비활성·로컬 활성). 완전 해소는 PENDING_WITHDRAWAL 상태 +
+        //   outbox/재시도 워커(saga)가 필요하나 인프라 비용이 커 v1 범위 밖으로 보류한다.
+        idpUserClient.deactivateUser(member.getAuthProviderId());
+    }
+
+    /** 탈퇴하지 않은(활성) 회원을 publicId로 조회한다. 없으면 MEMBER4001. */
+    private Member getActiveMemberOrThrow(String userPublicId) {
+        return memberRepository.findByPublicIdAndDeletedAtIsNull(userPublicId)
+                .orElseThrow(() -> new BusinessException(MemberErrorCode.MEMBER_NOT_FOUND));
     }
 }

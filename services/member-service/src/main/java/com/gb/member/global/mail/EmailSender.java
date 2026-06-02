@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
  * 메일 발송 컴포넌트. Spring의 {@link JavaMailSender}(Gmail SMTP, application-*.yml의 spring.mail.*)를
  * 래핑해 "제목/본문/수신자"만으로 메일을 보낸다.
  *
- * <p>비밀번호 재설정 링크·가입 인증 메일 등에서 사용한다. 발송 실패(SMTP 연결 불가/인증 실패 등)는
+ * <p>비밀번호 재설정 링크 등에서 사용한다. 발송 실패(SMTP 연결 불가/인증 실패 등)는
  * 서버 측 문제로 보고 {@link CommonErrorCode#INTERNAL_SERVER_ERROR}로 변환한다(연동 장애 취급 — CLAUDE §6).
  *
  * <p>클래스명은 {@code EmailSender}로 둔다 — Spring Boot 메일 자동설정이 등록하는 빈 이름이 {@code mailSender}라,

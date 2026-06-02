@@ -4,6 +4,7 @@ import com.gb.member.domain.member.dto.request.PasswordResetEmailRequest;
 import com.gb.member.domain.member.dto.request.PasswordResetRequest;
 import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
+import com.gb.member.domain.member.dto.response.LanguageResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 
 public interface MemberService {
@@ -22,4 +23,13 @@ public interface MemberService {
 
     /** 재설정 토큰을 검증하고 새 비밀번호로 변경한다(IdP 경유). */
     void resetPassword(PasswordResetRequest request);
+
+    /** 현재 회원의 주 사용 언어를 조회한다. 없는(탈퇴 포함) 회원이면 MEMBER4001. */
+    LanguageResponse getLanguage(String userPublicId);
+
+    /** 현재 회원의 주 사용 언어를 변경하고 변경된 값을 반환한다. 없는(탈퇴 포함) 회원이면 MEMBER4001. */
+    LanguageResponse updateLanguage(String userPublicId, String language);
+
+    /** 현재 회원을 탈퇴 처리한다(로컬 soft delete + IdP 비활성화). 없는(탈퇴 포함) 회원이면 MEMBER4001. */
+    void withdraw(String userPublicId);
 }

@@ -54,8 +54,8 @@ class CommentServiceTest {
     private static final String OTHER = "00000000-0000-0000-0000-000000000002";
     private static final String PID = "post-uuid-1";
 
-    private static final MemberInfo MINH = new MemberInfo("Minh", true, "GREEN");
-    private static final MemberInfo SOKHA = new MemberInfo("Sokha", false, "YELLOW");
+    private static final MemberInfo MINH = new MemberInfo("Minh", true);
+    private static final MemberInfo SOKHA = new MemberInfo("Sokha", false);
 
     @Test
     @DisplayName("없거나 삭제된 게시글 → COMMUNITY4001, 댓글·작성자 조회 없음")

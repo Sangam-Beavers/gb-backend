@@ -89,7 +89,7 @@ class PostControllerTest {
     // ----- POST /posts -----
 
     @Test
-    @DisplayName("POST 201: 정상 작성 → 201 + snake_case 직렬화(author_is_verified/image_urls), service 호출")
+    @DisplayName("POST 201: 정상 작성 → 201 + snake_case 직렬화(author_is_verified), service 호출")
     void create_정상_201() throws Exception {
         given(postService.createPost(eq(USER), any())).willReturn(stubDetail());
 
@@ -99,17 +99,13 @@ class PostControllerTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "category", "JOB",
                                 "title", "제목",
-                                "content", "본문",
-                                "image_urls", List.of("https://cdn.example.com/a.jpg")))))
+                                "content", "본문"))))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.public_id").value(PID))
                 .andExpect(jsonPath("$.data.category").value("JOB"))
                 .andExpect(jsonPath("$.data.author_nickname").value("Minh"))
                 .andExpect(jsonPath("$.data.author_is_verified").value(true))
-                .andExpect(jsonPath("$.data.author_temperature").value("GREEN"))
-                .andExpect(jsonPath("$.data.image_urls").isArray())
-                .andExpect(jsonPath("$.data.image_urls.length()").value(0))
                 .andExpect(jsonPath("$.data.created_at").value("2026-05-30T04:15:30Z"));
 
         verify(postService).createPost(eq(USER), any());
@@ -293,10 +289,8 @@ class PostControllerTest {
                 .category("JOB")
                 .title("제목")
                 .content("본문")
-                .imageUrls(List.of())
                 .authorNickname("Minh")
                 .authorIsVerified(true)
-                .authorTemperature("GREEN")
                 .likeCount(0)
                 .commentCount(0)
                 .createdAt("2026-05-30T04:15:30Z")

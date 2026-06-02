@@ -72,7 +72,7 @@ public class PostServiceImpl implements PostService {
             // @NotBlank가 1차로 막지만, 방어적으로 한 번 더 — 카테고리는 작성 시 필수.
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
-        // image_urls는 받기만 하고 영속화하지 않는다. language는 "ko" 고정(Post.of).
+        // language는 "ko" 고정(Post.of).
         Post saved = postRepository.save(
                 Post.of(requesterUserPublicId, category, request.getTitle(), request.getContent()));
         return PostDetailResponse.from(saved, memberClient.getMember(requesterUserPublicId));

@@ -38,11 +38,10 @@ public class SecurityConfig {
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // 인증 불필요(공개) — 회원가입/이메일·비번 재설정.
+                        // 인증 불필요(공개) — 회원가입/비번 재설정.
                         // 로그인·토큰 재발급은 프론트가 IdP와 직접(Authorization Code flow) 하므로 백엔드 엔드포인트가 없다.
                         .requestMatchers(
                                 "/api/v1/auth/register",
-                                "/api/v1/auth/email/verify-request",
                                 "/api/v1/auth/password/**").permitAll()
                         // 가입 전 중복 확인
                         .requestMatchers(

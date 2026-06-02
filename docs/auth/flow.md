@@ -14,14 +14,8 @@
   ├─ (입력 중) 닉네임 중복 확인  GET /api/v1/members/check-nickname?nickname=
   │
 회원가입  POST /api/v1/auth/register
-  → users INSERT (is_verified=FALSE)
-  → 인증 이메일 발송 트리거
+  → members INSERT (is_verified=FALSE)
   → 201 { email }
-  │
-[이메일 인증 안내 화면]
-가입 인증 이메일 발송(재발송)  POST /api/v1/auth/email/verify-request
-  │
-사용자가 이메일 링크 클릭 → 인증 완료
 ```
 
 ---
@@ -80,7 +74,7 @@ IdP → code 반환 (등록된 redirect_uri로)
 ```
 [마이페이지]
 내 프로필 조회  GET /api/v1/members/me
-  → 닉네임, 국적, is_verified(배지), temperature_grade 등
+  → 닉네임, 국적, is_verified(배지) 등
   │
 ├─ 프로필 수정  PATCH /api/v1/members/me
 ├─ 프로필 사진 변경  PATCH /api/v1/members/me/profile-image
@@ -91,16 +85,15 @@ IdP → code 반환 (등록된 redirect_uri로)
 │    └─ 서류 분석 내역 GET /api/v1/documents                  (document-analysis)
 │
 ├─ [설정]
-│    ├─ 알림 설정 조회/저장  GET/PATCH /api/v1/members/me/notification-settings
 │    └─ 언어 설정 조회/변경  GET/PATCH /api/v1/members/me/language
 │
 ├─ [인증]
 │    ├─ 인증 상태 조회  GET /api/v1/members/me/verification
 │    └─ 신분증 인증 요청 POST /api/v1/members/me/verification
 │         → user_verifications INSERT (status=PENDING)
-│         → 관리자 검토 후 APPROVED 시 users.is_verified=TRUE
+│         → 관리자 검토 후 APPROVED 시 members.is_verified=TRUE
 │
-└─ 탈퇴  DELETE /api/v1/members/me  (soft delete: users.deleted_at SET)
+└─ 탈퇴  DELETE /api/v1/members/me  (soft delete: members.deleted_at SET)
 ```
 
 ---

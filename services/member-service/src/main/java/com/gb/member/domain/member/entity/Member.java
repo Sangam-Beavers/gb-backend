@@ -1,5 +1,6 @@
 package com.gb.member.domain.member.entity;
 
+import com.gb.member.global.common.entity.BaseEntity;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -12,7 +13,7 @@ import java.util.UUID;
 @Table(name = "members")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
-public class Member {
+public class Member extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -45,17 +46,19 @@ public class Member {
     @Column(nullable = false)
     private String language;    // 주 사용 언어
 
-    @Column(nullable = false, updatable = false)
-    private LocalDateTime createdAt; // 가입 시각
+    // 탈퇴(soft delete) 시각. null=활성, 값이 있으면 탈퇴한 회원.
+    // createdAt/updatedAt은 BaseEntity(JPA Auditing)가 채운다(가입 시각 = createdAt).
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
 
     @PrePersist
     public void prePersist() {
         // publicId는 보통 Service에서 미리 생성해 IdP(attributes.public_id)와 동일 값으로 넘긴다.
         // 여기서는 빌더로 받지 않은 경로(테스트 등)를 위한 fallback으로만 생성한다.
+        // createdAt 세팅은 Auditing(@CreatedDate)으로 이관됐다.
         if (this.publicId == null) {
             this.publicId = UUID.randomUUID().toString();
         }
-        this.createdAt = LocalDateTime.now();
     }
 
     @Builder
@@ -69,5 +72,15 @@ public class Member {
         this.nationality = nationality;
         this.language = language;
         this.authProviderId = authProviderId;
+    }
+
+    /** 주 사용 언어 변경. updatedAt은 Auditing(dirty checking)으로 자동 갱신된다. */
+    public void changeLanguage(String language) {
+        this.language = language;
+    }
+
+    /** 탈퇴(soft delete): deleted_at만 세팅하고 실제 row는 보존한다. (community softDelete 패턴) */
+    public void softDelete() {
+        this.deletedAt = LocalDateTime.now();
     }
 }

@@ -15,7 +15,6 @@
 | 원화 환산 조회 (지금 나의 원화) | GET | `/api/v1/wallets/me` | ✅ |
 | 거래내역 조회 | GET | `/api/v1/wallets/me/transactions` | ✅ |
 | 주요 통화 환율 조회 | GET | `/api/v1/wallets/exchange-rates` | ✅ |
-| 이상거래 탐지 알림 | GET | `/api/v1/wallets/me/fraud-alerts` | ✅ |
 
 ### 송금 (/transfers)
 | API | Method | Endpoint | Auth |
@@ -27,8 +26,7 @@
 | 지원 은행 목록 | GET | `/api/v1/transfers/supported-banks` | ✅ |
 | 예금주 실명 조회 | GET | `/api/v1/transfers/account-holder?bankCode={}&accountNumber={}` | ✅ |
 | 송금 수수료 조회 | POST | `/api/v1/transfers/fee` | ✅ |
-| 송금 비밀번호 검증 | POST | `/api/v1/transfers/verify-password` | ✅ |
-| FDS 검증 | POST | `/api/v1/transfers/fds-check` | ✅ |
+| 송금 비밀번호 검증 (※ 미구현) | POST | `/api/v1/transfers/verify-password` | ✅ |
 | **송금 실행** | POST | `/api/v1/transfers` | ✅ |
 | 송금 확인증 조회 | GET | `/api/v1/transfers/{id}/receipt` | ✅ |
 | 정기 송금 대상 검증 | GET | `/api/v1/transfers/scheduled/validate` | ✅ |
@@ -102,11 +100,10 @@
 
 ---
 
-## 3. 주요 통화 환율 / 거래내역 / 이상거래 알림
+## 3. 주요 통화 환율 / 거래내역
 
 - 환율 조회: `GET /api/v1/wallets/exchange-rates` → 통화별 환율 목록(+표시용 등락률 `change_rate`는 number 허용). 환율 값 자체는 string.
 - 거래내역: `GET /api/v1/wallets/me/transactions?page=&size=` → 페이지네이션 (배열 키 `transactions`).
-- 이상거래 알림: `GET /api/v1/wallets/me/fraud-alerts` → FDS 경고 카드 목록.
 
 ---
 
@@ -149,8 +146,7 @@
 
 - 앱 사용자 검증: `GET /api/v1/transfers/validate-member?email={}` → `data: { receiver_public_id, nickname, is_verified }`
 - 예금주 실명 조회: `GET /api/v1/transfers/account-holder?bankCode={}&accountNumber={}` → `data: { account_holder_name }`
-- 송금 비밀번호 검증: `POST /api/v1/transfers/verify-password` (Body: `password`) → 200/실패
-- FDS 검증: `POST /api/v1/transfers/fds-check` → `data: { passed: true/false, ... }`. 차단 시 송금 실행 진입 차단.
+- 송금 비밀번호 검증: `POST /api/v1/transfers/verify-password` (Body: `password`) → 200/실패. **(※ 미구현 — 별도 작업)**
 
 ---
 
@@ -279,7 +275,7 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 > 모든 행은 같은 `transaction_id` 참조. 같은 `@Transactional` 안에서 INSERT.
 > REMITTANCE 시도 흔적(외부 호출 직전)은 `transaction_audit_logs`가 아닌 별도 `remittance_attempts`에 박는다(§6-0 참조).
 
-> 사전 흐름: verify-password → fds-check → 본 API (1단계는 verify-password/fds-check 미구현, 별도 작업).
+> 사전 흐름: verify-password → 본 API (verify-password 미구현, 별도 작업).
 ---
 
 ## 7. 송금 확인증 / 정기 송금
