@@ -40,13 +40,6 @@ public class LikedPostSummaryResponse {
     @Schema(description = "작성자 닉네임", example = "Minh")
     private final String authorNickname;
 
-    // author_temperature: 명세 타입은 number지만 member 도메인 온도는 문자열 등급(temperature_grade)이다.
-    // 임의 숫자 매핑을 만들지 않고 등급 문자열을 그대로 싣는다.
-    // TODO: member 온도 점수(number) 연동 시 숫자형으로 교체.
-    @Schema(description = "작성자 이웃 온도 등급(명세 number와 불일치 — 등급 문자열 전달, TODO)",
-            example = "GREEN", allowableValues = {"RED", "YELLOW", "GREEN", "PURPLE", "BLUE"})
-    private final String authorTemperature;
-
     @Schema(description = "좋아요 수", example = "3")
     private final Integer likeCount;
 
@@ -61,7 +54,7 @@ public class LikedPostSummaryResponse {
 
     @Builder
     private LikedPostSummaryResponse(String publicId, String category, String title, String contentPreview,
-                                     String authorNickname, String authorTemperature,
+                                     String authorNickname,
                                      Integer likeCount, Integer commentCount,
                                      String createdAt, String likedAt) {
         this.publicId = publicId;
@@ -69,7 +62,6 @@ public class LikedPostSummaryResponse {
         this.title = title;
         this.contentPreview = contentPreview;
         this.authorNickname = authorNickname;
-        this.authorTemperature = authorTemperature;
         this.likeCount = likeCount;
         this.commentCount = commentCount;
         this.createdAt = createdAt;
@@ -83,7 +75,6 @@ public class LikedPostSummaryResponse {
                 .title(post.getTitle())
                 .contentPreview(preview(post.getContent()))
                 .authorNickname(author.nickname())
-                .authorTemperature(author.temperatureGrade())
                 .likeCount(post.getLikeCount())
                 .commentCount(post.getCommentCount())
                 .createdAt(UtcTime.toUtcZ(post.getCreatedAt()))

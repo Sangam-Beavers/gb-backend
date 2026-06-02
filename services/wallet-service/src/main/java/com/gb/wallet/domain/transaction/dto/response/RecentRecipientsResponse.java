@@ -64,10 +64,6 @@ public class RecentRecipientsResponse {
         @JsonProperty("is_verified")
         private final boolean isVerified;
 
-        @Schema(description = "이웃 온도 등급", example = "GREEN",
-                allowableValues = {"RED", "YELLOW", "GREEN", "PURPLE", "BLUE"})
-        private final String temperatureGrade;
-
         @Schema(description = "가장 최근 송금의 통화 코드", example = "VND",
                 allowableValues = {"KRW", "USD", "PHP", "VND"})
         private final String lastCurrencyCode;
@@ -77,13 +73,12 @@ public class RecentRecipientsResponse {
 
         @Builder
         private RecipientItem(String memberPublicId, String nickname, String nationality,
-                              boolean isVerified, String temperatureGrade,
+                              boolean isVerified,
                               String lastCurrencyCode, String lastTransferredAt) {
             this.memberPublicId = memberPublicId;
             this.nickname = nickname;
             this.nationality = nationality;
             this.isVerified = isVerified;
-            this.temperatureGrade = temperatureGrade;
             this.lastCurrencyCode = lastCurrencyCode;
             this.lastTransferredAt = lastTransferredAt;
         }

@@ -22,10 +22,6 @@
 | 댓글 목록 조회 | GET | `/api/v1/community/posts/{id}/comments?page=&size=` | ✅ |
 | 댓글 작성 | POST | `/api/v1/community/posts/{postId}/comments` | ✅ |
 | 댓글 삭제 | DELETE | `/api/v1/community/posts/{postId}/comments/{commentId}` | ✅ |
-| 게시글 신고 | POST | `/api/v1/community/posts/{postId}/reports` | ✅ |
-| 댓글 신고 | POST | `/api/v1/community/posts/{postId}/comments/{commentId}/reports` | ✅ |
-| 이웃 온도 조회 | GET | `/api/v1/community/members/{memberId}/temperature` | ✅ |
-| 이웃 온도 평가 | POST | `/api/v1/community/members/{memberId}/temperature` | ✅ |
 | 주요 QnA/FAQ | GET | `/api/v1/community/faq` | ✅ |
 
 ---
@@ -52,7 +48,6 @@
 | `posts[].title` | string | N | 제목 |
 | `posts[].content_preview` | string | N | 본문 미리보기 |
 | `posts[].author_nickname` | string | N | 작성자 닉네임 |
-| `posts[].author_temperature` | number | N | 작성자 매너 온도(표시용) |
 | `posts[].like_count` | integer | N | 좋아요 수 |
 | `posts[].comment_count` | integer | N | 댓글 수 |
 | `posts[].created_at` | string | N | 작성 시각(UTC Z) |
@@ -75,7 +70,6 @@
 | `category` | string | O | LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION |
 | `title` | string | O | 제목 |
 | `content` | string | O | 본문 |
-| `image_urls` | array | X | 사전 업로드된 이미지 URL 목록 |
 
 **Response 201** — `data`
 | 필드 | 타입 | nullable | 설명 |
@@ -84,9 +78,7 @@
 | `category` | string | N | 카테고리 |
 | `title` | string | N | 제목 |
 | `content` | string | N | 본문 |
-| `image_urls` | array | Y | 이미지 URL 목록 |
 | `author_nickname` | string | N | 작성자 닉네임 |
-| `author_temperature` | number | N | 작성자 매너 온도(표시용) |
 | `like_count` | integer | N | 좋아요 수(생성 시 0) |
 | `comment_count` | integer | N | 댓글 수(생성 시 0) |
 | `created_at` | string | N | 작성 시각(UTC Z) |
@@ -98,7 +90,7 @@
 
 ## 3. 게시글 단건 조회 / 수정 / 삭제 / 번역
 
-- 단건 조회: `GET /api/v1/community/posts/{id}` → 본문 + 작성자(닉네임/`author_is_verified`/온도) + 카운트. 404 COMMUNITY4001.
+- 단건 조회: `GET /api/v1/community/posts/{id}` → 본문 + 작성자(닉네임/`author_is_verified`) + 카운트. 404 COMMUNITY4001.
 - 수정: `PATCH /api/v1/community/posts/{id}` (본인만, 403 COMMON4031)
 - 삭제: `DELETE /api/v1/community/posts/{id}` (soft delete, 본인만)
 - 번역 보기: `GET /api/v1/community/posts/{id}/translation?language={}` → `data: { translated_title, translated_content, translated_language }`
@@ -159,78 +151,7 @@
 
 ---
 
-## 8. 게시글 신고
-
-`POST /api/v1/community/posts/{postId}/reports` · Auth ✅
-
-**Path Variable**: `postId` = 게시글 public_id (UUID)
-
-**Request Body**
-| 필드 | 타입 | 필수 | 설명 |
-| --- | --- | --- | --- |
-| `reason` | string | O | SPAM / INAPPROPRIATE / MISINFORMATION / HATE / OTHER |
-| `detail` | string | X | 상세 내용(최대 500자) |
-
-**Response 201** — `data`: `public_id`, `post_public_id`, `reason`, `created_at`(UTC Z)
-message: "신고가 접수되었습니다."
-
-**Error**
-| HTTP | code | message |
-| --- | --- | --- |
-| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. |
-| 401 | AUTH4011 | 인증이 필요합니다. |
-| 404 | COMMUNITY4001 | 존재하지 않는 게시글입니다. |
-| 409 | COMMON4091 | 이미 존재하는 리소스입니다. (중복 신고) |
-
----
-
-## 9. 댓글 신고
-
-`POST /api/v1/community/posts/{postId}/comments/{commentId}/reports` · Auth ✅
-Body: `reason`(필수), `detail`(선택). Response 201. 게시글 신고와 동일 체계.
-**Error**: 401 AUTH4011 / 404 COMMUNITY4002(댓글 없음) / 409 COMMON4091(중복).
-
----
-
-## 10. 이웃 온도 조회
-
-`GET /api/v1/community/members/{memberId}/temperature` · Auth ✅
-
-**Path Variable**: `memberId` = 회원 member_public_id (UUID)
-
-**Response 200** — `data`
-| 필드 | 타입 | nullable | 설명 |
-| --- | --- | --- | --- |
-| `member_public_id` | string | N | 회원 UUID |
-| `nickname` | string | N | 닉네임 |
-| `temperature_grade` | string | N | RED/YELLOW/GREEN/PURPLE/BLUE |
-| `average_score` | number | Y | 평균 점수(1.0~5.0, 표시용). 이력 없으면 null |
-| `review_count` | integer | N | 받은 평가 수 |
-
-**Error**: 401 AUTH4011 / 404 MEMBER4001
-
----
-
-## 11. 이웃 온도 평가
-
-`POST /api/v1/community/members/{memberId}/temperature` · Auth ✅
-
-**Path Variable**: `memberId` = 피평가자 member_public_id (UUID)
-
-**Request Body**
-| 필드 | 타입 | 필수 | 설명 |
-| --- | --- | --- | --- |
-| `score` | integer | O | 1~5 정수 |
-| `comment` | string | X | 코멘트(최대 500자) |
-
-자기 평가 불가, 중복 평가 불가. 평가 저장 후 대상 회원 `temperature_grade` 재집계.
-
-**Response 201** — `data`: 평가 결과 + 갱신된 대상 온도 요약.
-**Error**: 400 COMMON4001 / 401 AUTH4011 / 404 MEMBER4001 / 409 COMMON4091(중복 평가)
-
----
-
-## 12. 주요 QnA / FAQ
+## 8. 주요 QnA / FAQ
 
 `GET /api/v1/community/faq` · Auth ✅ → 자주 묻는 질문 목록.
 
@@ -243,5 +164,5 @@ Body: `reason`(필수), `detail`(선택). Response 201. 게시글 신고와 동�
 | `COMMUNITY4001` | 404 | 존재하지 않는 게시글입니다. |
 | `COMMUNITY4002` | 404 | 존재하지 않는 댓글입니다. |
 
-> 잘못된 카테고리/정렬/사유 값은 `COMMON4001`로 통일. 중복(좋아요/신고/평가)은 `COMMON4091`.
+> 잘못된 카테고리/정렬 값은 `COMMON4001`로 통일. 중복(좋아요)은 `COMMON4091`.
 > 도메인 고유 코드가 더 필요하면 COMMUNITY 표에 새 번호로 등록 후 사용(번호 재배치 금지).

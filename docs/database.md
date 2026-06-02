@@ -1,7 +1,7 @@
 # 데이터베이스 설계 (Database)
 
 > **DB:** MySQL 8.0 (Aurora MySQL = 운영/스테이징 · 온프렘 MySQL = 개발, 공통 스키마)
-> **총 테이블 수:** 15개
+> **총 테이블 수:** 14개
 > **AI 분석 결과:** MySQL `document_results`에 **직접 저장** — **DynamoDB 미사용**
 > Claude Code는 Entity/Repository를 만들 때 이 스키마와 참조 규칙을 그대로 따른다.
 
@@ -17,7 +17,7 @@
 
 > 현재는 단일 Aurora 안에 스키마만 분리한 상태다. 이 규칙의 실효는 "지금 장애 격리"가 아니라 "미래에 wallet/community/document를 별도 물리 DB로 승급할 때 무비용 대비"다.
 
-대상(밖에서 `user_public_id`로 참조): `wallets`, `bank_accounts`, `transaction_audit_logs`, `document_submissions`, `posts`, `comments`, `likes`, `user_reviews(reviewer/reviewee)`.
+대상(밖에서 `user_public_id`로 참조): `wallets`, `bank_accounts`, `transaction_audit_logs`, `document_submissions`, `posts`, `comments`, `likes`.
 
 ### (2) 금융 무결성
 
@@ -33,7 +33,7 @@
 
 | # | 도메인 | 테이블 | 핵심 역할 |
 | --- | --- | --- | --- |
-| 1 | member | `members` | 회원 기본 정보 + 이웃 온도 등급 |
+| 1 | member | `members` | 회원 기본 정보 |
 | 2 | member | `user_verifications` | 신분증 인증 → 인증 배지 근거 |
 | 3 | wallet | `banks` | 은행 마스터 (Beaver/Quokka Bank 포함) |
 | 4 | wallet | `wallets` | 사용자 주머니 메타 |
@@ -47,7 +47,6 @@
 | 12 | community | `posts` | 게시글 + 번역 캐시 |
 | 13 | community | `comments` | 댓글 + 대댓글 |
 | 14 | community | `likes` | 게시글/댓글 좋아요 통합 |
-| 15 | community | `user_reviews` | 이웃 온도 평가 기록 |
 
 > **통화 마스터 테이블 없음** — 지원 통화 4개(KRW/USD/PHP/VND) 고정. `currency_code`를 VARCHAR로 직접 저장.
 
@@ -71,7 +70,6 @@
 | `nationality` | VARCHAR(10) | NOT NULL | 국적 코드 (KR, VN, PH 등) |
 | `language` | VARCHAR(10) | NOT NULL | 주 사용 언어 (BCP 47 소문자, 예: "vi") |
 | `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | 인증 배지 여부 |
-| `temperature_grade` | VARCHAR(10) | NOT NULL, DEFAULT 'GREEN' | 이웃 온도 (RED/YELLOW/GREEN/PURPLE/BLUE) |
 | `created_at` | DATETIME | NOT NULL | |
 | `updated_at` | DATETIME | NOT NULL | |
 | `deleted_at` | DATETIME | NULL | soft delete |
@@ -324,20 +322,6 @@
 | `created_at` | DATETIME | NOT NULL | |
 
 > `(user_public_id, target_type, target_id)` 복합 UNIQUE.
-
-### `user_reviews`
-> 이웃 온도 평가. 집계는 `members.temperature_grade`에 반영.
-
-| 컬럼 | 타입 | 제약 | 설명 |
-| --- | --- | --- | --- |
-| `id` | BIGINT | PK, AI | |
-| `reviewer_public_id` | VARCHAR(36) | NOT NULL | **평가자 논리 참조** |
-| `reviewee_public_id` | VARCHAR(36) | NOT NULL | **피평가자 논리 참조** |
-| `score` | INT | NOT NULL | 1~5 |
-| `comment` | VARCHAR(500) | NULL | |
-| `created_at` | DATETIME | NOT NULL | |
-
-> `(reviewer_public_id, reviewee_public_id)` 복합 UNIQUE.
 
 ---
 

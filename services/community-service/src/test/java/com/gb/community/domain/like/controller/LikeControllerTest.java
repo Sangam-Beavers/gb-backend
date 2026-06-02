@@ -104,7 +104,6 @@ class LikeControllerTest {
                 .title("제목")
                 .contentPreview("미리보기")
                 .authorNickname("Minh")
-                .authorTemperature("GREEN")
                 .likeCount(3)
                 .commentCount(2)
                 .createdAt("2026-05-26T04:15:30Z")
@@ -118,7 +117,6 @@ class LikeControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total_elements").value(1))
                 .andExpect(jsonPath("$.data.posts[0].public_id").value(PID))
-                .andExpect(jsonPath("$.data.posts[0].author_temperature").value("GREEN"))
                 .andExpect(jsonPath("$.data.posts[0].like_count").value(3))
                 .andExpect(jsonPath("$.data.posts[0].created_at").value("2026-05-26T04:15:30Z"))
                 .andExpect(jsonPath("$.data.posts[0].liked_at").value("2026-05-27T09:30:00Z"));

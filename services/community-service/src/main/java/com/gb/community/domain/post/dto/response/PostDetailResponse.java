@@ -4,7 +4,6 @@ import com.gb.community.domain.post.entity.Post;
 import com.gb.community.global.client.MemberInfo;
 import com.gb.community.global.common.util.UtcTime;
 import io.swagger.v3.oas.annotations.media.Schema;
-import java.util.List;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -34,21 +33,11 @@ public class PostDetailResponse {
     @Schema(description = "본문(전체)", example = "베트남에서 온 외국인입니다. 같은 경험 있는 분 계시면 알려주세요.")
     private final String content;
 
-    // posts 스키마에 이미지 컬럼이 없고 post_images 테이블 미정 → 항상 빈 배열로 반환한다.
-    // TODO: post_images 테이블 확정 시 실제 URL 목록으로 교체.
-    @Schema(description = "이미지 URL 목록(현재 미저장 — 항상 빈 배열)", example = "[]")
-    private final List<String> imageUrls;
-
     @Schema(description = "작성자 닉네임", example = "Minh")
     private final String authorNickname;
 
     @Schema(description = "작성자 인증 배지 여부", example = "true")
     private final boolean authorIsVerified;
-
-    // author_temperature: 명세 타입은 number지만 등급 문자열을 그대로 싣는다. TODO 동일.
-    @Schema(description = "작성자 이웃 온도 등급(명세 number와 불일치 — 등급 문자열 전달, TODO)",
-            example = "GREEN", allowableValues = {"RED", "YELLOW", "GREEN", "PURPLE", "BLUE"})
-    private final String authorTemperature;
 
     @Schema(description = "좋아요 수", example = "3")
     private final Integer likeCount;
@@ -64,17 +53,15 @@ public class PostDetailResponse {
 
     @Builder
     private PostDetailResponse(String publicId, String category, String title, String content,
-                              List<String> imageUrls, String authorNickname, boolean authorIsVerified,
-                              String authorTemperature, Integer likeCount, Integer commentCount,
+                              String authorNickname, boolean authorIsVerified,
+                              Integer likeCount, Integer commentCount,
                               String createdAt, String updatedAt) {
         this.publicId = publicId;
         this.category = category;
         this.title = title;
         this.content = content;
-        this.imageUrls = imageUrls;
         this.authorNickname = authorNickname;
         this.authorIsVerified = authorIsVerified;
-        this.authorTemperature = authorTemperature;
         this.likeCount = likeCount;
         this.commentCount = commentCount;
         this.createdAt = createdAt;
@@ -87,10 +74,8 @@ public class PostDetailResponse {
                 .category(post.getCategory().name())
                 .title(post.getTitle())
                 .content(post.getContent())
-                .imageUrls(List.of()) // 미저장 — 항상 빈 배열
                 .authorNickname(author.nickname())
                 .authorIsVerified(author.isVerified())
-                .authorTemperature(author.temperatureGrade())
                 .likeCount(post.getLikeCount())
                 .commentCount(post.getCommentCount())
                 .createdAt(UtcTime.toUtcZ(post.getCreatedAt()))

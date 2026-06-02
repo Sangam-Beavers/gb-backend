@@ -10,8 +10,7 @@
 [메인 진입]
 ├─ 주머니 잔액         GET /api/v1/wallets/me/balances
 ├─ 원화 환산(지금 나의 원화) GET /api/v1/wallets/me
-├─ 실시간 환율         GET /api/v1/wallets/exchange-rates
-└─ 이상거래 알림 카드   GET /api/v1/wallets/me/fraud-alerts
+└─ 실시간 환율         GET /api/v1/wallets/exchange-rates
 ```
 
 ---
@@ -69,7 +68,6 @@
 [공통 사전 단계]
 수수료 조회       POST /api/v1/transfers/fee      (또는 GET /transfers/fees — 정본 확인)
 송금 비밀번호 검증 POST /api/v1/transfers/verify-password
-FDS 이상거래 검증  POST /api/v1/transfers/fds-check
         │
 [송금 실행] — 1단계 즉시 실행
 송금 실행  POST /api/v1/transfers   (Header: Idempotency-Key)
@@ -138,5 +136,4 @@ FDS 이상거래 검증  POST /api/v1/transfers/fds-check
 - 잔액 부족 → `WALLET4002`.
 - 미지원 통화 → `TRANSFER4002`.
 - 충전 시 Mock 계좌 잔액 부족 → `ACCOUNT4003`.
-- FDS에서 차단 시 송금 실행 단계로 진입 못 하게 사전 차단(권장).
 - 모든 실행 계열은 `201 Created` + 멱등성 헤더.
