@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -48,12 +49,13 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * {@link ChargeServiceImpl} 단위 테스트(Mockito). DB·Spring 컨텍스트 없이 조합·검증·예외·early-return,
- * 그리고 멱등성 래퍼(§5-1)의 정상/race 분기를 검증한다.
+ * 그리고 멱등성 래퍼의 정상/race·락경합 분기를 검증한다.
  *
  * <p>{@code doCharge}는 self-proxy 없이 직접 호출해 비즈니스 로직만 본다. {@code charge}(얇은 래퍼)는
  * {@code @Mock ChargeService self}를 통해 doCharge/readPrior 위임만 검증한다(트랜잭션 경계는 통합 테스트 책임).
@@ -112,9 +114,11 @@ class ChargeServiceTest {
                 .willReturn(Optional.of(account));
         given(walletRepository.findByUserPublicId(USER)).willReturn(Optional.of(wallet));
         given(bankClient.withdraw(TOKEN, amount, "KRW", KEY)).willReturn(completed(amount));
-        // 1차: 행 없음 → ensureBalanceRow 호출 → 2차: 보장된 0원 행을 잠가서 반환
+        // ensureBalanceRow로 0원 행을 먼저 보장한 뒤, FOR UPDATE로 그 행을 한 번에 잠가서 반환한다
+        // (ensure→FOR UPDATE 순서 — 없는 행에 FOR UPDATE를 걸면 gap lock+REQUIRES_NEW INSERT가 self-deadlock
+        //  나므로 ensure를 먼저 한다. ChargeServiceImpl (7)단계 주석 참고).
         given(walletBalanceRepository.findForUpdateByWalletAndCurrency(wallet, CurrencyType.KRW))
-                .willReturn(Optional.empty(), Optional.of(created));
+                .willReturn(Optional.of(created));
         given(transactionRepository.save(any(Transaction.class))).willAnswer(inv -> {
             Transaction t = inv.getArgument(0);
             ReflectionTestUtils.setField(t, "id", 100L);
@@ -464,7 +468,7 @@ class ChargeServiceTest {
                 .isEqualTo(CommonErrorCode.INTERNAL_SERVER_ERROR);
     }
 
-    // ===== charge — 멱등성 래퍼(§5-1) =====
+    // ===== charge — 멱등성 래퍼(정상/race/락경합) =====
 
     @Test
     @DisplayName("charge 정상: doCharge 결과를 그대로 반환(readPrior 미호출)")
@@ -493,6 +497,42 @@ class ChargeServiceTest {
 
         assertThat(result).isSameAs(prior);
         verify(self).readPrior(KEY, ACCT, USER);
+    }
+
+    @Test
+    @DisplayName("charge 락경합: doCharge가 PessimisticLockingFailureException 1회 던지면 재시도해 성공 반환")
+    void charge_락경합_재시도_성공() {
+        ChargeRequest req = request(new BigDecimal("100"));
+        ChargeResponse expected = stubResponse();
+        given(idempotencyCacheHelper.get(CACHE_KEY)).willReturn(Optional.empty());
+        // 1차: 락 경합으로 롤백(CannotAcquireLockException) → 2차: 성공
+        given(self.doCharge(USER, ACCT, KEY, req, IP))
+                .willThrow(new CannotAcquireLockException("lock timeout"))
+                .willReturn(expected);
+
+        ChargeResponse result = service.charge(USER, ACCT, KEY, req, IP);
+
+        assertThat(result).isSameAs(expected);
+        verify(self, times(2)).doCharge(USER, ACCT, KEY, req, IP);
+        verify(self, never()).readPrior(any(), any(), any()); // 락경합은 readPrior가 아니라 재시도로 복구
+    }
+
+    @Test
+    @DisplayName("charge 락경합: 재시도(최대 3회) 모두 실패하면 COMMON5031(503), 캐시 미저장")
+    void charge_락경합_재시도소진_COMMON5031() {
+        ChargeRequest req = request(new BigDecimal("100"));
+        given(idempotencyCacheHelper.get(CACHE_KEY)).willReturn(Optional.empty());
+        given(self.doCharge(USER, ACCT, KEY, req, IP))
+                .willThrow(new CannotAcquireLockException("deadlock"));
+
+        assertThatThrownBy(() -> service.charge(USER, ACCT, KEY, req, IP))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
+
+        verify(self, times(3)).doCharge(USER, ACCT, KEY, req, IP); // MAX_CHARGE_ATTEMPTS
+        verify(self, never()).readPrior(any(), any(), any());
+        verify(idempotencyCacheHelper, never()).set(any(), any()); // 에러 응답은 캐시에 넣지 않는다
     }
 
     // ===== charge — 멱등성 Layer 1(Redis 캐시) =====

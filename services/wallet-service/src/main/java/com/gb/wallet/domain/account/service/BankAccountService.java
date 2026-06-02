@@ -38,4 +38,35 @@ public interface BankAccountService {
      * AOP를 우회). 다른 컴포넌트에서 직접 호출하지 말 것.
      */
     AccountResponse registerAccountLocked(String userPublicId, RegisterAccountRequest request);
+
+    /**
+     * 지정한 계좌를 주 계좌로 변경한다(PATCH /api/v1/accounts/{id}/primary). 기존 주 계좌는 자동 해제해
+     * "사용자당 주 계좌 1개" 불변식을 유지한다. 등록/변경/삭제가 동시에 일어나도 불변식이 깨지지 않도록
+     * register와 동일한 user 단위 분산락으로 전체를 감싼 뒤 {@link #changePrimaryLocked}에 위임한다.
+     * 락 획득 실패 시 {@code COMMON5031}(503). 컨트롤러는 이 메서드만 호출한다.
+     */
+    AccountResponse changePrimary(String userPublicId, String accountPublicId);
+
+    /**
+     * 주 계좌 변경의 실제 처리(쓰기 트랜잭션). 대상이 없으면 {@code ACCOUNT4001}, 이미 주 계좌면 멱등 성공.
+     *
+     * <p><b>self-proxy 전용</b> — {@link #changePrimary}가 락을 잡은 채 프록시를 통해 호출해야
+     * {@code @Transactional}이 적용된다(같은 빈 내부 직접 호출은 AOP 우회). 직접 호출하지 말 것.
+     */
+    AccountResponse changePrimaryLocked(String userPublicId, String accountPublicId);
+
+    /**
+     * 계좌를 삭제(soft-delete)한다(DELETE /api/v1/accounts/{id}). 주 계좌를 삭제하면 남은 활성 계좌 중
+     * 가장 최근 등록 1건을 자동으로 주 계좌 승격한다(마지막 1개면 주 계좌 없는 상태 허용). register와 동일한
+     * user 단위 분산락으로 감싼 뒤 {@link #deleteAccountLocked}에 위임한다. 락 획득 실패 시 {@code COMMON5031}.
+     */
+    void deleteAccount(String userPublicId, String accountPublicId);
+
+    /**
+     * 계좌 삭제의 실제 처리(쓰기 트랜잭션). 대상이 없으면 {@code ACCOUNT4001}.
+     *
+     * <p><b>self-proxy 전용</b> — {@link #deleteAccount}가 락을 잡은 채 프록시를 통해 호출해야 한다.
+     * 직접 호출하지 말 것.
+     */
+    void deleteAccountLocked(String userPublicId, String accountPublicId);
 }

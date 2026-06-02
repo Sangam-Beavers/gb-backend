@@ -78,7 +78,7 @@ public class DistributedLockHelper {
      * 자동 해제돼 빠르게 복구된다(watchdog은 {@code lockWatchdogTimeout} 기본 30s까지 락을 붙들어 복구가
      * 느리다). 더 긴 critical section의 {@link #tryLockTwoWallets}(송금)도 같은 5s lease로 동작한다. 만에
      * 하나 critical section이 5s를 넘겨 락이 만료되는 좁은 경우의 잔여 위험(중복 등록)은 후속 DB UNIQUE
-     * 제약이 최종 안전망으로 닫는다(현재 범위 밖 — redis-refactor §5-1).
+     * 제약이 최종 안전망으로 닫는다(현재 범위 밖 — 별도 마이그레이션 이슈).
      *
      * <p>계좌 등록을 user 단위로 직렬화하는 것처럼, 잠글 리소스가 하나뿐이라 Resource Ordering이 필요 없는
      * 경우에 쓴다. 네임스페이스는 호출자가 정한다(키 전체를 넘긴다) — MultiLock 메서드가 {@code lock:wallet:}을

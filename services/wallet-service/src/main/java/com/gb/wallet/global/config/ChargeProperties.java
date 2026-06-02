@@ -6,8 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * 충전 정책 설정. {@code wallet.charge.*} 프로퍼티를 바인딩한다.
  *
- * <p>현재는 단일 거래 한도만 외부화한다(명세 §12 ACCOUNT4007).
- * 향후 사용자/일·월 누적 한도는 이 record에 필드를 추가해 확장한다(현재 범위 밖).
+ * <p>단일 거래 한도를 외부화한다(명세 §12 ACCOUNT4007).
  *
  * <p>설정 미지정 시 기존 동작(1천만원)을 유지하도록 compact 생성자에서 기본값을 채운다.
  */

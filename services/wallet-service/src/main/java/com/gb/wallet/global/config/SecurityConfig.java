@@ -17,8 +17,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * {@link RestAuthenticationEntryPoint}가 AUTH4011 표준 포맷으로 응답한다.
  *
  * <p>본인 식별자(userPublicId)는 토큰 custom claim {@code public_id}에서 추출한다
- * ({@link com.gb.wallet.global.security.CurrentUserPublicId} 참고). 인증 미구현 시절의
- * {@code X-User-Public-Id} 헤더 임시 처리를 대체한다.
+ * ({@link com.gb.wallet.global.security.CurrentUserPublicId} 참고).
  *
  * <p>모든 wallet 비즈니스 엔드포인트는 인증 필요(api-spec 전부 Auth ✅). 문서/헬스체크만 공개.
  */

@@ -10,7 +10,7 @@ import lombok.Builder;
 import lombok.Getter;
 
 /**
- * 환전 견적 응답. 금액·환율은 명세 §0/§5에 따라 string(소수 4자리, 환율은 8자리)으로 전송한다.
+ * 환전 견적 응답. 금액·환율은 응답 표기상 string(소수 4자리)으로 전송한다(환율 내부 정밀도는 8자리).
  */
 @Getter
 public class QuoteResponse {
@@ -51,7 +51,7 @@ public class QuoteResponse {
 
     /**
      * 견적 스냅샷 + 만료시각(Instant)으로 응답을 만든다.
-     * 환율은 소수 8자리, 금액은 소수 4자리로 패딩(명세 §5, 다른 응답 DTO와 동일 패턴).
+     * 환율·금액 모두 응답 표기는 소수 4자리로 패딩한다(환율 내부 정밀도 8자리 → 응답 4자리, 다른 응답 DTO와 동일 패턴).
      */
     public static QuoteResponse of(QuoteData quote, Instant expiresAt) {
         return QuoteResponse.builder()

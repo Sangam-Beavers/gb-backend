@@ -15,7 +15,7 @@ import lombok.Getter;
 /**
  * 충전 실행 응답. 명세 §12 응답 표와 1:1로 맞춘다.
  *
- * <p>금액({@code amount}/{@code walletBalance})은 명세 §5에 따라 string으로 전송하며 항상 소수 4자리
+ * <p>금액({@code amount}/{@code walletBalance})은 응답 규약에 따라 string으로 전송하며 항상 소수 4자리
  * ({@code DECIMAL(18,4)})로 패딩한다(잔액 조회 DTO와 동일 패턴). 식별자는 {@code public_id}만 노출하고
  * 내부 {@code id}는 절대 싣지 않는다(CLAUDE.md §5). 시각은 ISO 8601 UTC {@code Z} 문자열이다.
  *
