@@ -267,6 +267,174 @@ class BankAccountServiceTest {
         verify(bankAccountRepository, never()).save(any());
     }
 
+    // --- changePrimary (분산락 래퍼) ---
+
+    @Test
+    @DisplayName("changePrimary: 락 획득 성공 시 self.changePrimaryLocked에 위임하고 락을 해제한다")
+    void changePrimary_락획득_위임_후_해제() {
+        AccountResponse expected = stubAccountResponse();
+        RLock lock = lock();
+        given(distributedLockHelper.tryLock(REGISTER_LOCK_KEY)).willReturn(lock);
+        given(self.changePrimaryLocked(USER_PUBLIC_ID, "acct-uuid")).willReturn(expected);
+
+        AccountResponse result = service.changePrimary(USER_PUBLIC_ID, "acct-uuid");
+
+        assertThat(result).isSameAs(expected);
+        verify(self).changePrimaryLocked(USER_PUBLIC_ID, "acct-uuid");
+        verify(lock).unlock();
+    }
+
+    @Test
+    @DisplayName("changePrimary: 락 획득 실패(tryLock=null)면 COMMON5031, 변경 본문 미진입")
+    void changePrimary_락실패_COMMON5031() {
+        given(distributedLockHelper.tryLock(REGISTER_LOCK_KEY)).willReturn(null);
+
+        assertThatThrownBy(() -> service.changePrimary(USER_PUBLIC_ID, "acct-uuid"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
+
+        verify(self, never()).changePrimaryLocked(any(), any());
+        verifyNoInteractions(bankAccountRepository);
+    }
+
+    // --- changePrimaryLocked (변경 본문) ---
+
+    @Test
+    @DisplayName("changePrimaryLocked: 대상을 주계좌로 승격하고 기존 주계좌를 해제한다")
+    void changePrimaryLocked_승격_기존해제() {
+        BankAccount target = bankAccount("acct-target", false, true);
+        BankAccount existingPrimary = bankAccount("acct-old-primary", true, true);
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue("acct-target", USER_PUBLIC_ID))
+                .willReturn(Optional.of(target));
+        given(bankAccountRepository.findByUserPublicIdAndIsPrimaryTrueAndIsActiveTrue(USER_PUBLIC_ID))
+                .willReturn(Optional.of(existingPrimary));
+
+        AccountResponse response = service.changePrimaryLocked(USER_PUBLIC_ID, "acct-target");
+
+        assertThat(target.isPrimary()).as("대상이 주계좌로 승격").isTrue();
+        assertThat(existingPrimary.isPrimary()).as("기존 주계좌는 해제").isFalse();
+        assertThat(response.getAccountPublicId()).isEqualTo("acct-target");
+        assertThat(response.getIsPrimary()).isTrue();
+    }
+
+    @Test
+    @DisplayName("changePrimaryLocked: 대상이 없으면 ACCOUNT4001, 해제 finder 미호출")
+    void changePrimaryLocked_미존재_ACCOUNT4001() {
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue("nope", USER_PUBLIC_ID))
+                .willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.changePrimaryLocked(USER_PUBLIC_ID, "nope"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.ACCOUNT_NOT_FOUND);
+
+        verify(bankAccountRepository, never())
+                .findByUserPublicIdAndIsPrimaryTrueAndIsActiveTrue(any());
+    }
+
+    @Test
+    @DisplayName("changePrimaryLocked: 이미 주계좌면 멱등 성공 — 기존 주계좌 해제 finder를 타지 않는다")
+    void changePrimaryLocked_이미_주계좌_멱등() {
+        BankAccount target = bankAccount("acct-target", true, true);
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue("acct-target", USER_PUBLIC_ID))
+                .willReturn(Optional.of(target));
+
+        AccountResponse response = service.changePrimaryLocked(USER_PUBLIC_ID, "acct-target");
+
+        assertThat(response.getIsPrimary()).isTrue();
+        assertThat(response.getAccountPublicId()).isEqualTo("acct-target");
+        verify(bankAccountRepository, never())
+                .findByUserPublicIdAndIsPrimaryTrueAndIsActiveTrue(any());
+    }
+
+    // --- deleteAccount (분산락 래퍼) ---
+
+    @Test
+    @DisplayName("deleteAccount: 락 획득 성공 시 self.deleteAccountLocked에 위임하고 락을 해제한다")
+    void deleteAccount_락획득_위임_후_해제() {
+        RLock lock = lock();
+        given(distributedLockHelper.tryLock(REGISTER_LOCK_KEY)).willReturn(lock);
+
+        service.deleteAccount(USER_PUBLIC_ID, "acct-uuid");
+
+        verify(self).deleteAccountLocked(USER_PUBLIC_ID, "acct-uuid");
+        verify(lock).unlock();
+    }
+
+    @Test
+    @DisplayName("deleteAccount: 락 획득 실패면 COMMON5031, 삭제 본문 미진입")
+    void deleteAccount_락실패_COMMON5031() {
+        given(distributedLockHelper.tryLock(REGISTER_LOCK_KEY)).willReturn(null);
+
+        assertThatThrownBy(() -> service.deleteAccount(USER_PUBLIC_ID, "acct-uuid"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
+
+        verify(self, never()).deleteAccountLocked(any(), any());
+        verifyNoInteractions(bankAccountRepository);
+    }
+
+    // --- deleteAccountLocked (삭제 본문) ---
+
+    @Test
+    @DisplayName("deleteAccountLocked: 비주계좌 삭제는 soft-delete만, 승격 후보 finder를 타지 않는다")
+    void deleteAccountLocked_비주계좌_softdelete() {
+        BankAccount target = bankAccount("acct-target", false, true);
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue("acct-target", USER_PUBLIC_ID))
+                .willReturn(Optional.of(target));
+
+        service.deleteAccountLocked(USER_PUBLIC_ID, "acct-target");
+
+        assertThat(target.isActive()).as("soft-delete").isFalse();
+        verify(bankAccountRepository, never())
+                .findFirstByUserPublicIdAndIsActiveTrueAndIdNotOrderByCreatedAtDesc(any(), any());
+    }
+
+    @Test
+    @DisplayName("deleteAccountLocked: 주계좌 삭제 시 남은 활성 계좌 1건을 자동 주계좌 승격")
+    void deleteAccountLocked_주계좌_삭제_자동승격() {
+        BankAccount target = bankAccount("acct-primary", true, true);
+        BankAccount candidate = bankAccount("acct-candidate", false, true);
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue("acct-primary", USER_PUBLIC_ID))
+                .willReturn(Optional.of(target));
+        given(bankAccountRepository.findFirstByUserPublicIdAndIsActiveTrueAndIdNotOrderByCreatedAtDesc(
+                eq(USER_PUBLIC_ID), any())).willReturn(Optional.of(candidate));
+
+        service.deleteAccountLocked(USER_PUBLIC_ID, "acct-primary");
+
+        assertThat(target.isActive()).as("주계좌 soft-delete").isFalse();
+        assertThat(candidate.isPrimary()).as("남은 계좌 자동 승격").isTrue();
+    }
+
+    @Test
+    @DisplayName("deleteAccountLocked: 주계좌가 마지막 1개면 승격 후보 없음 → 주계좌 없는 상태로 종료")
+    void deleteAccountLocked_마지막계좌_승격없음() {
+        BankAccount target = bankAccount("acct-primary", true, true);
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue("acct-primary", USER_PUBLIC_ID))
+                .willReturn(Optional.of(target));
+        given(bankAccountRepository.findFirstByUserPublicIdAndIsActiveTrueAndIdNotOrderByCreatedAtDesc(
+                eq(USER_PUBLIC_ID), any())).willReturn(Optional.empty());
+
+        service.deleteAccountLocked(USER_PUBLIC_ID, "acct-primary");
+
+        assertThat(target.isActive()).as("주계좌 soft-delete").isFalse();
+        // 승격 후보가 없으면 예외 없이 종료한다(주 계좌 없는 상태 허용).
+    }
+
+    @Test
+    @DisplayName("deleteAccountLocked: 대상이 없으면 ACCOUNT4001")
+    void deleteAccountLocked_미존재_ACCOUNT4001() {
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue("nope", USER_PUBLIC_ID))
+                .willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.deleteAccountLocked(USER_PUBLIC_ID, "nope"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.ACCOUNT_NOT_FOUND);
+    }
+
     // --- helpers ---
 
     private RLock lock() {
@@ -299,6 +467,20 @@ class BankAccountServiceTest {
                 .country("KR")
                 .isDomestic(true)
                 .isActive(true)
+                .build();
+    }
+
+    /** 주계좌 변경/삭제 테스트용 활성 계좌 엔티티. id는 미영속(null)이며 created_at도 null이다. */
+    private BankAccount bankAccount(String publicId, boolean isPrimary, boolean isActive) {
+        return BankAccount.builder()
+                .publicId(publicId)
+                .userPublicId(USER_PUBLIC_ID)
+                .bank(bank("004", "KB국민은행"))
+                .accountNumber("1234567890")
+                .mockAccountToken("tok")
+                .isVirtual(false)
+                .isPrimary(isPrimary)
+                .isActive(isActive)
                 .build();
     }
 

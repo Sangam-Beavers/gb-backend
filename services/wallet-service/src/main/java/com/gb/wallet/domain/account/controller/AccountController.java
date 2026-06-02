@@ -29,7 +29,9 @@ import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -274,5 +276,74 @@ public class AccountController {
         String clientIp = ClientIpResolver.resolve(httpRequest);
         return ApiResponse.success(chargeService.charge(
                 userPublicId, accountPublicId, idempotencyKey, request, clientIp));
+    }
+
+    /** 주 계좌 변경. 🔒 JWT 필요. 기존 주 계좌는 자동 해제(사용자당 주 계좌 1개). */
+    @Operation(
+            summary = "주 계좌 변경",
+            description = "요청 회원의 활성 계좌 중 하나를 주 계좌로 지정한다. 기존 주 계좌는 자동으로 해제되어 "
+                    + "사용자당 주 계좌가 항상 1개로 유지된다. 이미 주 계좌인 계좌를 다시 지정하면 멱등 성공(200)이다. "
+                    + "data에 변경된 AccountResponse(is_primary=true)가 담긴다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "변경 성공. data에 변경된 AccountResponse가 담긴다. 이미 주 계좌인 경우에도 멱등 200."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "ACCOUNT4001 - 존재하지 않는 계좌입니다(미존재/타인/비활성 계좌, 사유 구분 없음).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "503",
+                    description = "COMMON5031 - 일시적으로 처리할 수 없습니다(계좌 변경 직렬화 분산락 획득 실패).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @PatchMapping("/{id}/primary")
+    public ApiResponse<AccountResponse> changePrimary(
+            @CurrentUserPublicId String userPublicId,
+            @PathVariable("id") @NotBlank @Size(max = 36) String accountPublicId) {
+        return ApiResponse.success(bankAccountService.changePrimary(userPublicId, accountPublicId));
+    }
+
+    /** 계좌 삭제(soft-delete). 🔒 JWT 필요. 주 계좌 삭제 시 남은 활성 계좌 1건을 자동 승격. */
+    @Operation(
+            summary = "계좌 삭제",
+            description = "지정한 계좌를 삭제(soft-delete, is_active=false)한다. 주 계좌를 삭제하면 남은 활성 계좌 중 "
+                    + "가장 최근 등록 1건이 자동으로 주 계좌로 승격된다(마지막 1개면 주 계좌 없는 상태 허용). "
+                    + "성공 시 200 + data:null.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "삭제 성공(soft-delete). data는 null이다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "ACCOUNT4001 - 존재하지 않는 계좌입니다(미존재/타인/이미 비활성 계좌).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "503",
+                    description = "COMMON5031 - 일시적으로 처리할 수 없습니다(계좌 변경 직렬화 분산락 획득 실패).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @DeleteMapping("/{id}")
+    public ApiResponse<Void> deleteAccount(
+            @CurrentUserPublicId String userPublicId,
+            @PathVariable("id") @NotBlank @Size(max = 36) String accountPublicId) {
+        bankAccountService.deleteAccount(userPublicId, accountPublicId);
+        return ApiResponse.success(null); // 200 + data:null (envelope에서 data 노출)
     }
 }

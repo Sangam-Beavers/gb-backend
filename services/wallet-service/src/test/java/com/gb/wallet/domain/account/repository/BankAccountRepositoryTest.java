@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.gb.wallet.domain.account.entity.Bank;
 import com.gb.wallet.domain.account.entity.BankAccount;
+import java.time.LocalDateTime;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -128,7 +129,76 @@ class BankAccountRepositoryTest {
                 .as("비활성 계좌").isEmpty();
     }
 
+    @Test
+    @DisplayName("findByUserPublicIdAndIsPrimaryTrueAndIsActiveTrue(A): 활성 주계좌만 반환(비주계좌/타인 제외)")
+    void findActivePrimary_정확() {
+        BankAccount primary = persistAccount(USER_A, kbBank, "1000000000", true, true);
+        persistAccount(USER_A, shinhanBank, "2000000000", false, true); // 비주계좌
+        persistAccount(USER_B, kbBank, "3000000000", true, true);       // 타인 주계좌
+        em.flush();
+        em.clear();
+
+        assertThat(repository.findByUserPublicIdAndIsPrimaryTrueAndIsActiveTrue(USER_A))
+                .as("본인 활성 주계좌").get()
+                .extracting(BankAccount::getPublicId).isEqualTo(primary.getPublicId());
+        assertThat(repository.findByUserPublicIdAndIsPrimaryTrueAndIsActiveTrue("nobody"))
+                .as("없는 사용자").isEmpty();
+    }
+
+    @Test
+    @DisplayName("findByUserPublicIdAndIsPrimaryTrueAndIsActiveTrue(A): 주계좌가 비활성(soft-delete)이면 제외")
+    void findActivePrimary_비활성_제외() {
+        persistAccount(USER_A, kbBank, "1000000000", true, false); // 주계좌지만 비활성
+        em.flush();
+        em.clear();
+
+        assertThat(repository.findByUserPublicIdAndIsPrimaryTrueAndIsActiveTrue(USER_A)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("findFirstBy…IdNotOrderByCreatedAtDesc(B): 자기 제외 + 최신순 + 비활성 제외")
+    void findPromotionCandidate_자기제외_최신순_비활성제외() {
+        BankAccount target = persistAccount(USER_A, kbBank, "1000000000", true, true);      // 삭제 대상(주계좌)
+        BankAccount older = persistAccount(USER_A, shinhanBank, "2000000000", false, true); // 오래된 활성
+        BankAccount newer = persistAccount(USER_A, kbBank, "3000000000", false, true);      // 최신 활성 → 기대값
+        BankAccount inactive = persistAccount(USER_A, shinhanBank, "4000000000", false, false); // 비활성(시각 최신이라도 제외)
+        BankAccount otherUser = persistAccount(USER_B, kbBank, "5000000000", false, true);  // 타인(제외)
+        em.flush();
+        // @CreatedDate(now())가 동률이 되지 않도록 created_at을 명시적으로 고정한다(native UPDATE).
+        setCreatedAt(target.getId(), LocalDateTime.of(2026, 5, 1, 0, 0, 0));
+        setCreatedAt(older.getId(), LocalDateTime.of(2026, 5, 2, 0, 0, 0));
+        setCreatedAt(newer.getId(), LocalDateTime.of(2026, 5, 3, 0, 0, 0));
+        setCreatedAt(inactive.getId(), LocalDateTime.of(2026, 5, 9, 0, 0, 0));
+        setCreatedAt(otherUser.getId(), LocalDateTime.of(2026, 5, 9, 0, 0, 0));
+        em.clear();
+
+        assertThat(repository.findFirstByUserPublicIdAndIsActiveTrueAndIdNotOrderByCreatedAtDesc(
+                USER_A, target.getId()))
+                .as("자기 제외, 남은 활성 중 최신(newer)").get()
+                .extracting(BankAccount::getPublicId).isEqualTo(newer.getPublicId());
+    }
+
+    @Test
+    @DisplayName("findFirstBy…(B): 남은 활성 계좌가 없으면(자기 자신만 활성) empty")
+    void findPromotionCandidate_마지막계좌_empty() {
+        BankAccount only = persistAccount(USER_A, kbBank, "1000000000", true, true);
+        persistAccount(USER_A, shinhanBank, "2000000000", false, false); // 비활성뿐
+        em.flush();
+        em.clear();
+
+        assertThat(repository.findFirstByUserPublicIdAndIsActiveTrueAndIdNotOrderByCreatedAtDesc(
+                USER_A, only.getId())).isEmpty();
+    }
+
     // ----- helpers -----
+
+    private void setCreatedAt(Long id, LocalDateTime createdAt) {
+        em.getEntityManager()
+                .createNativeQuery("UPDATE bank_accounts SET created_at = ?1 WHERE id = ?2")
+                .setParameter(1, createdAt)
+                .setParameter(2, id)
+                .executeUpdate();
+    }
 
     private Bank persistBank(String code, String name) {
         Bank bank = Bank.builder()
