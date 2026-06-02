@@ -40,7 +40,7 @@ Redis                      (분산 락, 캐시, 세션 등)
 | **운영기 (prod)** | AWS EKS (sb-prod-vpc) | Cognito | Aurora MySQL |
 
 > **핵심:** Spring 코드는 환경에 따라 바뀌지 않는다.
-> `application-dev.yml` / `application-stage.yml` / `application-prod.yml` 의 `issuer-uri`(JWT) 등 **설정값만 다르게** 둔다.
+> JWT 검증의 `issuer-uri`는 환경별 yml(`application-dev/stage/prod.yml`)에 서로 다른 값을 박지 않고 **단일 환경변수 `AUTH_ISSUER_URI`로 주입**한다(각 환경이 이 변수만 다르게 공급하며, 커밋되는 `application.yaml`엔 넣지 않는다 — SSOT). `SecurityConfig`는 `oauth2ResourceServer(jwt)` + 공개 경로(`/swagger-ui/**`·`/v3/api-docs/**`·`/actuator/**`)만 `permitAll`, 나머지는 `authenticated()`로 환경 불변하게 토큰을 검증만 한다.
 > JWT의 `sub` 값은 환경마다 다르지만(`authentik|...` vs `ap-northeast-2_...`), DB의 `members.auth_provider_id` 컬럼은 동일하게 사용한다.
 
 ---
