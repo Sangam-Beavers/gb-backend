@@ -22,4 +22,20 @@ public interface ExchangeRateClient {
      * @return KRW 기준 환율(BigDecimal). 미지원 통화면 호출 측에서 TRANSFER4002로 처리하도록 0 또는 예외 정책을 따른다.
      */
     BigDecimal getRateToKrw(CurrencyType currency);
+
+    /**
+     * "1 {@code currency} → KRW" 의 <b>직전 갱신 시점</b> 환율을 반환한다.
+     * 환율 위젯 ({@code /wallets/exchange-rates}) 의 전일 대비 등락률(change_rate) 산정용.
+     *
+     * <p>Real (Redis) 에서는 {@code rate:KRW-<통화>:prev} 키를 조회한다 — exchange-updater cron 이
+     * 매일 자정 새 값을 박기 전에 직전 값을 이 키로 백업.
+     *
+     * <p>Mock 에서는 현재 환율과 동일 값을 반환한다 (등락률 0).
+     *
+     * <p>키가 없거나(첫 실행, TTL 만료) 파싱 실패하면 {@code null} 반환 — 호출 측에서 change_rate=0 처리.
+     *
+     * @param currency 환율을 구할 통화. KRW 는 1 반환.
+     * @return 직전 시점 KRW 기준 환율. 미존재 시 null.
+     */
+    BigDecimal getPrevRateToKrw(CurrencyType currency);
 }
