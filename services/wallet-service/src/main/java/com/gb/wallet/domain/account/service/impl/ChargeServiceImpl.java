@@ -81,11 +81,14 @@ public class ChargeServiceImpl implements ChargeService {
     public ChargeResponse charge(String userPublicId, String accountPublicId,
                                  String idempotencyKey, ChargeRequest request, String clientIp) {
         // 멱등성 Layer 1 — Redis 캐시(가장 빠른 경로). hit이면 DB·Mock 호출 없이 첫 응답을 즉시 재반환한다.
-        // (TransferServiceImpl.execute와 동일 패턴. 캐시 실패는 응답을 막지 않는다 — Layer 2·3가 안전망.)
-        // ⚠️ 캐시 hit은 요청자 재검증 없이 반환한다. 교차 사용자/계좌/유형 키 도용 방어는 캐시 미스 시
-        //    DB 경로(doCharge → rebuildFromPrior)가 담당한다. idempotency_key는 per-request UUID라
-        //    정상 흐름에선 동일 요청자만 같은 키를 들고 와 hit한다(Transfer Layer 1과 동일한 성격).
-        Optional<ChargeResponse> cached = readFromCache(idempotencyKey);
+        // 캐시 키를 (요청자, 계좌, 충전 도메인) 단위로 스코프(cacheKey)한다 — 같은 idempotency_key라도 다른
+        // 사용자/계좌는 캐시 hit이 나지 않고 캐시 미스 → DB 경로(doCharge → rebuildFromPrior)로 흘러
+        // ACCOUNT4001로 막힌다. 즉 Layer 1은 동일 (user, account, key)의 정상 재요청만 가속하고, 교차
+        // 사용자/계좌/유형 도용을 우회시키지 않는다(DB Layer 2·3의 보안 검증과 동일한 불변식 유지). 또한
+        // 멱등 캐시 prefix(idempotency:)를 송금과 공유하므로, charge 네임스페이스로 분리해 교차 도메인
+        // 역직렬화(송금 응답을 충전 응답으로)도 차단한다. 캐시 실패는 응답을 막지 않는다 — Layer 2·3가 안전망.
+        String cacheKey = cacheKey(idempotencyKey, userPublicId, accountPublicId);
+        Optional<ChargeResponse> cached = readFromCache(cacheKey);
         if (cached.isPresent()) {
             return cached.get();
         }
@@ -109,10 +112,20 @@ public class ChargeServiceImpl implements ChargeService {
             response = self.readPrior(idempotencyKey, accountPublicId, userPublicId);
         }
 
-        // 정상/race 복구 응답을 Layer 1에 채운다(다음 동일 키 요청은 DB·Mock 미접근). 쓰기 실패는 응답에 영향 없음.
-        // 에러 응답(BusinessException)은 위 흐름에서 그대로 전파되므로 캐시에 들어가지 않는다.
-        writeToCache(idempotencyKey, response);
+        // 정상/race 복구 응답을 Layer 1에 채운다(다음 동일 (user, account, key) 요청은 DB·Mock 미접근).
+        // 쓰기 실패는 응답에 영향 없음. 에러(BusinessException)는 위 흐름에서 전파돼 캐시에 들어가지 않는다.
+        writeToCache(cacheKey, response);
         return response;
+    }
+
+    /**
+     * 충전 멱등성 Layer 1 캐시 키. {@code idempotency_key}를 (요청자, 계좌, 충전 도메인) 단위로 스코프해,
+     * 교차 사용자/계좌/도메인 요청이 같은 {@code idempotency_key}로 캐시 hit을 일으키지 못하게 한다(그 경우
+     * 캐시 미스 → DB 경로의 {@code rebuildFromPrior}가 ACCOUNT4001로 차단). {@code IdempotencyCacheHelper}가
+     * {@code idempotency:} prefix를 덧붙이므로 최종 키는 {@code idempotency:charge:{key}:{user}:{account}}다.
+     */
+    private static String cacheKey(String idempotencyKey, String userPublicId, String accountPublicId) {
+        return "charge:" + idempotencyKey + ":" + userPublicId + ":" + accountPublicId;
     }
 
     @Override
@@ -251,28 +264,28 @@ public class ChargeServiceImpl implements ChargeService {
 
     // ----- Redis 캐시 헬퍼(멱등성 Layer 1): 캐시 실패는 응답을 막지 않는다 — TransferServiceImpl와 동일 패턴 -----
 
-    private Optional<ChargeResponse> readFromCache(String idempotencyKey) {
+    private Optional<ChargeResponse> readFromCache(String cacheKey) {
         try {
-            return idempotencyCacheHelper.get(idempotencyKey).flatMap(json -> {
+            return idempotencyCacheHelper.get(cacheKey).flatMap(json -> {
                 try {
                     return Optional.of(objectMapper.readValue(json, ChargeResponse.class));
                 } catch (JsonProcessingException e) {
-                    log.warn("Idempotency cache JSON 역직렬화 실패 — Layer 2로 폴백. key={}", idempotencyKey, e);
+                    log.warn("Idempotency cache JSON 역직렬화 실패 — Layer 2로 폴백. key={}", cacheKey, e);
                     return Optional.empty();
                 }
             });
         } catch (RuntimeException e) {
-            log.warn("Redis 캐시 조회 실패 — Layer 2로 폴백. key={}", idempotencyKey, e);
+            log.warn("Redis 캐시 조회 실패 — Layer 2로 폴백. key={}", cacheKey, e);
             return Optional.empty();
         }
     }
 
-    private void writeToCache(String idempotencyKey, ChargeResponse response) {
+    private void writeToCache(String cacheKey, ChargeResponse response) {
         try {
-            idempotencyCacheHelper.set(idempotencyKey, objectMapper.writeValueAsString(response));
+            idempotencyCacheHelper.set(cacheKey, objectMapper.writeValueAsString(response));
         } catch (JsonProcessingException | RuntimeException e) {
-            // 캐시 쓰기 실패는 응답에 영향 없음 — 다음 동일 키 요청 시 Layer 2(DB)가 받아준다.
-            log.warn("Idempotency cache 저장 실패. key={}", idempotencyKey, e);
+            // 캐시 쓰기 실패는 응답에 영향 없음 — 다음 동일 (user, account, key) 요청 시 Layer 2(DB)가 받아준다.
+            log.warn("Idempotency cache 저장 실패. key={}", cacheKey, e);
         }
     }
 }
