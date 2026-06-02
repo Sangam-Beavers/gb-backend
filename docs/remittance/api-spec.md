@@ -201,6 +201,7 @@
 | 400 | TRANSFER4003 | 지원하지 않는 송금 유형입니다. (INTERNAL_TRANSFER/REMITTANCE 외 — 예: CHARGE/EXCHANGE) |
 | 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. (INTERNAL_TRANSFER 한정) |
 | 400 | TRANSFER4005 | 지원하지 않는 통화 조합입니다. (1·2단계는 같은 통화만) |
+| 429 | TRANSFER4006 | 송금 요청 횟수를 초과했습니다. (user 단위 rate-limit, 기본 60초 / 30회) |
 | 400 | ACCOUNT4002 | 계좌 인증에 실패했습니다. (REMITTANCE — Mock 은행 BANK4003 매핑) |
 | 400 | ACCOUNT4003 | 연동 계좌의 잔액이 부족합니다. (REMITTANCE — Mock 은행 BANK4002 매핑) |
 | 401 | AUTH4011 | 인증이 필요합니다. |
@@ -208,7 +209,7 @@
 | 404 | ACCOUNT4001 | 존재하지 않는 계좌입니다. (REMITTANCE — 본인 + active 미매칭, 또는 Mock 은행 BANK4040 매핑) |
 | 404 | WALLET4001 | 존재하지 않는 지갑입니다. (송신자/수신자 wallet 부재, 또는 송신자 통화 잔액 행 부재 — 송신자 잔액 행은 자동 생성하지 않음) |
 | 500 | COMMON5000 | 서버 오류가 발생했습니다. (수신자 잔액 행 자동 생성 직후에도 조회되지 않는 정합성 불변식 위반 — 정상 흐름에서 발생 불가, 방어) |
-| 503 | COMMON5031 | 일시적으로 처리할 수 없습니다. (분산 락 획득 실패, 또는 Mock 은행 일시 장애/타임아웃/연결 실패 — REMITTANCE) |
+| 503 | COMMON5031 | 일시적으로 처리할 수 없습니다. (분산 락 획득 실패, 락 경합 재시도 소진(`PessimisticLockingFailureException` × 3회), 또는 Mock 은행 일시 장애/타임아웃/연결 실패 — REMITTANCE) |
 
 > **수신자 잔액 행 자동 생성** — 수신자가 지갑은 있으나 해당 통화 잔액 행이 없으면 송금 시점에 0원 행을 자동 생성한 뒤 입금한다(`WalletBalanceWriter.ensureBalanceRow` — `REQUIRES_NEW`로 독립 커밋, `uk_wallet_balances_wallet_currency` UNIQUE로 동시 생성 race 흡수). 따라서 미보유 통화 수신 요청도 성공한다. **송신자**는 자동 생성하지 않으며(돈이 있어야 보내는 게 정상), 잔액 행 부재 시 `WALLET4001`. 수신자 행이 자동 생성 직후에도 없는 경우 정합성 불변식 위반으로 `COMMON5000`(정상 흐름에서 발생 불가 — 방어).
 
@@ -234,12 +235,15 @@ INTERNAL_TRANSFER와 분기를 분리해 처리한다. 외부 계좌 송금이�
 
 ### 6-1. 멱등성 처리 (3-layer)
 
-동일 `Idempotency-Key` 재요청 시 에러 없이 첫 결과(2xx)를 그대로 재반환한다.
+동일 `Idempotency-Key` 재요청 시 에러 없이 첫 결과(2xx)를 그대로 재반환한다. **모든 layer가 `(요청자 user_public_id, 스코프 ID)`로 본 요청과 일치하는지 검증**해 cross-user/scope 응답 노출을 차단한다(스코프 ID = REMITTANCE는 `bank_account.public_id`, INTERNAL_TRANSFER는 수신자 `user_public_id`).
 
-1. **Redis 캐시 조회** — `idempotency:{key}` → 있으면 그대로 반환 (빠른 경로, TTL 24h)
-2. **DB 조회** — `transactions.idempotency_key`로 조회 → 있으면 응답 재구성 + Redis 캐시 후 반환
-3. **DB UNIQUE 위반** — 동시 race로 다른 트랜잭션이 먼저 INSERT 시 `DataIntegrityViolationException` catch → 별도 트랜잭션으로 첫 결과 조회 + 반환
+1. **Redis 캐시 조회 (Layer 1)** — 키는 도메인·요청자·스코프로 스코프화된 4-튜플. `idempotency:remittance:{key}:{user_public_id}:{bank_account_public_id}` 또는 `idempotency:internal_transfer:{key}:{user_public_id}:{receiver_public_id}`. hit이면 즉시 반환 (TTL 24h). 같은 `key`라도 (user, scope)가 다르면 캐시 미스 → Layer 2 흐름으로 진입.
+2. **DB 조회 (Layer 2)** — `transactions.idempotency_key`로 조회 → 있으면 `rebuildFromPrior`로 **키 소유자(`prior.wallet.user_public_id` == 요청자) + 거래 유형 + 스코프** 일치 검증. 검증 실패 시 도메인 부재 에러로 모호 매핑(REMITTANCE→`ACCOUNT4001`, INTERNAL→`WALLET4001`) — 정보 누설 방지(충전 정책 답습). 통과 시 응답 재구성 + Redis 캐시 후 반환.
+3. **DB UNIQUE 위반 (Layer 3)** — 동시 race로 다른 트랜잭션이 먼저 INSERT 시 `DataIntegrityViolationException` catch → 별도 `REQUIRES_NEW` 트랜잭션(`readPriorTransaction`)에서 첫 결과 재조회 + Layer 2와 동일한 검증 후 반환.
 
+#### 6-1-1. 락 경합 재시도
+
+`PessimisticLockingFailureException`(InnoDB 패자 트랜잭션 롤백 — 동일 잔액 행을 환전 등과 다툴 때)은 일시 충돌이므로 최대 **3회** 재시도. 소진 시 `COMMON5031`(503). 충전 `doChargeWithRetry` 패턴 답습.
 ### 6-2. 분산 락 정책 (데드락 회피 — INTERNAL_TRANSFER 한정)
 
 > REMITTANCE는 단일 송신자 잔액 행만 잠그면 충분해 Redisson MultiLock을 사용하지 않는다(§6-0 참조). 아래 정책은 INTERNAL_TRANSFER 전용.
@@ -257,7 +261,19 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 
 > 두 단계 락은 의도적 중복이다. Redis는 다중 인스턴스 환경 분산 보호, DB는 같은 인스턴스 내 직렬화. 둘 다 동일 순서로 획득해야 안전.
 
-### 6-3. Audit Log
+### 6-3. Rate-limit (user 단위, 진입 최상단)
+
+`execute()` 진입 직후(캐시·DB·락 진입 전) **user 단위 고정 윈도** rate-limit으로 폭주를 차단한다. 같은 사용자가 연속 송금 시 외부 자금 이동의 부담을 제한하는 보안 보조 장치.
+
+- 키: `ratelimit:transfer:{user_public_id}`
+- 정책: `wallet.transfer.rate-limit.{window-seconds, limit}` (기본 60초 / 30회)
+- 초과 시: `TRANSFER4006` (429)
+- Redis 장애 시: **fail-open**(통과) — 가용성 우선, 분산 락의 fail-closed(503)와 성격이 다름
+
+> 계좌 인증(`/accounts/verify`)은 IP 단위 rate-limit인데, 송금은 인증된 사용자가 호출하므로 user 단위가 더 적합하다(같은 사용자의 폭주 차단).
+
+
+### 6-4. Audit Log
 
 **INTERNAL_TRANSFER (두 건)** — 송신자/수신자 각각 잔액 변화를 별도 행으로 기록 (감사 완전성).
 

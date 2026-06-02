@@ -78,8 +78,19 @@ public interface TransferService {
 
     /**
      * 멱등성 race로 idempotency_key UNIQUE 위반이 난 뒤, 먼저 커밋된 첫 거래의 결과를 별도 readOnly
-     * 트랜잭션에서 재조회한다(Layer 3). <b>self-proxy 전용</b>. 메인 트랜잭션이 이미 롤백돼 있으므로
-     * REQUIRES_NEW 필수.
+     * 트랜잭션에서 재조회하고 <b>키 소유자/유형/스코프 일치</b>를 검증한 뒤 응답한다(Layer 3).
+     * <b>self-proxy 전용</b>. 메인 트랜잭션이 이미 롤백돼 있으므로 REQUIRES_NEW 필수.
+     *
+     * <p>{@code idempotency_key}는 전역 UNIQUE라 같은 키로 다른 사용자/유형/계좌의 거래가 잡힐 수 있다.
+     * 본 요청의 응답으로 재현해도 되는 거래인지 검증해 cross-user/account 응답 노출을 차단한다
+     * (충전 {@code ChargeServiceImpl.rebuildFromPrior} 정책 답습 — 사유 미구분으로 정보 누설 방지).
+     *
+     * @param idempotencyKey 멱등성 키
+     * @param userPublicId   요청자 (키 소유자와 일치 검증)
+     * @param expectedType   요청 송금 유형 (저장된 거래 유형과 일치 검증)
+     * @param expectedScopeId REMITTANCE면 bank_account.public_id, INTERNAL_TRANSFER면 receiver wallet의 user_public_id
      */
-    TransferExecuteResponse readPriorTransaction(String idempotencyKey);
+    TransferExecuteResponse readPriorTransaction(
+            String idempotencyKey, String userPublicId,
+            TransactionType expectedType, String expectedScopeId);
 }

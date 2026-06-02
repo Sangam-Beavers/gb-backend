@@ -339,9 +339,11 @@
 | --- | --- | --- | --- |
 | 송금 분산 락 (wallet 단위, 두 개 MultiLock) | `lock:wallet:{walletId}` | Redisson MultiLock(ID 오름차순, waitTime=3s, leaseTime=5s) | 5초 |
 | 계좌 등록 직렬화 락 (user 단위, 단일 키) | `lock:account-register:{userPublicId}` | Redisson Lock(waitTime=3s, leaseTime=5s). 획득 실패 시 503(fail-closed) | 5초(lease) |
-| 멱등성 키 (송금) | `idempotency:{key}` | `SET ... <result> EX 86400` | 24시간 |
+| 멱등성 키 (송금 REMITTANCE) | `idempotency:remittance:{key}:{userPublicId}:{bankAccountPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 계좌)로 스코프 → 교차 사용자/계좌는 캐시 미스 → DB(rebuildFromPrior)가 ACCOUNT4001로 차단 | 24시간 |
+| 멱등성 키 (송금 INTERNAL_TRANSFER) | `idempotency:internal_transfer:{key}:{userPublicId}:{receiverPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 수신자)로 스코프 → 교차 응답 노출 차단(rebuildFromPrior → WALLET4001) | 24시간 |
 | 멱등성 키 (충전, 요청자·계좌 스코프) | `idempotency:charge:{key}:{userPublicId}:{accountPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 계좌)로 스코프 → 교차 사용자/계좌는 캐시 미스 → DB(rebuildFromPrior)가 ACCOUNT4001로 차단 | 24시간 |
 | 계좌 인증(verify) rate-limit (IP 단위) | `ratelimit:account-verify:{clientIp}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 ACCOUNT4005(429), Redis 장애 시 fail-open | 윈도(기본 60초) |
+| 송금 rate-limit (user 단위) | `ratelimit:transfer:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 TRANSFER4006(429), Redis 장애 시 fail-open | 윈도(기본 60초, 30회) |
 | 토큰 블랙리스트 | `blacklist:{token}` | `SET ... 1 EX <남은만료>` | 토큰 만료까지 |
 | 로그인 실패 카운터 | `login:fail:user:{userPublicId}` | `INCR` + `EXPIRE 300` | 5분 |
 | 게시글 조회수 | `view:post:{postPublicId}` | `INCR` (배치로 DB 동기화) | — |
@@ -352,6 +354,8 @@
 >
 > - `lock:account-register`·`ratelimit:account-verify` 윈도/임계값은 `wallet.account.verify-rate-limit.{window-seconds,limit}`(기본 60s/10회)로 외부 설정한다(wallet-service).
 > - 충전 멱등성은 `idempotency:charge:{key}:{user}:{account}`(Layer 1 캐시, 요청자·계좌 스코프) + `transactions.idempotency_key` UNIQUE(Layer 2·3, 전역)로 보장한다. 캐시는 동일 (요청자, 계좌, key)의 정상 재요청만 가속하고, 교차 요청은 캐시 미스 → DB의 보안 검증(rebuildFromPrior)이 ACCOUNT4001로 처리한다. 충전엔 분산 락을 두지 않는다(단일 wallet + 비관적 락 FOR UPDATE + key UNIQUE로 충분).
+> - 송금 멱등성도 충전과 동일하게 (도메인·요청자·스코프) 스코프된 캐시(Layer 1) + `transactions.idempotency_key` UNIQUE(Layer 2·3) 패턴을 따른다. 스코프 ID는 REMITTANCE면 `bank_account.public_id`, INTERNAL_TRANSFER면 수신자 `user_public_id`. 캐시·DB 모두 `rebuildFromPrior`로 (소유자/유형/스코프) 일치 검증해 cross-user 응답 노출을 차단한다. 락 경합(PessimisticLockingFailureException)은 최대 3회 재시도, 소진 시 COMMON5031.
+> - 송금 rate-limit은 user 단위(외부 자금 이동 폭주 차단). `wallet.transfer.rate-limit.{window-seconds,limit}`(기본 60s/30회)로 외부 설정한다.
 
 ---
 
