@@ -24,8 +24,7 @@ import lombok.NoArgsConstructor;
  * {@code @ManyToOne} 매핑하지 않는다. 사용자별 목록 조회가 핵심 액세스 패턴이라
  * {@code user_public_id} 단일 컬럼 인덱스를 둔다.
  *
- * <p>{@code account_number}는 현재 평문 저장이며 응답 직전 마스킹만 적용된다.
- * 실제 컬럼 암호화는 후속 보안 이슈에서 다룬다.
+ * <p>{@code account_number}는 평문 저장이며 응답 직전 마스킹만 적용된다.
  */
 @Entity
 @Getter
@@ -83,5 +82,20 @@ public class BankAccount extends BaseEntity {
         this.isVirtual = isVirtual;
         this.isPrimary = isPrimary;
         this.isActive = isActive;
+    }
+
+    /** 주 계좌로 지정한다(주 계좌 변경 시 사용). {@code @Setter} 대신 의도를 드러내는 도메인 메서드. */
+    public void markAsPrimary() {
+        this.isPrimary = true;
+    }
+
+    /** 주 계좌 지정을 해제한다(다른 계좌를 주 계좌로 바꿀 때 기존 주 계좌에 적용). */
+    public void releasePrimary() {
+        this.isPrimary = false;
+    }
+
+    /** soft-delete — 비활성 처리한다. 비활성 계좌는 목록·조회 finder에서 제외된다. */
+    public void deactivate() {
+        this.isActive = false;
     }
 }

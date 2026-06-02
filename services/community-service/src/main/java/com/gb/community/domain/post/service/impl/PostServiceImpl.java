@@ -136,9 +136,8 @@ public class PostServiceImpl implements PostService {
      * <ul>
      *   <li>latest(기본) — 최신순(createdAt desc)</li>
      *   <li>popular — 좋아요순(likeCount desc), 동률은 최신순</li>
-     *   <li>accuracy — 키워드 검색 정확도순. 전문검색 미도입이라 현재는 키워드 유무와 무관하게 최신순과
-     *       동일하게 정렬한다(키워드 없는 accuracy도 사실상 latest와 동치).
-     *       TODO: 관련도 랭킹 도입 시 교체.</li>
+     *   <li>accuracy — 키워드 검색 정확도순. 전문검색/관련도 랭킹은 도입하지 않기로 확정(폐지)했으므로
+     *       키워드 유무와 무관하게 최신순(latest)과 동일하게 정렬한다.</li>
      * </ul>
      * 그 외 값은 COMMON4001. id를 마지막 tie-breaker로 둬 정렬을 결정적으로 만든다(노출 X, 정렬 키로만 사용).
      */

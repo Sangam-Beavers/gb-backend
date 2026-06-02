@@ -1,0 +1,121 @@
+package com.gb.wallet.domain.exchange.dto.response;
+
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.gb.wallet.domain.transaction.entity.Transaction;
+import io.swagger.v3.oas.annotations.media.Schema;
+import java.math.RoundingMode;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
+import lombok.Builder;
+import lombok.Getter;
+
+/**
+ * 환전 실행/내역 조회 응답. 명세 §9/§10 표와 1:1로 맞춘다. 실행(201)·내역 조회(200)가 동일 구조라 공용.
+ *
+ * <p>금액·환율은 string(금액 소수 4자리, 환율 소수 8자리 → 응답 표기상 4자리로 패딩)으로 전송한다.
+ * 식별자는 public_id(UUID)만, 시각은 ISO 8601 UTC Z. transactions(type=EXCHANGE)에서 만든다.
+ *
+ * <p><b>Jackson 역직렬화:</b> 환전 멱등성 Layer 1(Redis 캐시)이 응답을 JSON으로 저장했다가 동일 키 재요청 시
+ * 객체로 복원한다. {@code @Builder} private 생성자라 Jackson이 creator를 추론하기 모호하므로 생성자에
+ * {@code @JsonCreator} + 직렬화 키와 1:1인 snake_case {@code @JsonProperty}를 명시해 round-trip을 보장한다
+ * (ChargeResponse와 동일 패턴). 직렬화는 기존대로 필드 기반(전역 SNAKE_CASE)이라 출력은 불변.
+ */
+@Getter
+public class ExchangeResponse {
+
+    @Schema(description = "환전 내역 식별자(UUID)", example = "1a2b3c4d-5678-90ab-cdef-012345678901")
+    private final String publicId;
+
+    @Schema(description = "환전 유형 (EXCHANGE / RE_EXCHANGE)", example = "EXCHANGE")
+    private final String exchangeType;
+
+    @Schema(description = "출금 통화 코드", example = "KRW")
+    private final String fromCurrencyCode;
+
+    @Schema(description = "입금 통화 코드", example = "USD")
+    private final String toCurrencyCode;
+
+    @Schema(description = "환전 신청 금액 (string)", example = "100000.0000")
+    private final String amount;
+
+    @Schema(description = "적용 환율 (string, \"1 외화→KRW\")", example = "1380.0000")
+    private final String exchangeRate;
+
+    @Schema(description = "수수료 (string, KRW 기준)", example = "1000.0000")
+    private final String fee;
+
+    @Schema(description = "실제 수령액 (string)", example = "72.4500")
+    private final String receiveAmount;
+
+    @Schema(description = "수령 통화 코드", example = "USD")
+    private final String receiveCurrencyCode;
+
+    @Schema(description = "거래 상태", example = "COMPLETED")
+    private final String status;
+
+    @Schema(description = "환전 완료 시각 (ISO 8601 UTC Z)", example = "2026-05-26T05:30:00Z")
+    private final String exchangedAt;
+
+    @Builder
+    @JsonCreator
+    private ExchangeResponse(
+            @JsonProperty("public_id") String publicId,
+            @JsonProperty("exchange_type") String exchangeType,
+            @JsonProperty("from_currency_code") String fromCurrencyCode,
+            @JsonProperty("to_currency_code") String toCurrencyCode,
+            @JsonProperty("amount") String amount,
+            @JsonProperty("exchange_rate") String exchangeRate,
+            @JsonProperty("fee") String fee,
+            @JsonProperty("receive_amount") String receiveAmount,
+            @JsonProperty("receive_currency_code") String receiveCurrencyCode,
+            @JsonProperty("status") String status,
+            @JsonProperty("exchanged_at") String exchangedAt) {
+        this.publicId = publicId;
+        this.exchangeType = exchangeType;
+        this.fromCurrencyCode = fromCurrencyCode;
+        this.toCurrencyCode = toCurrencyCode;
+        this.amount = amount;
+        this.exchangeRate = exchangeRate;
+        this.fee = fee;
+        this.receiveAmount = receiveAmount;
+        this.receiveCurrencyCode = receiveCurrencyCode;
+        this.status = status;
+        this.exchangedAt = exchangedAt;
+    }
+
+    /**
+     * 환전 거래(transactions, type=EXCHANGE)로부터 응답을 만든다.
+     *
+     * <p>거래의 컬럼 매핑: from 통화 = {@code currencyCode}(출금 통화), to 통화 = {@code receiveCurrencyCode},
+     * 신청 금액 = {@code amount}, 수령액 = {@code receiveAmount} 또는 {@code toAmount}, 환율 = {@code exchangeRate}.
+     *
+     * @param tx           환전 거래
+     * @param exchangeType 환전 유형(EXCHANGE/RE_EXCHANGE) — transactions에 별도 컬럼이 없어 호출 측에서 전달
+     */
+    public static ExchangeResponse from(Transaction tx, String exchangeType) {
+        return ExchangeResponse.builder()
+                .publicId(tx.getPublicId())
+                .exchangeType(exchangeType)
+                .fromCurrencyCode(tx.getCurrencyCode().name())
+                .toCurrencyCode(tx.getReceiveCurrencyCode().name())
+                .amount(tx.getAmount().setScale(4, RoundingMode.HALF_UP).toPlainString())
+                .exchangeRate(tx.getExchangeRate().setScale(4, RoundingMode.HALF_UP).toPlainString())
+                .fee(tx.getFee().setScale(4, RoundingMode.HALF_UP).toPlainString())
+                .receiveAmount(tx.getReceiveAmount().setScale(4, RoundingMode.HALF_UP).toPlainString())
+                .receiveCurrencyCode(tx.getReceiveCurrencyCode().name())
+                .status(tx.getStatus().name())
+                .exchangedAt(toUtcZ(tx.getCreatedAt()))
+                .build();
+    }
+
+    private static String toUtcZ(LocalDateTime dateTime) {
+        if (dateTime == null) {
+            return null;
+        }
+        return DateTimeFormatter.ISO_INSTANT.format(
+                dateTime.toInstant(ZoneOffset.UTC).truncatedTo(ChronoUnit.SECONDS));
+    }
+}

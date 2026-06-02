@@ -11,6 +11,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // 메일 발송(비밀번호 재설정·가입 인증 이메일). JavaMailSender + Gmail SMTP.
+    implementation 'org.springframework.boot:spring-boot-starter-mail'
     implementation 'org.springframework.kafka:spring-kafka'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.14'
 

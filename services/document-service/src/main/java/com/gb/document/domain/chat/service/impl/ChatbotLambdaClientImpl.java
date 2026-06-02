@@ -25,6 +25,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -65,7 +67,12 @@ public class ChatbotLambdaClientImpl implements ChatbotLambdaClient {
     private long requestTimeoutSeconds;
 
     // Spring 빈으로 등록되는 동안 재사용. HttpClient는 thread-safe.
+    // ⚠️ HTTP/1.1 강제 — Java HttpClient 11+ 기본은 HTTP/2이고, HTTP/2에서는 Host 헤더가 :authority
+    // 의사헤더로 대체된다. AWS SigV4는 SignedHeaders=host;... 으로 서명했는데 실제 와이어에
+    // Host 헤더가 없으면 검증이 깨질 수 있다 (특히 일부 Lambda Function URL 경로). HTTP/1.1을 강제하면
+    // Host 헤더가 그대로 박혀 SDK가 서명에 쓴 host와 정확히 일치한다.
     private final HttpClient http = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(Duration.ofSeconds(10))
             .build();
 
@@ -125,11 +132,19 @@ public class ChatbotLambdaClientImpl implements ChatbotLambdaClient {
      * </ul>
      */
     private void applySigV4(HttpRequest.Builder builder, URI uri, byte[] body) {
+        // ⚠️ payload SHA256을 우리가 직접 박는다.
+        // 이유: SDK v2 Aws4Signer + contentStreamProvider 조합은 일부 경로에서 payload hash를
+        // 빈 페이로드(또는 UNSIGNED-PAYLOAD)로 계산해 서명한다. 그러면 AWS가 실제 body로 계산한
+        // hash와 불일치 → 403 SignatureDoesNotMatch. x-amz-content-sha256를 명시 박으면 SDK는
+        // 그 값을 그대로 SignedHeaders에 포함시켜 서명하므로, AWS가 받는 body와 hash가 일치한다.
+        String payloadHash = sha256Hex(body);
+
         // ContentStreamProvider는 람다 폼이 모든 SDK v2 버전 호환(static factory 부재 시에도 안전).
         SdkHttpFullRequest unsigned = SdkHttpFullRequest.builder()
                 .method(SdkHttpMethod.POST)
                 .uri(uri)
                 .putHeader("Content-Type", "application/json")
+                .putHeader("x-amz-content-sha256", payloadHash)
                 .contentStreamProvider(() -> new ByteArrayInputStream(body))
                 .build();
 
@@ -153,6 +168,21 @@ public class ChatbotLambdaClientImpl implements ChatbotLambdaClient {
     private static boolean isLocalHost(String host) {
         if (host == null) return false;
         return "localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host);
+    }
+
+    /** body의 hex 인코딩된 SHA-256. SigV4 payload hash 계산용. */
+    private static String sha256Hex(byte[] data) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(data);
+            StringBuilder sb = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 algorithm not available", e);
+        }
     }
 
     /** Java HttpClient가 setHeader/header()로 설정을 금지하는 헤더 목록. */

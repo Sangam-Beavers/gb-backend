@@ -1,5 +1,7 @@
 package com.gb.wallet.domain.account.service.impl;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.account.dto.request.ChargeRequest;
@@ -24,21 +26,25 @@ import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.config.ChargeProperties;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
+import com.gb.wallet.global.redis.IdempotencyCacheHelper;
 import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ChargeServiceImpl implements ChargeService {
 
-    /** 충전 통화는 KRW 고정(명세 §12, §5-4). 외화 충전은 본 작업 범위 밖. */
+    /** 충전 통화는 KRW 고정(명세 §12). 외화 충전은 미지원. */
     private static final CurrencyType CHARGE_CURRENCY = CurrencyType.KRW;
 
     /** audit_log.action 값. */
@@ -46,6 +52,9 @@ public class ChargeServiceImpl implements ChargeService {
 
     /** Mock 은행이 정상 처리했을 때 돌려주는 상태값. */
     private static final String COMPLETED_STATUS = "COMPLETED";
+
+    /** 충전 락 경합(데드락·락 타임아웃)으로 트랜잭션이 롤백됐을 때 doCharge 재시도 최대 횟수. 소진 시 COMMON5031. */
+    private static final int MAX_CHARGE_ATTEMPTS = 3;
 
     private final BankAccountRepository bankAccountRepository;
     private final WalletRepository walletRepository;
@@ -55,6 +64,8 @@ public class ChargeServiceImpl implements ChargeService {
     private final TransactionAuditLogRepository auditLogRepository;
     private final BankClient bankClient;
     private final ChargeProperties chargeProperties;
+    private final IdempotencyCacheHelper idempotencyCacheHelper;
+    private final ObjectMapper objectMapper;
 
     /**
      * self-injection: {@code @Transactional}이 적용되려면 {@link #doCharge}/{@link #readPrior}를 AOP
@@ -73,23 +84,70 @@ public class ChargeServiceImpl implements ChargeService {
     @Override
     public ChargeResponse charge(String userPublicId, String accountPublicId,
                                  String idempotencyKey, ChargeRequest request, String clientIp) {
-        try {
-            return self.doCharge(userPublicId, accountPublicId, idempotencyKey, request, clientIp);
-        } catch (DataIntegrityViolationException race) {
-            // 동시 충전 race: 다른 트랜잭션이 같은 idempotency_key로 먼저 커밋했다(UNIQUE 위반).
-            // IDENTITY 전략이라 INSERT가 save() 시점에 즉시 실행되므로 위반은 doCharge 트랜잭션 "안"에서
-            // 발생하고, 커밋 시점이 아니라 그 전에 예외로 떠오른다. doCharge 트랜잭션은 rollback-only로
-            // 마킹돼 같은 트랜잭션 내 재조회가 불가하므로, 트랜잭션 밖인 여기서 잡아 별도 트랜잭션으로
-            // 첫 결과를 재조회한다(§5-1).
-            //
-            // NOTE(후속 하드닝): 매우 높은 동시성에서 같은 잔액 행 비관적 락 경합이 겹치면 InnoDB가 위반을
-            //   DataIntegrityViolationException이 아니라 형제 타입(CannotAcquireLockException /
-            //   DeadlockLoserDataAccessException = PessimisticLockingFailureException 계열)으로 표면화할 수
-            //   있다. 이 경우 현재 catch가 놓쳐 COMMON5031/5000으로 응답될 수 있다. Mock은 같은 키로 첫 응답을
-            //   재반환하므로 외부 이중 차감은 없고(§5-2), 클라이언트 재시도로 정합성은 회복되지만, 운영 전환 시
-            //   catch를 PessimisticLockingFailureException까지 넓히고 bounded retry를 더하는 것을 검토한다.
-            return self.readPrior(idempotencyKey, accountPublicId, userPublicId);
+        // 멱등성 Layer 1 — Redis 캐시(가장 빠른 경로). hit이면 DB·Mock 호출 없이 첫 응답을 즉시 재반환한다.
+        // 캐시 키를 (요청자, 계좌, 충전 도메인) 단위로 스코프(cacheKey)한다 — 같은 idempotency_key라도 다른
+        // 사용자/계좌는 캐시 hit이 나지 않고 캐시 미스 → DB 경로(doCharge → rebuildFromPrior)로 흘러
+        // ACCOUNT4001로 막힌다. 즉 Layer 1은 동일 (user, account, key)의 정상 재요청만 가속하고, 교차
+        // 사용자/계좌/유형 도용을 우회시키지 않는다(DB Layer 2·3의 보안 검증과 동일한 불변식 유지). 또한
+        // 멱등 캐시 prefix(idempotency:)를 송금과 공유하므로, charge 네임스페이스로 분리해 교차 도메인
+        // 역직렬화(송금 응답을 충전 응답으로)도 차단한다. 캐시 실패는 응답을 막지 않는다 — Layer 2·3가 안전망.
+        String cacheKey = cacheKey(idempotencyKey, userPublicId, accountPublicId);
+        Optional<ChargeResponse> cached = readFromCache(cacheKey);
+        if (cached.isPresent()) {
+            return cached.get();
         }
+
+        ChargeResponse response = doChargeWithRetry(
+                userPublicId, accountPublicId, idempotencyKey, request, clientIp);
+
+        // 정상/race 복구 응답을 Layer 1에 채운다(다음 동일 (user, account, key) 요청은 DB·Mock 미접근).
+        // 쓰기 실패는 응답에 영향 없음. 에러(BusinessException)는 위 흐름에서 전파돼 캐시에 들어가지 않는다.
+        writeToCache(cacheKey, response);
+        return response;
+    }
+
+    /**
+     * 충전 본 처리({@link #doCharge}) 실행 + 동시성 예외 복구. 두 종류의 동시성 충돌을 구분해 처리한다.
+     *
+     * <ul>
+     *   <li><b>idempotency_key UNIQUE 위반</b>({@link DataIntegrityViolationException}): 다른 트랜잭션이 같은
+     *       키로 먼저 커밋했다. IDENTITY 전략이라 INSERT가 save() 시점에 즉시 실행돼 위반이 doCharge 트랜잭션
+     *       "안"에서 떠오르고, 그 트랜잭션은 rollback-only라 같은 트랜잭션 내 재조회가 불가하다. 트랜잭션 밖인
+     *       여기서 잡아 별도 트랜잭션({@link #readPrior})으로 첫 결과를 재반환한다(결과가 이미 존재 — 재시도 불필요).</li>
+     *   <li><b>락 경합·데드락</b>({@link PessimisticLockingFailureException} = CannotAcquireLockException /
+     *       DeadlockLoserDataAccessException): 같은 잔액 행을 다른 거래(다른 키의 충전·환전 등)와 비관적 락으로
+     *       동시에 다투면 InnoDB가 패자 트랜잭션을 롤백한다. 일시적 충돌이므로 최대 {@link #MAX_CHARGE_ATTEMPTS}회
+     *       재시도한다 — 재시도 첫 단계(doCharge 멱등 선검사)가 그새 커밋된 첫 결과를 잡으면 멱등 재반환되고,
+     *       경합 상대가 끝났으면 정상 처리된다. 재시도 소진 시 일시 장애로 보고 {@code COMMON5031}(503).</li>
+     * </ul>
+     */
+    private ChargeResponse doChargeWithRetry(String userPublicId, String accountPublicId,
+                                             String idempotencyKey, ChargeRequest request, String clientIp) {
+        int attempt = 0;
+        while (true) {
+            try {
+                return self.doCharge(userPublicId, accountPublicId, idempotencyKey, request, clientIp);
+            } catch (DataIntegrityViolationException race) {
+                return self.readPrior(idempotencyKey, accountPublicId, userPublicId);
+            } catch (PessimisticLockingFailureException lockContention) {
+                if (++attempt >= MAX_CHARGE_ATTEMPTS) {
+                    log.warn("충전 락 경합 재시도 소진({}회) — COMMON5031 매핑. account={}",
+                            MAX_CHARGE_ATTEMPTS, accountPublicId, lockContention);
+                    throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE, lockContention);
+                }
+                log.debug("충전 락 경합 — 재시도 {}/{}. account={}", attempt, MAX_CHARGE_ATTEMPTS, accountPublicId);
+            }
+        }
+    }
+
+    /**
+     * 충전 멱등성 Layer 1 캐시 키. {@code idempotency_key}를 (요청자, 계좌, 충전 도메인) 단위로 스코프해,
+     * 교차 사용자/계좌/도메인 요청이 같은 {@code idempotency_key}로 캐시 hit을 일으키지 못하게 한다(그 경우
+     * 캐시 미스 → DB 경로의 {@code rebuildFromPrior}가 ACCOUNT4001로 차단). {@code IdempotencyCacheHelper}가
+     * {@code idempotency:} prefix를 덧붙이므로 최종 키는 {@code idempotency:charge:{key}:{user}:{account}}다.
+     */
+    private static String cacheKey(String idempotencyKey, String userPublicId, String accountPublicId) {
+        return "charge:" + idempotencyKey + ":" + userPublicId + ":" + accountPublicId;
     }
 
     @Override
@@ -124,7 +182,7 @@ public class ChargeServiceImpl implements ChargeService {
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
 
         // (6) Mock 은행 출금. 실패는 BankErrorMapper가 BusinessException으로 변환해 던지므로 그대로 전파한다.
-        //     idempotencyKey를 그대로 forward — Mock도 같은 키로 첫 응답을 재반환한다(§5-2).
+        //     idempotencyKey를 그대로 forward — Mock도 같은 키로 첫 응답을 재반환한다.
         WithdrawalResult mockResult = bankClient.withdraw(
                 account.getMockAccountToken(), amount, CHARGE_CURRENCY.name(), idempotencyKey);
         // 방어 — 응답이 null이거나 COMPLETED가 아닌 비정상 케이스는 일시 장애(503)로 본다. 현재 구현체
@@ -133,21 +191,20 @@ public class ChargeServiceImpl implements ChargeService {
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
 
-        // (7) 잔액 행을 비관적 락으로 조회. 없으면(첫 KRW 충전) 먼저 0원 행을 보장한 뒤 다시 잠근다(§5-5).
-        //     존재하지 않는 행은 FOR UPDATE로 잠글 수 없어, 여기서 단순 save하면 동시 첫 충전(서로 다른 키)에서
-        //     uk_wallet_balances_wallet_currency 위반이 메인 트랜잭션을 오염시키고 charge() 래퍼의
-        //     DataIntegrityViolationException catch(멱등성 race 복구)로 잘못 흘러가 COMMON5000이 된다.
-        //     행 보장을 별도 트랜잭션(WalletBalanceWriter, REQUIRES_NEW)으로 분리해 위반을 거기서 흡수하고,
-        //     본 트랜잭션은 항상 존재하는 행을 잠근다 — 그 catch는 이제 idempotency_key 위반만 본다.
+        // (7) 잔액 행 0원 보장(REQUIRES_NEW)을 FOR UPDATE보다 "먼저" 한다.
+        //     존재하지 않는 행에 FOR UPDATE를 걸면 MySQL(REPEATABLE READ)이 그 (wallet_id, currency) 자리에
+        //     gap lock을 잡는데, 이어서 ensureBalanceRow의 REQUIRES_NEW INSERT(별도 커넥션)가 그 gap을
+        //     기다리다 self-deadlock에 빠진다 — 바깥 트랜잭션은 INSERT가 끝나길 기다리고, 그 INSERT는 바깥이
+        //     쥔 gap lock이 풀리길 기다려, InnoDB 데드락 감지에도 안 잡히고 innodb_lock_wait_timeout(기본 50s)을
+        //     꽉 채운 뒤 PessimisticLockingFailureException으로 터진다(첫 충전마다 결정적 — H2는 gap lock이 없어
+        //     테스트에서 안 드러남). 그래서 행을 먼저 독립 커밋(REQUIRES_NEW)해 만들어 두고 — 동시 첫 충전의
+        //     uk_wallet_balances_wallet_currency 위반은 WalletBalanceWriter가 흡수 — 항상 존재하는 행을
+        //     FOR UPDATE로 record lock한다. 환전(ExchangeServiceImpl)도 동일하게 ensure→FOR UPDATE 순서다.
+        walletBalanceWriter.ensureBalanceRow(wallet, CHARGE_CURRENCY);
         WalletBalance balance = walletBalanceRepository
                 .findForUpdateByWalletAndCurrency(wallet, CHARGE_CURRENCY)
-                .orElseGet(() -> {
-                    walletBalanceWriter.ensureBalanceRow(wallet, CHARGE_CURRENCY);
-                    return walletBalanceRepository
-                            .findForUpdateByWalletAndCurrency(wallet, CHARGE_CURRENCY)
-                            // 행 보장 직후라 비어 있을 수 없다 — 비면 정합성이 깨진 비정상 상태.
-                            .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
-                });
+                // 행 보장 직후라 비어 있을 수 없다 — 비면 정합성이 깨진 비정상 상태.
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
 
         BigDecimal beforeBalance = balance.getBalance();
         balance.addBalance(amount); // 영속 상태 → dirty checking으로 UPDATE
@@ -224,5 +281,32 @@ public class ChargeServiceImpl implements ChargeService {
                 .findFirstByTransaction_IdOrderByIdAsc(prior.getId())
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
         return ChargeResponse.of(prior, accountPublicId, log.getAfterBalance());
+    }
+
+    // ----- Redis 캐시 헬퍼(멱등성 Layer 1): 캐시 실패는 응답을 막지 않는다 — TransferServiceImpl와 동일 패턴 -----
+
+    private Optional<ChargeResponse> readFromCache(String cacheKey) {
+        try {
+            return idempotencyCacheHelper.get(cacheKey).flatMap(json -> {
+                try {
+                    return Optional.of(objectMapper.readValue(json, ChargeResponse.class));
+                } catch (JsonProcessingException e) {
+                    log.warn("Idempotency cache JSON 역직렬화 실패 — Layer 2로 폴백. key={}", cacheKey, e);
+                    return Optional.empty();
+                }
+            });
+        } catch (RuntimeException e) {
+            log.warn("Redis 캐시 조회 실패 — Layer 2로 폴백. key={}", cacheKey, e);
+            return Optional.empty();
+        }
+    }
+
+    private void writeToCache(String cacheKey, ChargeResponse response) {
+        try {
+            idempotencyCacheHelper.set(cacheKey, objectMapper.writeValueAsString(response));
+        } catch (JsonProcessingException | RuntimeException e) {
+            // 캐시 쓰기 실패는 응답에 영향 없음 — 다음 동일 (user, account, key) 요청 시 Layer 2(DB)가 받아준다.
+            log.warn("Idempotency cache 저장 실패. key={}", cacheKey, e);
+        }
     }
 }

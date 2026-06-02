@@ -46,4 +46,18 @@ public interface BankAccountRepository extends JpaRepository<BankAccount, Long> 
      * 회원의 활성 계좌 개수. 첫 계좌면 자동 {@code isPrimary=true}로 등록하기 위해 사용한다.
      */
     long countByUserPublicIdAndIsActiveTrue(String userPublicId);
+
+    /**
+     * 회원의 현재 주 계좌(활성)를 조회한다. 주 계좌 변경(PATCH /accounts/{id}/primary) 시 기존 주 계좌를
+     * 해제하기 위해 사용한다. "사용자당 주 계좌 1개" 불변식상 최대 1건이라 {@code Optional}로 받는다.
+     */
+    Optional<BankAccount> findByUserPublicIdAndIsPrimaryTrueAndIsActiveTrue(String userPublicId);
+
+    /**
+     * 삭제 대상({@code excludedId})을 제외한 남은 활성 계좌 중 가장 최근 등록 1건을 조회한다.
+     * 주 계좌 삭제(DELETE /accounts/{id}) 시 남은 계좌 1건을 자동으로 주 계좌 승격하기 위한 후보이며,
+     * 남은 계좌가 없으면(마지막 계좌 삭제) {@code empty}다.
+     */
+    Optional<BankAccount> findFirstByUserPublicIdAndIsActiveTrueAndIdNotOrderByCreatedAtDesc(
+            String userPublicId, Long excludedId);
 }

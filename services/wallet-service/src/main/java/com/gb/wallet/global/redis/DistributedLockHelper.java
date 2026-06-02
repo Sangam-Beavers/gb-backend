@@ -1,6 +1,7 @@
 package com.gb.wallet.global.redis;
 
 import java.util.concurrent.TimeUnit;
+import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Component;
  * <p>같은 wallet_id 두 번(자기 송금)은 호출 전에 Service에서 차단해야 한다(TRANSFER4004).
  * 여기서는 별도 검증하지 않는다 — 헬퍼는 정책 집행만, 도메인 검증은 Service 책임.
  */
+@Slf4j
 @Component
 public class DistributedLockHelper {
 
@@ -64,6 +66,42 @@ public class DistributedLockHelper {
             return acquired ? multiLock : null;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            return null;
+        }
+    }
+
+    /**
+     * 단일 키에 대한 분산 락을 {@code wait 3s / lease 5s}로 획득한다(두-wallet MultiLock과 동일 타이밍 정책).
+     *
+     * <p><b>명시적 {@code leaseTime}(5s)은 의도적</b>이다 — Redisson watchdog 자동 갱신을 끈다. critical
+     * section이 짧고(SELECT 몇 개 + INSERT 1), 노드가 try-finally의 {@code unlock} 없이 죽어도 5초 뒤 락이
+     * 자동 해제돼 빠르게 복구된다(watchdog은 {@code lockWatchdogTimeout} 기본 30s까지 락을 붙들어 복구가
+     * 느리다). 더 긴 critical section의 {@link #tryLockTwoWallets}(송금)도 같은 5s lease로 동작한다. 만에
+     * 하나 critical section이 5s를 넘겨 락이 만료되는 좁은 경우의 잔여 위험(중복 등록)은 후속 DB UNIQUE
+     * 제약이 최종 안전망으로 닫는다(현재 범위 밖 — 별도 마이그레이션 이슈).
+     *
+     * <p>계좌 등록을 user 단위로 직렬화하는 것처럼, 잠글 리소스가 하나뿐이라 Resource Ordering이 필요 없는
+     * 경우에 쓴다. 네임스페이스는 호출자가 정한다(키 전체를 넘긴다) — MultiLock 메서드가 {@code lock:wallet:}을
+     * 강제하는 것과 달리, 이 메서드는 도메인별 키({@code lock:account-register:{user}} 등)를 받는다.
+     *
+     * <p>호출자 책임: 반환된 {@link RLock}은 try-finally에서 {@code isHeldByCurrentThread()} 확인 후
+     * {@code unlock()}한다. 획득 실패(타임아웃·인터럽트) 시 {@code null} 반환 — 호출 측에서 비즈니스 에러로 매핑.
+     *
+     * @param lockKey 전체 락 키(네임스페이스 포함, 예: {@code lock:account-register:{userPublicId}})
+     */
+    public RLock tryLock(String lockKey) {
+        RLock lock = redissonClient.getLock(lockKey);
+        try {
+            boolean acquired = lock.tryLock(WAIT_TIME_SECONDS, LEASE_TIME_SECONDS, TimeUnit.SECONDS);
+            return acquired ? lock : null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (RuntimeException e) {
+            // Redis 장애(RedisException/RedissonShutdownException 등)도 "획득 실패"로 정규화한다 — 호출자는
+            // null을 기대해 COMMON5031(503)로 매핑하므로, 여기서 새어 나가면 500이 된다. 분산락은 fail-closed
+            // (못 잡으면 거부)라 통과시키지 않고 null로 반환한다(충전 캐시/rate-limit 헬퍼와 동일한 방어).
+            log.warn("분산 락 획득 실패 — null 반환(호출 측 503 매핑). key={}", lockKey, e);
             return null;
         }
     }
