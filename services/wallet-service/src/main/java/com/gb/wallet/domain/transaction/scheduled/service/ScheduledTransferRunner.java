@@ -38,8 +38,12 @@ import org.springframework.transaction.annotation.Transactional;
  * <p><b>트랜잭션 경계:</b> 각 정기 송금 회차는 {@link #executeSingle}로 분리 — 별도 트랜잭션
  * ({@code REQUIRES_NEW}). 한 회차가 실패해도 다른 회차는 계속 진행한다.
  *
- * <p><b>멱등성:</b> {@code idempotency_key = "scheduled:{public_id}:{today}"} 형태로 회차마다 유니크.
- * 같은 날 어떤 이유로 두 번 트리거돼도 송금 실행은 1회만(layer 1/2/3 멱등 처리).
+ * <p><b>멱등성:</b> {@code idempotency_key = "scheduled:{public_id}:{nextRunDate}"} — 회차의 예약일을
+ * 키에 포함해 회차마다 유니크. {@code today} 대신 {@code nextRunDate}를 쓰는 이유: 자금 이동은 별도
+ * 트랜잭션(transferService.execute는 {@code Propagation.NOT_SUPPORTED})에서 커밋되고, 후속의
+ * {@code markExecuted}가 어떤 이유로 실패/롤백되면 {@code nextRunDate}는 그대로 남는다. 다음 트리거에서
+ * 같은 회차가 다시 잡힐 때 {@code today}로 키를 만들면 날짜가 달라 멱등이 깨져 이중 송금이 날 수 있는 반면,
+ * {@code nextRunDate} 키는 회차 고정값이라 layer 1/2/3 멱등으로 1차 호출 결과를 재구성한다(자금 추가 차감 없음).
  *
  * <p><b>실패 정책:</b> 잔액 부족·외부 은행 장애·기타 예외는 로그만 남기고 status는 유지(ACTIVE).
  * 다음 트리거에서 자동 재시도(PAUSED 자동 전환은 resume API가 없는 현재 단계에서 데드락 위험이라 미적용).
@@ -147,8 +151,13 @@ public class ScheduledTransferRunner {
         }
 
         // 송금 실행 — TransferService.execute가 멱등성·재시도·잔액·외부 호출 다 처리.
-        // idempotency_key = "scheduled:{public_id}:{today}" — 같은 날 두 번 트리거돼도 layer 1/2/3 멱등으로 1회만.
-        String idempotencyKey = "scheduled:" + s.getPublicId() + ":" + today;
+        // idempotency_key = "scheduled:{public_id}:{nextRunDate}" — 회차 고정값.
+        //   today 대신 nextRunDate를 쓰는 이유(클래스 javadoc 멱등성 단락 참고):
+        //   ① execute()는 NOT_SUPPORTED라 별도 트랜잭션에서 자금이 커밋되고
+        //   ② 후속 markExecuted가 실패/롤백되면 nextRunDate는 그대로 남아
+        //   ③ 다음 트리거에서 today 키였다면 날짜가 달라 멱등 우회 → 이중 송금 위험.
+        //   nextRunDate 키는 회차 고정값이라 layer 1/2/3 멱등으로 1차 결과만 재구성된다.
+        String idempotencyKey = "scheduled:" + s.getPublicId() + ":" + s.getNextRunDate();
         TransferExecuteRequest request = toExecuteRequest(s);
         transferService.execute(s.getUserPublicId(), idempotencyKey, request);
 

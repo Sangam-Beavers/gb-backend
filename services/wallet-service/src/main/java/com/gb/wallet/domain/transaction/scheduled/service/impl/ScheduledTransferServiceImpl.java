@@ -86,6 +86,15 @@ public class ScheduledTransferServiceImpl implements ScheduledTransferService {
             throw new BusinessException(CommonErrorCode.UNPROCESSABLE_ENTITY);
         }
 
+        // (3-2) amount 양수(>0) 검증 — DTO의 @Pattern으로도 0을 막지만, 정규식 우회/프로그램 경로(Bean
+        //       Validation 미적용) 방어를 위해 도메인 단에서 한 번 더 거른다. signum 0/음수는 COMMON4001.
+        //       0이 통과되면 회차 실행 시 WalletBalance.subtract가 IllegalArgumentException을 던져
+        //       markExecuted까지 도달하지 못해 같은 항목이 무한 재시도되는 위험이 있다(CodeRabbit 리뷰).
+        BigDecimal amount = new BigDecimal(request.amount());
+        if (amount.signum() <= 0) {
+            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+        }
+
         // (4) 도메인별 대상 검증 + receiver_name snapshot.
         String receiverPublicId = null;
         Long bankAccountId = null;
@@ -131,7 +140,7 @@ public class ScheduledTransferServiceImpl implements ScheduledTransferService {
                 .receiverPublicId(receiverPublicId)
                 .bankAccountId(bankAccountId)
                 .receiverName(receiverName)
-                .amount(new BigDecimal(request.amount()))
+                .amount(amount)
                 .currencyCode(currency)
                 .receiveCurrencyCode(receiveCurrency)
                 .frequency(frequency)

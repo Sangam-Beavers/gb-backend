@@ -167,6 +167,22 @@ class ScheduledTransferServiceImplTest {
                 .isEqualTo(TransferErrorCode.UNSUPPORTED_CURRENCY);
     }
 
+    @Test
+    @DisplayName("create: amount=0 → COMMON4001 (정규식 우회/프로그램 경로 방어용 signum 검증)")
+    void create_amount0_COMMON4001() {
+        // @Pattern으로도 0이 차단되지만(DTO 정규식), 컨트롤러를 거치지 않는 프로그램 경로/
+        // 정규식 우회 방어를 위해 service 단에 추가한 signum 검증이 동작하는지 확인.
+        // 검증 순서상 (3-2) amount 양수 검증이 (4) 도메인 대상 조회보다 먼저 fire 되므로
+        // BankAccountRepository 등 추가 mock 불필요(Mockito strict — 불필요 stub 금지).
+        var req = new CreateScheduledTransferRequest(
+                "REMITTANCE", null, BANK_ACC_PUB_ID, "0", "KRW", "KRW", "MONTHLY", 25, null);
+
+        assertThatThrownBy(() -> service.create(SENDER, req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(com.gb.common.exception.CommonErrorCode.INVALID_REQUEST);
+    }
+
     // ===== helpers =====
 
     private CreateScheduledTransferRequest remittanceReq(String frequency, int scheduleDay) {

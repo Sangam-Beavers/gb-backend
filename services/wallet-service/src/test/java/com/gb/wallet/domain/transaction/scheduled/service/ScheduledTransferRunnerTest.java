@@ -102,8 +102,10 @@ class ScheduledTransferRunnerTest {
         assertThat(reqCaptor.getValue().transferType()).isEqualTo("REMITTANCE");
         assertThat(reqCaptor.getValue().bankAccountPublicId()).isEqualTo("bank-pub-uuid");
         assertThat(reqCaptor.getValue().receiverPublicId()).isNull();
-        // idempotency_key는 scheduled:{public_id}:{today} 형태
-        assertThat(keyCaptor.getValue()).contains("scheduled:", st.getPublicId());
+        // idempotency_key는 scheduled:{public_id}:{nextRunDate} 형태 — 회차 고정값.
+        // today가 아닌 nextRunDate를 쓰는 이유: markExecuted 실패 후 재시도 시에도 같은 키로 멱등 보존
+        // (CodeRabbit 리뷰 반영). ScheduledTransfer.nextRunDate = 2020-01-01로 박았으니 키도 그대로.
+        assertThat(keyCaptor.getValue()).isEqualTo("scheduled:" + st.getPublicId() + ":2020-01-01");
 
         // 락 해제
         verify(lock).unlock();

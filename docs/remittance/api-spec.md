@@ -477,7 +477,7 @@ snapshot 방식이라 회원이 본명을 바꾸거나 외부 계좌의 명의�
 - INTERNAL → `MemberClient.getMember(receiver).name` (fail-open: 장애 시 null로 저장, 송금 자체는 진행)
 - REMITTANCE → `bankAccount.holderName` (구 계좌면 null)
 
-> **다음 사이클**: 자동 실행 스케줄러(KST 매일 새벽 1시 `0 0 1 * * *`, Redisson 분산 락으로 단일 인스턴스 실행 보장). 단건 조회·취소·재개는 후속.
+> **연관 API**: 설정한 정기송금 목록은 §7-2-3, 자동 실행 스케줄러는 §7-2-4(KST 매일 새벽 1시 `0 0 1 * * *`, Redisson 분산 락으로 단일 인스턴스 실행 보장), 회차 실행 이력은 §7-2-5에서 조회. 단건 조회·일시정지(PAUSED)·취소(CANCELLED)·재개는 후속 사이클.
 
 #### 7-2-3. 정기 송금 내역 조회 ★
 

@@ -294,8 +294,12 @@ public class TransferServiceImpl implements TransferService {
                 .filter(ALLOWED_TRANSFER_TYPES::contains)
                 .orElseThrow(() -> new BusinessException(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE));
 
-        // 3) amount 파싱. @Pattern으로 형식 보장됨(양수 십진수, 소수 4자리 이내).
+        // 3) amount 파싱. @Pattern으로 형식·양수 보장(0 차단 lookahead). 정규식 우회/프로그램 경로(Bean
+        //    Validation 미적용) 방어를 위해 signum 검증을 한 번 더 둔다(이중 안전망). 0/음수는 COMMON4001.
         BigDecimal amount = new BigDecimal(request.amount());
+        if (amount.signum() <= 0) {
+            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+        }
 
         // 4) 수수료 = 정책 헬퍼 (송금 실행과 정책 단일 진실로 공유).
         BigDecimal fee = calculateFee(transferType, amount);
