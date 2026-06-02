@@ -1,6 +1,7 @@
 package com.gb.wallet.global.redis;
 
 import java.util.concurrent.TimeUnit;
+import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Component;
  * <p>같은 wallet_id 두 번(자기 송금)은 호출 전에 Service에서 차단해야 한다(TRANSFER4004).
  * 여기서는 별도 검증하지 않는다 — 헬퍼는 정책 집행만, 도메인 검증은 Service 책임.
  */
+@Slf4j
 @Component
 public class DistributedLockHelper {
 
@@ -94,6 +96,12 @@ public class DistributedLockHelper {
             return acquired ? lock : null;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            return null;
+        } catch (RuntimeException e) {
+            // Redis 장애(RedisException/RedissonShutdownException 등)도 "획득 실패"로 정규화한다 — 호출자는
+            // null을 기대해 COMMON5031(503)로 매핑하므로, 여기서 새어 나가면 500이 된다. 분산락은 fail-closed
+            // (못 잡으면 거부)라 통과시키지 않고 null로 반환한다(충전 캐시/rate-limit 헬퍼와 동일한 방어).
+            log.warn("분산 락 획득 실패 — null 반환(호출 측 503 매핑). key={}", lockKey, e);
             return null;
         }
     }
