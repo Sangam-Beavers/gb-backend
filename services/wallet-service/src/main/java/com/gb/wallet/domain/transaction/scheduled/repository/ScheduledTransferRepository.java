@@ -2,6 +2,8 @@ package com.gb.wallet.domain.transaction.scheduled.repository;
 
 import com.gb.wallet.domain.transaction.scheduled.entity.ScheduledTransfer;
 import com.gb.wallet.global.common.enums.ScheduledTransferStatus;
+import java.time.LocalDate;
+import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -25,4 +27,14 @@ public interface ScheduledTransferRepository extends JpaRepository<ScheduledTran
     /** 사용자의 status 필터링 페이지 조회. */
     Page<ScheduledTransfer> findByUserPublicIdAndStatus(
             String userPublicId, ScheduledTransferStatus status, Pageable pageable);
+
+    /**
+     * 스케줄러가 실행 대상으로 가져갈 행 — {@code status} == ACTIVE & {@code next_run_date <= today}.
+     * 인덱스 {@code idx_scheduled_transfers_status_next (status, next_run_date)}로 빠른 조회.
+     *
+     * <p>한 cron 트리거에서 일괄 가져와 각 행을 별도 트랜잭션(REQUIRES_NEW)으로 실행한다.
+     * 보통 도래 행은 적어 페이지네이션 불필요(전체 List 반환).
+     */
+    List<ScheduledTransfer> findAllByStatusAndNextRunDateLessThanEqual(
+            ScheduledTransferStatus status, LocalDate nextRunDate);
 }

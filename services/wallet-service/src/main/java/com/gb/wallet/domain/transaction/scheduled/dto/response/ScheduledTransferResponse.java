@@ -46,6 +46,10 @@ public record ScheduledTransferResponse(
         @Schema(description = "다음 실행 예정일 (ISO 8601 date, KST 기준)", example = "2026-06-25")
         String nextRunDate,
 
+        @Schema(description = "마지막 실행 시각 (ISO 8601 UTC Z). 최초 실행 전이면 null",
+                example = "2026-05-25T16:00:00Z", nullable = true)
+        String lastRunAt,
+
         @Schema(description = "상태", example = "ACTIVE",
                 allowableValues = {"ACTIVE", "PAUSED", "CANCELLED"})
         String status,
@@ -64,6 +68,7 @@ public record ScheduledTransferResponse(
                 s.getFrequency().name(),
                 s.getScheduleDay(),
                 s.getNextRunDate().toString(),  // ISO 8601 date (YYYY-MM-DD)
+                toUtcZ(s.getLastRunAt()),       // null이면 toUtcZ가 null 반환
                 s.getStatus().name(),
                 toUtcZ(s.getCreatedAt())
         );

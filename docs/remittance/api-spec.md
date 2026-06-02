@@ -448,6 +448,7 @@ snapshot 방식이라 회원이 본명을 바꾸거나 외부 계좌의 명의�
 | `frequency` | string | N | WEEKLY / MONTHLY |
 | `schedule_day` | integer | N | 실행 기준일 |
 | `next_run_date` | string | N | 다음 실행 예정일 (ISO 8601 date `YYYY-MM-DD`, KST 기준) |
+| `last_run_at` | string | Y | 마지막 실행 시각 (ISO 8601 UTC `Z`). 최초 실행 전이면 null (설정 직후 응답엔 항상 null) |
 | `status` | string | N | 상태 (ACTIVE) |
 | `created_at` | string | N | 생성 시각 (ISO 8601 UTC `Z`) |
 
@@ -503,6 +504,7 @@ snapshot 방식이라 회원이 본명을 바꾸거나 외부 계좌의 명의�
 | `scheduled_transfers[].frequency` | string | N | 반복 주기 (`WEEKLY` / `MONTHLY`) |
 | `scheduled_transfers[].schedule_day` | integer | N | 실행 기준일 |
 | `scheduled_transfers[].next_run_date` | string | N | 다음 실행 예정일 (ISO 8601 date) |
+| `scheduled_transfers[].last_run_at` | string | Y | 마지막 실행 시각 (ISO 8601 UTC `Z`). 최초 실행 전이면 null |
 | `scheduled_transfers[].status` | string | N | 상태 (`ACTIVE` / `PAUSED` / `CANCELLED`) |
 | `scheduled_transfers[].created_at` | string | N | 생성 시각 (ISO 8601 UTC `Z`) |
 | `page` | integer | N | 현재 페이지 (0-base) |
@@ -522,7 +524,49 @@ snapshot 방식이라 회원이 본명을 바꾸거나 외부 계좌의 명의�
 
 **전용 응답 DTO**
 
-설정 응답({@link ScheduledTransferResponse})과 별도 DTO. 목록 응답엔 `transfer_type`/`bank_name`/`account_number`/`last_run_at` 미포함 — 명세 단순화. 수신자 식별은 `receiver_name` snapshot으로.
+설정 응답({@link ScheduledTransferResponse})과 별도 DTO. 목록 응답엔 `transfer_type`/`bank_name`/`account_number` 미포함 — 명세 단순화. 수신자 식별은 `receiver_name` snapshot으로. `last_run_at`은 스케줄러 도입과 함께 두 응답(설정·목록)에 추가됨.
+
+#### 7-2-4. 정기 송금 자동 실행 (스케줄러) ★
+
+API 엔드포인트는 아니지만(시스템 자동 동작) 정기 송금 도메인의 핵심 동작이라 본 절에 정리한다.
+
+**동작 개요**
+
+| 항목 | 값 |
+|---|---|
+| 실행 주체 | `ScheduledTransferRunner` (`com.gb.wallet.domain.transaction.scheduled.service`) |
+| 트리거 | `@Scheduled(cron = "${wallet.scheduled-transfer.cron:0 0 1 * * *}", zone = "Asia/Seoul")` — 운영 기본: KST 매일 새벽 1시. dev/데모는 yml로 덮어쓰기 |
+| 분산 락 | Redisson `lock:scheduler:scheduled-transfer` (k8s multi-replica 환경에서 단일 인스턴스 실행 보장) |
+| 대상 조회 | `status=ACTIVE AND next_run_date <= today_kst` (인덱스 `idx_scheduled_transfers_status_next` 활용) |
+| 실행 단위 | 각 회차를 별도 트랜잭션(`REQUIRES_NEW`)으로 처리 — 한 회차 실패가 다른 회차 차단하지 않음 |
+| 송금 호출 | `TransferService.execute(userPublicId, idempotencyKey, request)` 그대로 재사용 (멱등성·재시도·rate-limit·remittance_attempts 일괄) |
+| 멱등성 키 | `scheduled:{public_id}:{today}` — 같은 날 두 번 트리거돼도 Layer 1/2/3 멱등으로 송금 1회만 |
+| 성공 후 처리 | `markExecuted(now, nextRunDate)` — `last_run_at` 기록 + `next_run_date` 다음 주기로 갱신 |
+| 실패 처리 | 로그만 + status 유지(ACTIVE). 다음 트리거에서 자동 재시도 (resume API 없는 현재 단계에서 PAUSED 자동 전환은 데드락 위험) |
+| 누락 회차 | 가장 최근 1회만 실행 — `next_run_date <= today` 조건이 한 번만 만족하고 markExecuted 후 다음 주기로 점프하므로 자연스럽게 이중 실행 방지 |
+
+**도래 행 조회 시점부터 트랜잭션 진입까지 race 회피**
+
+스케줄러가 락 안에서 `findAll(...)`로 가져온 행을 별도 트랜잭션 안에서 다시 `findById`하는 시점에 status/next_run_date가 바뀌어 있을 수 있다(사용자가 그 사이 취소 등). `executeSingle`은 진입 직후 **double-check** — `status != ACTIVE` 또는 `next_run_date > today`면 송금 호출 없이 종료한다.
+
+**변환 (ScheduledTransfer → TransferExecuteRequest)**
+
+- INTERNAL_TRANSFER → `receiverPublicId` 그대로
+- REMITTANCE → 저장된 `bankAccountId`(internal id)를 `bankAccountRepository.findById`로 풀어 `public_id`를 채움 (execute API 시그니처가 public_id를 받음)
+
+**데모 시연**
+
+운영 cron 그대로 두면 새벽 1시까지 기다려야 함. 데모용으로는 `application-dev.yml`에 임시로:
+```yaml
+wallet:
+  scheduled-transfer:
+    cron: "0 * * * * *"   # 매 분 0초마다 (데모 후 원복 또는 yml 항목 삭제)
+```
+변경 + wallet-service 재기동. 정기 송금 설정 후 1분 내 자동 실행 시연 가능.
+
+**응답 필드 갱신**
+
+스케줄러 도입과 함께 `last_run_at` 필드가 §7-2-2(설정) / §7-2-3(목록) 응답에 추가됨 — 사용자가 "마지막 실행이 언제?" 확인 가능. 최초 실행 전이면 `null`.
 
 ---
 
