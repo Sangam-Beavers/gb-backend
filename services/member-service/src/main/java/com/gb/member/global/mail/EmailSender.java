@@ -47,11 +47,28 @@ public class EmailSender {
             message.setSubject(subject);
             message.setText(body);
             javaMailSender.send(message);
-            log.info("메일 발송 성공: to={}, subject={}", to, subject);
+            log.info("메일 발송 성공: to={}, subject={}", maskEmail(to), subject);
         } catch (Exception e) {
             // SMTP 연결 실패·인증 실패·타임아웃 등. 사내망에서 587 차단 시 여기로 떨어진다.
-            log.error("메일 발송 실패: to={}, subject={}, msg={}", to, subject, e.getMessage());
+            log.error("메일 발송 실패: to={}, subject={}, msg={}", maskEmail(to), subject, e.getMessage());
             throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /**
+     * 로그용 이메일 마스킹 — 개인정보(PII)가 평문으로 로그에 남지 않게 한다.
+     * 예: {@code abcde@example.com} → {@code ab***@example.com}. 로컬파트 2자 초과만 마스킹한다.
+     */
+    private String maskEmail(String email) {
+        if (email == null || !email.contains("@")) {
+            return "***";
+        }
+        int at = email.indexOf('@');
+        String local = email.substring(0, at);
+        String domain = email.substring(at);
+        if (local.length() <= 2) {
+            return "***" + domain;
+        }
+        return local.substring(0, 2) + "***" + domain;
     }
 }
