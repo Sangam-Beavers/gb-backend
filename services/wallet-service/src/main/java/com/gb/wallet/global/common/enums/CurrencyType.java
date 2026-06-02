@@ -15,13 +15,20 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public enum CurrencyType {
 
-    KRW("Korean Won",       "₩"),
-    USD("US Dollar",        "$"),
-    PHP("Philippine Peso",  "₱"),
-    VND("Vietnamese Dong",  "₫");
+    KRW("Korean Won",       "₩", "대한민국 원"),
+    USD("US Dollar",        "$", "미국 달러"),
+    PHP("Philippine Peso",  "₱", "필리핀 페소"),
+    VND("Vietnamese Dong",  "₫", "베트남 동");
 
     private final String displayName;
     private final String symbol;
+
+    /**
+     * 통화의 한국어 표시명. 메인 화면 환율 위젯({@code /wallets/exchange-rates})의 {@code currency_name} 에 쓰인다.
+     * 기존 {@code displayName}(영문)은 지원 통화 목록 API 가 그대로 사용하므로 건드리지 않고 별도 필드로 추가한다
+     * (통화 마스터 테이블이 없어 이 enum 이 SSOT — 메타는 여기로 일원화).
+     */
+    private final String koreanName;
 
     /**
      * 외부 입력 문자열(예: 요청 본문의 {@code currency_code})을 안전하게 {@link CurrencyType}으로 변환한다.

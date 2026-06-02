@@ -41,6 +41,9 @@ public class RealExchangeRateClient implements ExchangeRateClient {
 
     private static final String KEY_PREFIX = "rate:KRW-";
 
+    /** 직전(전일) 값 키 접미사. exchange-updater 가 매일 자정 새 값을 박기 전 직전 값을 이 키로 백업한다. */
+    private static final String PREV_SUFFIX = ":prev";
+
     /** "1 외화 → KRW" 변환 후 BigDecimal 의 scale (소수점 자리). 충분히 넉넉하게 8자리. */
     private static final int DIVIDE_SCALE = 8;
 
@@ -58,14 +61,33 @@ public class RealExchangeRateClient implements ExchangeRateClient {
         if (currency == CurrencyType.KRW) {
             return BigDecimal.ONE;
         }
+        return readKrwRate(KEY_PREFIX + currency.name());
+    }
 
-        String key = KEY_PREFIX + currency.name();
+    /**
+     * 직전(전일) "1 {@code currency} → KRW" 환율. {@code rate:KRW-<통화>:prev} 키를 읽어 역수로 변환한다.
+     * 첫 실행 직후(prev 미생성)나 TTL 만료로 키가 없으면 {@code null} — 호출 측에서 등락률 0 처리.
+     */
+    @Override
+    public BigDecimal getPrevRateToKrw(CurrencyType currency) {
+        if (currency == CurrencyType.KRW) {
+            return BigDecimal.ONE;
+        }
+        return readKrwRate(KEY_PREFIX + currency.name() + PREV_SUFFIX);
+    }
+
+    /**
+     * Redis 값("1 KRW → X 외화")을 읽어 인터페이스 계약인 "1 외화 → KRW"(역수)로 변환한다.
+     * 키 없음/0 이하/파싱 실패 시 {@code null} 반환 — 호출 측에서 의미에 맞게 처리(현재 환율은 TRANSFER4002,
+     * 직전 환율은 등락률 0).
+     */
+    private BigDecimal readKrwRate(String key) {
         RBucket<String> bucket = redissonClient.getBucket(key);
         String value = bucket.get();
 
         if (value == null) {
-            // 미지원 통화 또는 cron 미실행 (TTL 만료) — 호출 측에서 TRANSFER4002 처리.
-            log.warn("환율 키 없음 (cron 미실행 또는 미지원 통화): key={}", key);
+            // 현재 환율: 미지원 통화 또는 cron 미실행(TTL 만료). 직전 환율: 첫 실행 직후엔 정상적으로 없음.
+            log.warn("환율 키 없음 (cron 미실행 / TTL 만료 / 미지원 통화): key={}", key);
             return null;
         }
 

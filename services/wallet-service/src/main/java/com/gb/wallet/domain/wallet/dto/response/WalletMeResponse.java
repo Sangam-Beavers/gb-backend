@@ -5,6 +5,7 @@ import com.gb.wallet.domain.wallet.entity.WalletBalance;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -84,7 +85,7 @@ public class WalletMeResponse {
         return WalletMeResponse.builder()
                 .walletPublicId(wallet.getPublicId())
                 .status(wallet.getStatus().name())
-                .totalBalanceInKrw(totalKrw.setScale(4).toPlainString())
+                .totalBalanceInKrw(totalKrw.setScale(4, RoundingMode.HALF_UP).toPlainString())
                 .balances(items)
                 .updatedAt(latestUpdatedAt)
                 .build();
@@ -136,9 +137,9 @@ public class WalletMeResponse {
 
             return BalanceWithKrwItem.builder()
                     .currencyCode(walletBalance.getCurrencyCode().name())
-                    .balance(balance.setScale(4).toPlainString())
-                    .exchangeRate(rate.setScale(4).toPlainString())
-                    .balanceInKrw(inKrw.setScale(4).toPlainString())
+                    .balance(balance.setScale(4, RoundingMode.HALF_UP).toPlainString())
+                    .exchangeRate(rate.setScale(4, RoundingMode.HALF_UP).toPlainString())
+                    .balanceInKrw(inKrw.setScale(4, RoundingMode.HALF_UP).toPlainString())
                     .build();
         }
     }
