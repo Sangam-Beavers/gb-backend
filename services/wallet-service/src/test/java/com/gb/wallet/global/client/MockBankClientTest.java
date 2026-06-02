@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.gb.common.exception.BusinessException;
 import com.gb.wallet.global.client.dto.AccountHolder;
 import com.gb.wallet.global.client.dto.AccountToken;
+import com.gb.wallet.global.client.dto.PayoutResult;
 import com.gb.wallet.global.client.dto.WithdrawalResult;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import java.math.BigDecimal;
@@ -34,6 +35,7 @@ class MockBankClientTest {
 
     private static final String BASE_URL = "http://mock-bank.test";
     private static final String WITHDRAW_PATH = "/api/v1/bank/transfers/withdrawal";
+    private static final String PAYOUT_PATH = "/api/v1/bank/transfers/payout";
 
     private MockBankClient client;
     private MockRestServiceServer server;
@@ -102,11 +104,101 @@ class MockBankClientTest {
                 .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
     }
 
+    // --- payout (현금화 지급) ---
+
     @Test
-    @DisplayName("payout은 이번 PR에서 미구현 → UnsupportedOperationException (withdraw는 아래에서 실동작 검증)")
-    void payout_unimplemented_throwsUnsupported() {
-        assertThatThrownBy(() -> client.payout("004", "12345", BigDecimal.ONE, "VND", "k"))
-                .isInstanceOf(UnsupportedOperationException.class);
+    @DisplayName("payout 200: data → PayoutResult 매핑 + 요청 본문(bank_code/account_number/amount/currency_code) + Idempotency-Key 헤더 검증")
+    void payout_success() {
+        server.expect(requestTo(BASE_URL + PAYOUT_PATH))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Idempotency-Key", "idem-payout-1"))
+                .andExpect(content().json(
+                        "{\"bank_code\":\"VCB\",\"account_number\":\"9876543210\","
+                                + "\"amount\":\"500000.0000\",\"currency_code\":\"VND\"}"))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"success\":true,\"data\":{\"transaction_id\":\"mock-payout-1\","
+                                + "\"status\":\"COMPLETED\",\"amount\":\"500000.0000\","
+                                + "\"currency_code\":\"VND\",\"balance_after\":\"1500000.0000\"},\"message\":\"ok\"}"));
+
+        PayoutResult result = client.payout("VCB", "9876543210", new BigDecimal("500000"), "VND", "idem-payout-1");
+
+        assertThat(result.transactionId()).isEqualTo("mock-payout-1");
+        assertThat(result.status()).isEqualTo("COMPLETED");
+        assertThat(result.amount()).isEqualByComparingTo("500000");
+        assertThat(result.currencyCode()).isEqualTo("VND");
+        assertThat(result.balanceAfter()).isEqualByComparingTo("1500000");
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("payout 400 BANK4002(잔액 부족) → BusinessException(ACCOUNT4003)")
+    void payout_bank4002_mappedToAccount4003() {
+        server.expect(requestTo(BASE_URL + PAYOUT_PATH))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK4002\",\"message\":\"출금 잔액 부족\"}"));
+
+        assertThatThrownBy(() -> client.payout("VCB", "9876543210", new BigDecimal("500000"), "VND", "k"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.INSUFFICIENT_LINKED_ACCOUNT_BALANCE);
+    }
+
+    @Test
+    @DisplayName("payout 404 BANK4040(계좌 없음) → BusinessException(ACCOUNT4001)")
+    void payout_bank4040_mappedToAccount4001() {
+        server.expect(requestTo(BASE_URL + PAYOUT_PATH))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK4040\",\"message\":\"존재하지 않는 계좌\"}"));
+
+        assertThatThrownBy(() -> client.payout("VCB", "0000000000", new BigDecimal("100"), "VND", "k"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.ACCOUNT_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("payout 400 BANK4003(예금주 불일치/인증 실패) → BusinessException(ACCOUNT4002)")
+    void payout_bank4003_mappedToAccount4002() {
+        server.expect(requestTo(BASE_URL + PAYOUT_PATH))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK4003\",\"message\":\"예금주 불일치\"}"));
+
+        assertThatThrownBy(() -> client.payout("VCB", "9876543210", new BigDecimal("100"), "VND", "k"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.ACCOUNT_VERIFICATION_FAILED);
+    }
+
+    @Test
+    @DisplayName("payout 401 BANK4010(유효하지 않은 토큰) → BusinessException(ACCOUNT4006 미인증 계좌)")
+    void payout_bank4010_mappedToAccount4006() {
+        server.expect(requestTo(BASE_URL + PAYOUT_PATH))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK4010\",\"message\":\"유효하지 않은 토큰\"}"));
+
+        assertThatThrownBy(() -> client.payout("VCB", "9876543210", new BigDecimal("100"), "VND", "k"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.UNVERIFIED_ACCOUNT);
+    }
+
+    @Test
+    @DisplayName("payout 5xx → BusinessException(COMMON5031) — 외부 일시 장애/네트워크 실패 매핑")
+    void payout_serverError_mappedToCommon5031() {
+        server.expect(requestTo(BASE_URL + PAYOUT_PATH))
+                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK5000\",\"message\":\"Mock 내부 오류\"}"));
+
+        assertThatThrownBy(() -> client.payout("VCB", "9876543210", new BigDecimal("100"), "VND", "k"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
     }
 
     // --- withdraw (충전 출금) ---

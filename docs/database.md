@@ -1,7 +1,7 @@
 # 데이터베이스 설계 (Database)
 
 > **DB:** MySQL 8.0 (Aurora MySQL = 운영/스테이징 · 온프렘 MySQL = 개발, 공통 스키마)
-> **총 테이블 수:** 14개
+> **총 테이블 수:** 15개
 > **AI 분석 결과:** MySQL `document_results`에 **직접 저장** — **DynamoDB 미사용**
 > Claude Code는 Entity/Repository를 만들 때 이 스키마와 참조 규칙을 그대로 따른다.
 
@@ -41,12 +41,13 @@
 | 6 | wallet | `bank_accounts` | 타행 계좌 + 가상계좌 통합 |
 | 7 | wallet | `transactions` | 모든 금융 거래 마스터 |
 | 8 | wallet | `transaction_audit_logs` | 거래 감사 로그 + 상태 이력 (append-only) |
-| 9 | document | `document_submissions` | 문서 업로드 ~ 분석 전 메타 |
-| 10 | document | `document_results` | 분석 완료 결과 메타 **+ 분석 내용** |
-| 11 | community | `posts` | 게시글 + 번역 캐시 |
-| 12 | community | `comments` | 댓글 + 대댓글 |
-| 13 | community | `likes` | 게시글/댓글 좋아요 통합 |
-| 14 | community | `user_reviews` | 이웃 온도 평가 기록 |
+| 9 | wallet | `remittance_attempts` | REMITTANCE 외부 호출 시도 흔적 (운영 reconcile 입력, append-only) |
+| 10 | document | `document_submissions` | 문서 업로드 ~ 분석 전 메타 |
+| 11 | document | `document_results` | 분석 완료 결과 메타 **+ 분석 내용** |
+| 12 | community | `posts` | 게시글 + 번역 캐시 |
+| 13 | community | `comments` | 댓글 + 대댓글 |
+| 14 | community | `likes` | 게시글/댓글 좋아요 통합 |
+| 15 | community | `user_reviews` | 이웃 온도 평가 기록 |
 
 > **통화 마스터 테이블 없음** — 지원 통화 4개(KRW/USD/PHP/VND) 고정. `currency_code`를 VARCHAR로 직접 저장.
 
@@ -199,6 +200,25 @@
 | `reason` | VARCHAR(255) | NULL | 실패 시 에러 메시지 |
 | `ip_address` | VARCHAR(45) | NULL | 요청 IP(IPv6 포함) |
 | `created_at` | DATETIME | NOT NULL | |
+
+### `remittance_attempts`
+> REMITTANCE 외부 호출 시도 흔적. **append-only (INSERT만).**
+> 외부 Mock 은행 payout 호출 *직전* `REQUIRES_NEW`로 별도 커밋한다 — 메인 트랜잭션이 rollback돼도 흔적은 살아남아 timeout-but-success 시 운영 reconcile 입력 자료가 된다.
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| `id` | BIGINT | PK, AI | |
+| `idempotency_key` | VARCHAR(100) | UNIQUE, NOT NULL | 시도 1회당 1행. 같은 키 재시도/동시 race는 UNIQUE로 1행 유지 |
+| `user_public_id` | VARCHAR(36) | NOT NULL | **회원 논리 참조 (물리 FK 없음)**. reconcile 시 사용자별 조회용 인덱스 보유 |
+| `bank_account_id` | BIGINT | NOT NULL | 검증된 외부 계좌 id (스키마 내부 참조 — `transactions.bank_account_id`와 동일 raw 컬럼 패턴) |
+| `amount` | DECIMAL(18,4) | NOT NULL | 시도 차감액(amount + fee). "이만큼 보내려고 시도함" 의미 |
+| `currency_code` | VARCHAR(10) | NOT NULL | KRW/USD/PHP/VND. FK 없이 직접 저장 |
+| `attempted_at` | DATETIME | NOT NULL | 외부 호출 직전 기록 시각 |
+
+> **공통 컬럼 미적용**: `created_at`/`updated_at` 없음(§6 예외) — append-only라 `updated_at`이 무의미하고, `created_at`은 `attempted_at`과 의미가 사실상 동일해 중복 컬럼이 된다. `BaseEntity` 미상속.
+> **soft delete 없음**: 흔적이 사라지면 reconcile 입력이 사라지므로 영구 보존.
+> **transaction_audit_logs와의 분리**: audit log는 `transaction_id` NOT NULL이라 본 `transactions` INSERT 전엔 행을 만들 수 없고, "거래 1:1 흔적" 의미를 흐린다 → 별도 테이블로 분리해 충전·1단계 INTERNAL_TRANSFER엔 영향 없게.
+> **현 사이클(2단계 c1) 범위**: 테이블/엔티티/Repository/Writer 인프라만 도입. TransferServiceImpl 통합은 c2에서. reconcile 배치는 미구현 — 향후 운영 도입 시 본 테이블을 입력으로 사용한다.
 
 ---
 

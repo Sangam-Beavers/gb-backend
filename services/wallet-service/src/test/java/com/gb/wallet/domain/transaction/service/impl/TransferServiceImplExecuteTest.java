@@ -15,6 +15,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
+import com.gb.wallet.domain.account.entity.Bank;
+import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
 import com.gb.wallet.domain.transaction.dto.request.TransferExecuteRequest;
 import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
@@ -22,6 +24,7 @@ import com.gb.wallet.domain.transaction.entity.Transaction;
 import com.gb.wallet.domain.transaction.entity.TransactionAuditLog;
 import com.gb.wallet.domain.transaction.repository.TransactionAuditLogRepository;
 import com.gb.wallet.domain.transaction.repository.TransactionRepository;
+import com.gb.wallet.domain.transaction.service.RemittanceAttemptWriter;
 import com.gb.wallet.domain.transaction.service.TransferService;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.entity.WalletBalance;
@@ -30,10 +33,12 @@ import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.domain.wallet.service.WalletBalanceWriter;
 import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.MemberClient;
+import com.gb.wallet.global.client.dto.PayoutResult;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.common.enums.WalletStatus;
+import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import com.gb.wallet.global.redis.DistributedLockHelper;
@@ -46,8 +51,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.redisson.api.RLock;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -70,6 +77,7 @@ class TransferServiceImplExecuteTest {
     @Mock private WalletBalanceWriter walletBalanceWriter;
     @Mock private TransactionRepository transactionRepository;
     @Mock private TransactionAuditLogRepository auditLogRepository;
+    @Mock private RemittanceAttemptWriter remittanceAttemptWriter;
     @Mock private BankAccountRepository bankAccountRepository;
     @Mock private MemberClient memberClient;
     @Mock private BankClient bankClient;
@@ -142,6 +150,9 @@ class TransferServiceImplExecuteTest {
         // 캐시 저장 + 락 해제
         verify(idempotencyCacheHelper).set(eq(KEY), anyString());
         verify(lock).unlock();
+
+        // 회귀 가드: INTERNAL_TRANSFER 경로는 REMITTANCE 시도 흔적을 박지 않는다(분기 누수 방지).
+        verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -279,8 +290,10 @@ class TransferServiceImplExecuteTest {
     }
 
     @Test
-    @DisplayName("1단계 명시 차단: REMITTANCE는 ALLOWED엔 있지만 1단계에선 차단 → TRANSFER4003")
-    void execute_REMITTANCE_1단계차단_TRANSFER4003() {
+    @DisplayName("REMITTANCE: bank_account_public_id 누락 → COMMON4001 (분기 진입 후 REMITTANCE 필수 필드 검증)")
+    void execute_REMITTANCE_bankAccountPublicId_누락_COMMON4001() {
+        // 2단계에서 REMITTANCE 분기를 열었으므로 type 자체는 통과한다.
+        // 다만 bank_account_public_id가 비어 있으면 REMITTANCE 사전 검증(executeRemittancePath)에서 차단된다.
         stubCacheMiss();
         stubDbMiss();
 
@@ -290,7 +303,7 @@ class TransferServiceImplExecuteTest {
         assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, req))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
-                .isEqualTo(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE);
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
     }
 
     @Test
@@ -391,7 +404,8 @@ class TransferServiceImplExecuteTest {
 
         assertThat(result).isSameAs(cached);
         verifyNoInteractions(walletRepository, walletBalanceRepository, distributedLockHelper,
-                auditLogRepository, bankClient, memberClient, bankAccountRepository);
+                auditLogRepository, bankClient, memberClient, bankAccountRepository,
+                remittanceAttemptWriter);
         verify(transactionRepository, never()).findByIdempotencyKey(anyString());
         // replay 경로는 executeInTransaction 미진입 — ensure도 호출되면 안 된다.
         verify(walletBalanceWriter, never()).ensureBalanceRow(any(), any());
@@ -418,6 +432,8 @@ class TransferServiceImplExecuteTest {
         verify(idempotencyCacheHelper).set(eq(KEY), anyString());
         // replay 경로는 executeInTransaction 미진입 — ensure도 호출되면 안 된다.
         verify(walletBalanceWriter, never()).ensureBalanceRow(any(), any());
+        // 회귀 가드: replay는 어떤 분기로도 흔적을 박지 않는다.
+        verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -451,6 +467,8 @@ class TransferServiceImplExecuteTest {
         verify(transactionRepository, times(2)).findByIdempotencyKey(KEY);
         // audit log는 race 전에 save가 터져 저장되지 않음
         verify(auditLogRepository, never()).save(any());
+        // 회귀 가드: INTERNAL_TRANSFER 분기는 REMITTANCE 흔적을 박지 않는다.
+        verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
     }
 
     // ===== 분산 락 =====
@@ -473,6 +491,236 @@ class TransferServiceImplExecuteTest {
                 .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
 
         verifyNoInteractions(walletBalanceRepository, auditLogRepository);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    // ===== REMITTANCE 분기 (2단계) =====
+
+    private static final String BANK_ACCOUNT_PUB_ID = "11111111-2222-3333-4444-555555555555";
+    private static final long BANK_ACCOUNT_ID = 99L;
+    private static final String BANK_CODE = "VCB";
+    private static final String BANK_ACCOUNT_NUMBER = "9876543210";
+    private static final String MOCK_TOKEN = "mock-token-abc";
+
+    @Test
+    @DisplayName("REMITTANCE 성공: Writer.record → bankClient.payout 순서 + 송신자 잔액 (amount+fee) 차감 + Transaction/audit 1건씩")
+    void execute_REMITTANCE_성공_attempt기록후_payout실행후_차감() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        BankAccount account = mockBankAccount(MOCK_TOKEN);
+        // REMITTANCE: KRW 10000 → fee = 50.0000, totalDeduct = 10050.0000
+        BigDecimal expectedTotalDeduct = new BigDecimal("10050.0000");
+
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER)).willReturn(Optional.of(sender));
+        given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACCOUNT_PUB_ID, SENDER_USER))
+                .willReturn(Optional.of(account));
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(sender, CurrencyType.KRW))
+                .willReturn(Optional.of(senderBalance));
+        given(bankClient.payout(eq(BANK_CODE), eq(BANK_ACCOUNT_NUMBER),
+                eq(new BigDecimal("10000.0000")), eq("KRW"), eq(KEY)))
+                .willReturn(new PayoutResult(
+                        "mock-payout-1", "COMPLETED", new BigDecimal("10000.0000"), "KRW",
+                        new BigDecimal("500000.0000")));
+        stubTransactionSaveAndAuditLog();
+        given(objectMapper.writeValueAsString(any())).willReturn("{\"any\":\"json\"}");
+
+        TransferExecuteResponse response = service.execute(
+                SENDER_USER, KEY, remittanceRequest("10000.0000", BANK_ACCOUNT_PUB_ID));
+
+        // 응답: REMITTANCE COMPLETED + fee=50 + same-currency 모양 유지
+        assertThat(response.transferType()).isEqualTo("REMITTANCE");
+        assertThat(response.amount()).isEqualTo("10000.0000");
+        assertThat(response.fee()).isEqualTo("50.0000");
+        assertThat(response.currencyCode()).isEqualTo("KRW");
+        assertThat(response.receiveAmount()).isEqualTo("10000.0000");
+        assertThat(response.receiveCurrencyCode()).isEqualTo("KRW");
+        assertThat(response.exchangeRate()).as("2단계 same-currency는 환율 null").isNull();
+        assertThat(response.status()).isEqualTo("COMPLETED");
+
+        // 송신자 잔액 차감: 1,000,000 → 989,950 (amount 10,000 + fee 50)
+        assertThat(senderBalance.getBalance()).isEqualByComparingTo("989950");
+
+        // 핵심 verify — Writer 호출 (5개 인자 정확히)
+        verify(remittanceAttemptWriter).record(
+                eq(KEY), eq(SENDER_USER), eq(BANK_ACCOUNT_ID),
+                eq(expectedTotalDeduct), eq(CurrencyType.KRW));
+
+        // 순서 verify — 외부 호출 *직전* 흔적이라는 의도 회귀 보호.
+        // Writer.record가 bankClient.payout보다 먼저 호출돼야 한다.
+        InOrder inOrder = Mockito.inOrder(remittanceAttemptWriter, bankClient);
+        inOrder.verify(remittanceAttemptWriter).record(any(), any(), any(), any(), any());
+        inOrder.verify(bankClient).payout(any(), any(), any(), any(), any());
+
+        // Transaction 1건 (REMITTANCE) + audit log 1건 (action="REMITTANCE")
+        ArgumentCaptor<Transaction> txCaptor = ArgumentCaptor.forClass(Transaction.class);
+        verify(transactionRepository, times(1)).save(txCaptor.capture());
+        assertThat(txCaptor.getValue().getType()).isEqualTo(TransactionType.REMITTANCE);
+        assertThat(txCaptor.getValue().getBankAccountId()).isEqualTo(BANK_ACCOUNT_ID);
+        assertThat(txCaptor.getValue().getReceiverWallet()).as("REMITTANCE는 외부 계좌 — 수신자 wallet 없음").isNull();
+        assertThat(txCaptor.getValue().getFee()).isEqualByComparingTo("50.0000");
+
+        ArgumentCaptor<TransactionAuditLog> logCaptor = ArgumentCaptor.forClass(TransactionAuditLog.class);
+        verify(auditLogRepository, times(1)).save(logCaptor.capture());
+        assertThat(logCaptor.getValue().getAction()).isEqualTo("REMITTANCE");
+        assertThat(logCaptor.getValue().getUserPublicId()).isEqualTo(SENDER_USER);
+        assertThat(logCaptor.getValue().getBeforeBalance()).isEqualByComparingTo("1000000");
+        assertThat(logCaptor.getValue().getAfterBalance()).isEqualByComparingTo("989950");
+
+        // REMITTANCE 경로는 분산 락/수신자 ensure 미진입.
+        verifyNoInteractions(distributedLockHelper);
+        verify(walletBalanceWriter, never()).ensureBalanceRow(any(), any());
+    }
+
+    @Test
+    @DisplayName("REMITTANCE payout 실패(BANK4002 매핑 ACCOUNT4003): Writer.record는 *호출됨*, 본 tx Transaction/audit 저장 0회")
+    void execute_REMITTANCE_payout실패_attempt는_남고_본_tx_rollback() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        BankAccount account = mockBankAccount(MOCK_TOKEN);
+
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER)).willReturn(Optional.of(sender));
+        given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACCOUNT_PUB_ID, SENDER_USER))
+                .willReturn(Optional.of(account));
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(sender, CurrencyType.KRW))
+                .willReturn(Optional.of(senderBalance));
+        // BankErrorMapper가 BANK4002 → ACCOUNT4003으로 매핑한 BusinessException을 던진 상태.
+        given(bankClient.payout(any(), any(), any(), any(), any()))
+                .willThrow(new BusinessException(AccountErrorCode.INSUFFICIENT_LINKED_ACCOUNT_BALANCE));
+
+        assertThatThrownBy(() -> service.execute(
+                SENDER_USER, KEY, remittanceRequest("10000.0000", BANK_ACCOUNT_PUB_ID)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.INSUFFICIENT_LINKED_ACCOUNT_BALANCE);
+
+        // 외부 호출 *전*에 record가 불렸으므로 실패해도 호출 사실은 남는다.
+        // (실제 환경에선 REQUIRES_NEW로 remittance_attempts 행이 커밋돼 보존됨 — 단위 테스트는 mock이라
+        //  실제 커밋 자체는 검증 불가. Writer 호출 사실만 검증. Testcontainers 백로그.)
+        verify(remittanceAttemptWriter).record(
+                eq(KEY), eq(SENDER_USER), eq(BANK_ACCOUNT_ID),
+                eq(new BigDecimal("10050.0000")), eq(CurrencyType.KRW));
+
+        // 본 tx의 Transaction/audit는 미저장 (외부 호출 예외 → 메인 @Transactional rollback)
+        verify(transactionRepository, never()).save(any());
+        verify(auditLogRepository, never()).save(any());
+        // 잔액 차감 미적용 (예외가 차감 단계 전에 떨어짐)
+        assertThat(senderBalance.getBalance()).isEqualByComparingTo("1000000");
+    }
+
+    @Test
+    @DisplayName("REMITTANCE payout status != COMPLETED → COMMON5031: Writer는 호출됨, Transaction/audit 미저장")
+    void execute_REMITTANCE_payout_status_COMPLETED아님_COMMON5031() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        BankAccount account = mockBankAccount(MOCK_TOKEN);
+
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER)).willReturn(Optional.of(sender));
+        given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACCOUNT_PUB_ID, SENDER_USER))
+                .willReturn(Optional.of(account));
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(sender, CurrencyType.KRW))
+                .willReturn(Optional.of(senderBalance));
+        // 정상 응답이지만 status가 비정상 — Service 방어 분기에서 COMMON5031로 매핑.
+        given(bankClient.payout(any(), any(), any(), any(), any()))
+                .willReturn(new PayoutResult(
+                        "mock-payout-2", "FAILED", new BigDecimal("10000.0000"), "KRW",
+                        new BigDecimal("0.0000")));
+
+        assertThatThrownBy(() -> service.execute(
+                SENDER_USER, KEY, remittanceRequest("10000.0000", BANK_ACCOUNT_PUB_ID)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
+
+        verify(remittanceAttemptWriter).record(any(), any(), any(), any(), any());
+        verify(transactionRepository, never()).save(any());
+        verify(auditLogRepository, never()).save(any());
+        assertThat(senderBalance.getBalance()).isEqualByComparingTo("1000000");
+    }
+
+    @Test
+    @DisplayName("REMITTANCE 잔액 부족(amount+fee > balance) → WALLET4002: 외부 호출 전 차단 — Writer/BankClient 미호출")
+    void execute_REMITTANCE_잔액부족_WALLET4002_attempt미호출() {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        // 10000 + 50 = 10050 필요한데 잔액 10000 → 부족
+        WalletBalance senderBalance = balance(sender, new BigDecimal("10000"));
+        BankAccount account = mockBankAccount(MOCK_TOKEN);
+
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER)).willReturn(Optional.of(sender));
+        given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACCOUNT_PUB_ID, SENDER_USER))
+                .willReturn(Optional.of(account));
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(sender, CurrencyType.KRW))
+                .willReturn(Optional.of(senderBalance));
+
+        assertThatThrownBy(() -> service.execute(
+                SENDER_USER, KEY, remittanceRequest("10000.0000", BANK_ACCOUNT_PUB_ID)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.INSUFFICIENT_BALANCE);
+
+        // 잔액 검증이 외부 호출 *전* 차단 단계 — 흔적도 박지 않는다(의도 회귀 보호).
+        verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
+        verifyNoInteractions(bankClient);
+        verify(transactionRepository, never()).save(any());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("REMITTANCE 계좌 부재(본인 + active 미매칭) → ACCOUNT4001: Writer 미호출")
+    void execute_REMITTANCE_계좌부재_ACCOUNT4001_attempt미호출() {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER)).willReturn(Optional.of(sender));
+        given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACCOUNT_PUB_ID, SENDER_USER))
+                .willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.execute(
+                SENDER_USER, KEY, remittanceRequest("10000.0000", BANK_ACCOUNT_PUB_ID)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.ACCOUNT_NOT_FOUND);
+
+        // 계좌 검증 단계에서 차단 — 잔액·외부 호출·흔적 모두 미진입.
+        verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
+        verifyNoInteractions(bankClient);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("REMITTANCE 계좌 미인증(mock_account_token=null) → ACCOUNT4006: Writer 미호출")
+    void execute_REMITTANCE_계좌_미인증_ACCOUNT4006_attempt미호출() {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        BankAccount account = mockBankAccount(null);  // 토큰 미발급
+
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER)).willReturn(Optional.of(sender));
+        given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACCOUNT_PUB_ID, SENDER_USER))
+                .willReturn(Optional.of(account));
+
+        assertThatThrownBy(() -> service.execute(
+                SENDER_USER, KEY, remittanceRequest("10000.0000", BANK_ACCOUNT_PUB_ID)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.UNVERIFIED_ACCOUNT);
+
+        verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
+        verifyNoInteractions(bankClient);
         verify(transactionRepository, never()).save(any());
     }
 
@@ -570,5 +818,30 @@ class TransferServiceImplExecuteTest {
         RLock lock = org.mockito.Mockito.mock(RLock.class);
         given(lock.isHeldByCurrentThread()).willReturn(true);
         return lock;
+    }
+
+    // ----- REMITTANCE 전용 fixtures -----
+
+    private TransferExecuteRequest remittanceRequest(String amount, String bankAccountPublicId) {
+        // receiverPublicId는 DTO @NotBlank로 강제되므로 dummy 값(REMITTANCE 분기에서 미사용).
+        return new TransferExecuteRequest(
+                "REMITTANCE", amount, "KRW", "KRW", "현금화", RECEIVER_USER, bankAccountPublicId);
+    }
+
+    /**
+     * BankAccount + Bank를 Mockito mock으로 구성한다. Entity 빌더로 만들 수도 있지만 Bank 마스터
+     * 데이터까지 채우는 비용이 본 단위 테스트 범위와 무관하므로 mock이 간결.
+     */
+    private BankAccount mockBankAccount(String mockAccountToken) {
+        BankAccount account = Mockito.mock(BankAccount.class);
+        Bank bank = Mockito.mock(Bank.class);
+        // 잔액 부족/토큰 null 분기는 payout까지 안 가서 id·accountNumber·bank를 안 보므로 lenient.
+        // 토큰 확인은 항상 단계 (3)에서 호출되므로 strict 유지.
+        Mockito.lenient().when(account.getId()).thenReturn(BANK_ACCOUNT_ID);
+        Mockito.lenient().when(account.getAccountNumber()).thenReturn(BANK_ACCOUNT_NUMBER);
+        given(account.getMockAccountToken()).willReturn(mockAccountToken);
+        Mockito.lenient().when(account.getBank()).thenReturn(bank);
+        Mockito.lenient().when(bank.getCode()).thenReturn(BANK_CODE);
+        return account;
     }
 }

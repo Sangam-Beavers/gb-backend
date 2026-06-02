@@ -26,6 +26,7 @@ import com.gb.wallet.domain.transaction.repository.RecentRecipientProjection;
 import com.gb.wallet.domain.transaction.repository.RemittanceAmountProjection;
 import com.gb.wallet.domain.transaction.repository.TransactionAuditLogRepository;
 import com.gb.wallet.domain.transaction.repository.TransactionRepository;
+import com.gb.wallet.domain.transaction.service.RemittanceAttemptWriter;
 import com.gb.wallet.domain.transaction.service.TransferService;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.entity.WalletBalance;
@@ -38,7 +39,9 @@ import com.gb.wallet.global.client.MemberInfo;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
+import com.gb.wallet.global.client.dto.PayoutResult;
 import com.gb.wallet.global.common.util.AccountNumberMasker;
+import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.MemberErrorCode;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
@@ -92,6 +95,7 @@ public class TransferServiceImpl implements TransferService {
     private final WalletBalanceWriter walletBalanceWriter;
     private final TransactionRepository transactionRepository;
     private final TransactionAuditLogRepository auditLogRepository;
+    private final RemittanceAttemptWriter remittanceAttemptWriter;
     private final BankAccountRepository bankAccountRepository;
     private final MemberClient memberClient;
     private final BankClient bankClient;
@@ -323,13 +327,15 @@ public class TransferServiceImpl implements TransferService {
                 .filter(ALLOWED_TRANSFER_TYPES::contains)
                 .orElseThrow(() -> new BusinessException(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE));
 
-        // 4) 1단계는 같은 통화만 허용 (다른 통화 송금은 후속 PR).
+        // 4) 같은 통화만 허용 (2단계까지 same-currency 강제 — 다통화는 3단계).
         if (!request.currencyCode().equals(request.receiveCurrencyCode())) {
             throw new BusinessException(TransferErrorCode.UNSUPPORTED_CURRENCY_PAIR);
         }
-        // 5) 1단계는 INTERNAL_TRANSFER만. REMITTANCE는 ALLOWED엔 있지만 구현은 후속.
-        if (transferType != TransactionType.INTERNAL_TRANSFER) {
-            throw new BusinessException(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE);
+
+        // 5) REMITTANCE 분기 — 외부 계좌 송금은 receiver wallet/self-check/분산 락이 의미 없으므로
+        //    별도 경로로 분리. INTERNAL_TRANSFER 경로는 손대지 않는다.
+        if (transferType == TransactionType.REMITTANCE) {
+            return executeRemittancePath(userPublicId, idempotencyKey, request, currency);
         }
 
         // 6) 송신/수신 wallet 조회 (락 키용 id 확보).
@@ -374,6 +380,11 @@ public class TransferServiceImpl implements TransferService {
             String idempotencyKey, TransferExecuteRequest request) {
 
         try {
+            // REMITTANCE는 별도 in-tx 경로(외부 계좌 + 단일 송신자 잔액). INTERNAL_TRANSFER 코드는 그대로 유지.
+            if (transferType == TransactionType.REMITTANCE) {
+                return executeRemittanceInTransaction(senderWalletId, currency, idempotencyKey, request);
+            }
+
             // (1) wallet 재조회 — execute()의 엔티티는 이 트랜잭션 컨텍스트 밖에서 로드돼 detached.
             //     수신자 지갑은 상류 execute()의 findByUserPublicId로 이미 검증된 상태(없으면 거기서 WALLET4001).
             Wallet senderWallet = walletRepository.findById(senderWalletId)
@@ -509,5 +520,155 @@ public class TransferServiceImpl implements TransferService {
             // 캐시 쓰기 실패는 응답에 영향 없음 — 다음 동일 키 요청 시 Layer 2가 받아준다.
             log.warn("Idempotency cache 저장 실패. key={}", idempotencyKey, e);
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // REMITTANCE (2단계: 외부 계좌 현금화, same-currency 강제)
+    // INTERNAL_TRANSFER와 달리 수신자가 외부 은행 계좌 → receiver wallet/self-check/분산 락 모두 미적용.
+    // 직렬화는 송신자 단일 잔액 행 비관적 락(findForUpdateByWalletAndCurrency)만으로 충분.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * REMITTANCE pre-tx 경로 — bank_account_public_id 존재 검증과 송신자 wallet 조회만 하고 트랜잭션 내부로
+     * 위임한다. {@code execute()}의 INTERNAL_TRANSFER 경로를 건드리지 않으려 별도 헬퍼로 분리.
+     *
+     * <p>INTERNAL_TRANSFER와의 차이:
+     * <ul>
+     *   <li>receiver wallet 조회 없음 (외부 계좌).</li>
+     *   <li>self-transfer 체크 없음 (송신자 wallet vs 외부 계좌라 자기 판정 불가).</li>
+     *   <li>{@link DistributedLockHelper} 사용 안 함 — 단일 송신자 wallet만 잠그면 충분하므로
+     *       in-tx 단계에서 DB 비관적 락(FOR UPDATE)으로 직렬화한다.</li>
+     * </ul>
+     */
+    private TransferExecuteResponse executeRemittancePath(
+            String userPublicId, String idempotencyKey, TransferExecuteRequest request, CurrencyType currency) {
+        // bank_account_public_id는 REMITTANCE 전용 필수 — DTO 레벨 @NotBlank가 아니므로 Service에서 검증.
+        // INTERNAL_TRANSFER receiver_public_id는 DTO @NotBlank로 강제되므로 일관성 차원에서 같은 COMMON4001 매핑.
+        String bankAccountPublicId = request.bankAccountPublicId();
+        if (bankAccountPublicId == null || bankAccountPublicId.isBlank()) {
+            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+        }
+
+        // 송신자 wallet 조회 (락 키용 id 확보). receiver/lock 없음.
+        Wallet senderWallet = walletRepository.findByUserPublicId(userPublicId)
+                .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+
+        // self-proxy로 호출 — 직접 호출 시 @Transactional 미적용(INTERNAL_TRANSFER 경로와 동일).
+        // receiverWalletId는 null (외부 계좌). executeInTransaction이 transferType으로 분기.
+        TransferExecuteResponse response = self.executeInTransaction(
+                senderWallet.getId(), null, currency, TransactionType.REMITTANCE, idempotencyKey, request);
+
+        // 커밋 이후 Redis 캐시 채우기 (Layer 1) — INTERNAL_TRANSFER 경로와 동일.
+        writeToCache(idempotencyKey, response);
+        return response;
+    }
+
+    /**
+     * REMITTANCE in-tx 경로 — 메인 {@code @Transactional} 안에서 BankClient.payout을 호출한다(결정 C).
+     *
+     * <p><b>외부 호출 직전 시도 흔적 별도 커밋:</b> 잔액 검증 직후, payout 호출 *직전*에
+     * {@link RemittanceAttemptWriter#record}로 {@code remittance_attempts}에 1행을 REQUIRES_NEW로
+     * 커밋한다. 메인 트랜잭션이 payout 예외/이후 단계로 rollback돼도 흔적은 살아남아 timeout-but-success
+     * 시 운영 reconcile 입력 자료가 된다. 같은 키 재시도는 Writer 내부 UNIQUE 위반 흡수로 1행만 유지.
+     *
+     * <p>흔적을 {@code transaction_audit_logs}가 아닌 신규 {@code remittance_attempts}에 박는 이유:
+     * audit log는 {@code transaction_id} NOT NULL이라 본 Transaction INSERT 전엔 행을 만들 수 없고, 또
+     * "거래 1:1 흔적" 의미를 흐린다. 별도 테이블로 분리해 충전·INTERNAL_TRANSFER 흐름엔 영향 없게 한다
+     * — database.md {@code remittance_attempts} 섹션 SSOT.
+     *
+     * <p>reconcile 배치는 본 PR에 미포함(향후 운영 도입 시 본 테이블을 입력으로 사용).
+     */
+    private TransferExecuteResponse executeRemittanceInTransaction(
+            Long senderWalletId, CurrencyType currency, String idempotencyKey, TransferExecuteRequest request) {
+        // (1) 송신자 wallet 재조회 — execute()의 엔티티는 이 트랜잭션 컨텍스트 밖에서 로드돼 detached.
+        Wallet senderWallet = walletRepository.findById(senderWalletId)
+                .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+
+        // (2) 본인 소유 + 활성 계좌 조회 (충전과 동일 패턴). 사유 미구분 — 정보 누설 방지로 ACCOUNT4001 통일.
+        BankAccount account = bankAccountRepository
+                .findByPublicIdAndUserPublicIdAndIsActiveTrue(
+                        request.bankAccountPublicId(), senderWallet.getUserPublicId())
+                .orElseThrow(() -> new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND));
+
+        // (3) 계좌 인증 토큰 확인 — 없으면 Mock 호출 전에 ACCOUNT4006 차단(충전과 동일 정책).
+        if (account.getMockAccountToken() == null) {
+            throw new BusinessException(AccountErrorCode.UNVERIFIED_ACCOUNT);
+        }
+
+        // (4) 송신자 잔액 행 FOR UPDATE — 단일 행이라 데드락 회피용 ordering 불필요.
+        //     송신자는 자동 생성 안 함(돈을 보내려면 잔액 행이 이미 있어야 정상).
+        WalletBalance senderBalance = walletBalanceRepository
+                .findForUpdateByWalletAndCurrency(senderWallet, currency)
+                .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+
+        // (5) 금액 + 수수료 계산 (REMITTANCE = amount × 0.5%, HALF_UP scale 4 — calculateFee 정책 SSOT).
+        BigDecimal amount = new BigDecimal(request.amount());
+        BigDecimal fee = calculateFee(TransactionType.REMITTANCE, amount);
+        BigDecimal totalDeduct = amount.add(fee).setScale(FEE_SCALE, RoundingMode.HALF_UP);
+
+        // (6) 잔액 검증 — 부족하면 WALLET4002. (WalletBalance.subtract 내부 방어도 있지만 비즈니스 코드 명시.)
+        if (senderBalance.getBalance().compareTo(totalDeduct) < 0) {
+            throw new BusinessException(WalletErrorCode.INSUFFICIENT_BALANCE);
+        }
+
+        // (6.5) 외부 호출 *직전* 시도 흔적을 REQUIRES_NEW로 별도 커밋 — payout 실패/timeout 시 메인 tx가
+        //       rollback돼도 흔적은 남아 운영 reconcile 입력이 된다. 같은 idempotency_key 재시도/race는
+        //       Writer 내부 UNIQUE 위반 흡수로 1행만 유지(상세: RemittanceAttemptWriter javadoc).
+        remittanceAttemptWriter.record(idempotencyKey, senderWallet.getUserPublicId(),
+                account.getId(), totalDeduct, currency);
+
+        // (7) Mock 은행 지급. 외부 에러는 BankErrorMapper가 BusinessException으로 변환해 던지므로 그대로 전파
+        //     (BANK4002→ACCOUNT4003, BANK4040→ACCOUNT4001, BANK4003→ACCOUNT4002, BANK4010→ACCOUNT4006,
+        //      5xx/네트워크→COMMON5031). idempotencyKey forward — Mock도 같은 키로 첫 응답을 재반환한다.
+        //     예외 전파 시 메인 @Transactional rollback으로 송신자 잔액 변경 없음(아직 차감 전이라 무영향).
+        PayoutResult payoutResult = bankClient.payout(
+                account.getBank().getCode(), account.getAccountNumber(),
+                amount, currency.name(), idempotencyKey);
+        // 방어 — 정상 응답이지만 status가 COMPLETED 아닐 때는 일시 장애로 본다(충전 패턴 동일).
+        if (payoutResult == null || !"COMPLETED".equals(payoutResult.status())) {
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
+
+        // (8) 잔액 차감 — dirty checking으로 UPDATE.
+        BigDecimal senderBefore = senderBalance.getBalance();
+        senderBalance.subtract(totalDeduct);
+        BigDecimal senderAfter = senderBalance.getBalance();
+
+        // (9) Transaction INSERT — idempotency_key UNIQUE 위반 시 상위 catch가 Layer 3 흐름으로 흡수.
+        //     bank_account_id = 검증된 계좌의 내부 id (database.md REMITTANCE 행 — 수취 계좌 컬럼).
+        //     receiver_wallet_id = null (외부 계좌). receiver_name = null (BankAccount에 holderName 필드 없음 —
+        //       후속에 BankClient.inquiry로 받은 holder를 매핑할지 검토).
+        //     receive_amount/receive_currency_code = amount/currency (same-currency 강제 — 다통화는 3단계).
+        //     exchange_rate = null (same-currency).
+        Transaction transaction = transactionRepository.save(Transaction.builder()
+                .publicId(UUID.randomUUID().toString())
+                .wallet(senderWallet)
+                .type(TransactionType.REMITTANCE)
+                .amount(amount)
+                .currencyCode(currency)
+                .fee(fee)
+                .status(TransactionStatus.COMPLETED)
+                .idempotencyKey(idempotencyKey)
+                .bankAccountId(account.getId())
+                .receiveAmount(amount)
+                .receiveCurrencyCode(currency)
+                .exchangeRate(null)
+                .memo(request.memo())
+                .build());
+
+        // (10) 감사 로그 INSERT (append-only) — REMITTANCE는 송신자 한 줄만(외부 계좌라 수신 audit 없음).
+        //      action = "REMITTANCE" (String 리터럴, enum화 안 함 — 결정 (4)).
+        auditLogRepository.save(TransactionAuditLog.builder()
+                .transaction(transaction)
+                .userPublicId(senderWallet.getUserPublicId())
+                .action("REMITTANCE")
+                .amount(totalDeduct)             // 차감액(amount + fee) — INTERNAL_TRANSFER_SEND 패턴 동일
+                .currencyCode(currency)
+                .beforeBalance(senderBefore)
+                .afterBalance(senderAfter)
+                .status(TransactionStatus.COMPLETED)
+                .build());
+
+        return TransferExecuteResponse.from(transaction);
     }
 }
