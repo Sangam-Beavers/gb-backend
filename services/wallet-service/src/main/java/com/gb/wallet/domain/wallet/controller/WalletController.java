@@ -3,6 +3,7 @@ package com.gb.wallet.domain.wallet.controller;
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
 import com.gb.wallet.domain.wallet.dto.response.WalletBalanceResponse;
+import com.gb.wallet.domain.wallet.dto.response.WalletMeResponse;
 import com.gb.wallet.domain.wallet.service.WalletService;
 import com.gb.wallet.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
@@ -31,6 +32,8 @@ public class WalletController {
             "{\"success\":false,\"code\":\"AUTH4011\",\"message\":\"인증이 필요합니다.\"}";
     private static final String EX_COMMON5000 =
             "{\"success\":false,\"code\":\"COMMON5000\",\"message\":\"서버 오류가 발생했습니다.\"}";
+    private static final String EX_TRANSFER4002 =
+            "{\"success\":false,\"code\":\"TRANSFER4002\",\"message\":\"지원하지 않는 통화입니다.\"}";
 
     private final WalletService walletService;
 
@@ -69,5 +72,47 @@ public class WalletController {
     public ApiResponse<WalletBalanceResponse> getMyBalances(
             @CurrentUserPublicId String userPublicId) {
         return ApiResponse.success(walletService.getMyBalances(userPublicId));
+    }
+
+    /** 보유 통화 원화 환산 조회. 🔒 JWT 필요. */
+    @Operation(
+            summary = "내 전자지갑 원화 환산 조회",
+            description = "인증된 사용자의 전자지갑 상태 + 통화별 잔액 + 원화 환산 + 전체 합산 원화 평가액을 "
+                    + "조회한다. 각 통화는 ExchangeRateClient(\"1 외화→KRW\")로 환율을 받아 잔액에 곱한다. "
+                    + "환율 소스: dev=고정 환율표(Mock) / stage·prod=Redis(rate:KRW-<통화>, exchange-updater "
+                    + "cron이 매일 자정 갱신). 미지원 통화 발생 시 TRANSFER4002. JWT public_id claim으로 사용자 식별.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "조회 성공. data 에 WalletMeResponse 가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "TRANSFER4002 - 지원하지 않는 통화(환율 미존재).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "TRANSFER4002", value = EX_TRANSFER4002))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "WALLET4001 - 존재하지 않는 지갑(해당 사용자의 지갑 없음).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "WALLET4001", value = EX_WALLET4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000)))
+    })
+    @GetMapping("/me")
+    public ApiResponse<WalletMeResponse> getMyWallet(
+            @CurrentUserPublicId String userPublicId) {
+        return ApiResponse.success(walletService.getMyWallet(userPublicId));
     }
 }
