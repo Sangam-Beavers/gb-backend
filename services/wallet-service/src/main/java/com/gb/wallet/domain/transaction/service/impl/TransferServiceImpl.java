@@ -265,7 +265,7 @@ public class TransferServiceImpl implements TransferService {
                             .accountHolder(lastTx != null ? lastTx.getReceiverName() : null)
                             .currencyCode(lastTx != null ? lastTx.getCurrencyCode().name() : null)
                             // 금액은 소수점 4자리 고정 string (잔액 조회 BalanceItem과 동일 규칙).
-                            .lastAmount(lastTx != null ? lastTx.getAmount().setScale(4).toPlainString() : null)
+                            .lastAmount(lastTx != null ? lastTx.getAmount().setScale(4, RoundingMode.HALF_UP).toPlainString() : null)
                             .lastTransferredAt(RecentAccountsResponse.toUtcZ(p.getLastTransferredAt()))
                             .build();
                 })

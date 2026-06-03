@@ -9,6 +9,7 @@ import com.gb.wallet.global.client.dto.PayoutResult;
 import com.gb.wallet.global.client.dto.WithdrawalResult;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Map;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpRequest;
@@ -125,7 +126,7 @@ public class MockBankClient implements BankClient {
                     .header("Idempotency-Key", idempotencyKey)
                     .body(Map.of(
                             "account_token", accountToken,
-                            "amount", amount.setScale(4).toPlainString(),
+                            "amount", amount.setScale(4, RoundingMode.HALF_UP).toPlainString(),
                             "currency_code", currencyCode))
                     .retrieve()
                     .onStatus(HttpStatusCode::isError, this::translateError)
@@ -166,7 +167,7 @@ public class MockBankClient implements BankClient {
                     .body(Map.of(
                             "bank_code", bankCode,
                             "account_number", accountNumber,
-                            "amount", amount.setScale(4).toPlainString(),
+                            "amount", amount.setScale(4, RoundingMode.HALF_UP).toPlainString(),
                             "currency_code", currencyCode))
                     .retrieve()
                     .onStatus(HttpStatusCode::isError, this::translateError)

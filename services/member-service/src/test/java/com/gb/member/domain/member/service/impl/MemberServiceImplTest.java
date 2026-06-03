@@ -29,6 +29,7 @@ import com.gb.member.global.client.IdpUserClient;
 import com.gb.member.global.exception.code.MemberErrorCode;
 import com.gb.member.global.mail.EmailSender;
 import com.gb.member.global.redis.PasswordResetTokenStore;
+import java.time.LocalDateTime;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -467,6 +468,19 @@ class MemberServiceImplTest {
         assertThat(response.getTemperatureGrade()).isEqualTo("GREEN");
         assertThat(response.getProfileImageUrl()).isNull();
         verifyNoInteractions(idpUserClient);
+    }
+
+    @Test
+    @DisplayName("getMyProfile: createdAt은 ISO-8601 UTC 'Z' 문자열(초 단위 절삭)로 직렬화된다")
+    void getMyProfile_createdAt_UTC_Z_포맷() {
+        Member member = memberWith("global_neighbor", "ko");
+        // 단위 테스트라 @PrePersist 미동작 → reflection 세팅이 auditing에 덮이지 않는다. 0.5초 → 초 단위 절삭 확인.
+        ReflectionTestUtils.setField(member, "createdAt", LocalDateTime.of(2026, 6, 3, 18, 21, 8, 500_000_000));
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
+
+        ProfileResponse response = memberService.getMyProfile("pub-1");
+
+        assertThat(response.getCreatedAt()).isEqualTo("2026-06-03T18:21:08Z");
     }
 
     @Test
