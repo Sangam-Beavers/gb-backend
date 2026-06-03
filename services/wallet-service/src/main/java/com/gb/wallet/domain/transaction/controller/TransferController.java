@@ -324,7 +324,7 @@ public class TransferController {
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<TransferExecuteResponse> executeTransfer(
             @CurrentUserPublicId String userPublicId,
-            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 100) String idempotencyKey,
             @Valid @RequestBody TransferExecuteRequest request) {
         TransferExecuteResponse response = transferService.execute(userPublicId, idempotencyKey, request);
         return ApiResponse.success(response, "송금이 완료되었습니다.");

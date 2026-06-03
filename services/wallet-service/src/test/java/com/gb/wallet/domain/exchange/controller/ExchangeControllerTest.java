@@ -145,6 +145,24 @@ class ExchangeControllerTest {
     }
 
     @Test
+    @DisplayName("POST /quote 400: amount 소수점 4자리 초과 → @Pattern 위반 → COMMON4001, service 미호출")
+    void quote_amount_scale초과_COMMON4001() throws Exception {
+        // 송금과 동일 @Pattern(소수점 최대 4자리). scale>4(예: 6자리)를 입력단에서 차단(WEXB-03).
+        mockMvc.perform(post("/api/v1/exchanges/quote")
+                        .with(authedJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "exchange_type", "EXCHANGE",
+                                "from_currency_code", "KRW",
+                                "to_currency_code", "USD",
+                                "amount", "100.123456"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(exchangeService);
+    }
+
+    @Test
     @DisplayName("POST /quote 401: 토큰 없음 → AUTH4011, service 미호출")
     void quote_토큰없음_401() throws Exception {
         mockMvc.perform(post("/api/v1/exchanges/quote")

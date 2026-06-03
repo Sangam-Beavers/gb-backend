@@ -142,6 +142,39 @@ class TransferControllerTest {
     }
 
     @Test
+    @DisplayName("POST /transfers 400: Idempotency-Key 100자 초과 → @Size 위반 → COMMON4001, Service 미호출")
+    void executeTransfer_idempotencyKey_길이초과_COMMON4001() throws Exception {
+        // VARCHAR(100) 잘림→키 충돌→멱등 우회(이중 출금)의 입력단 차단(WTX-01). charge와 동일 @Size(max=100).
+        String tooLong = "k".repeat(101);
+
+        mockMvc.perform(post("/api/v1/transfers")
+                        .with(authedJwt())
+                        .header("Idempotency-Key", tooLong)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validBody("10000.0000"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verify(transferService, never()).execute(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /transfers 400: Idempotency-Key 공백 → @NotBlank 위반 → COMMON4001, Service 미호출")
+    void executeTransfer_idempotencyKey_공백_COMMON4001() throws Exception {
+        mockMvc.perform(post("/api/v1/transfers")
+                        .with(authedJwt())
+                        .header("Idempotency-Key", "   ")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validBody("10000.0000"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verify(transferService, never()).execute(any(), any(), any());
+    }
+
+    @Test
     @DisplayName("POST /transfers 404: Service가 WALLET_NOT_FOUND throw → 404 + WALLET4001 코드")
     void executeTransfer_WALLET4001_404() throws Exception {
         willThrow(new BusinessException(WalletErrorCode.WALLET_NOT_FOUND))
