@@ -16,6 +16,7 @@
 | 분석 결과 상세 조회 | GET | `/api/v1/documents/{id}/result` | ✅ |
 | 분석 재요청 (FAILED 시) | POST | `/api/v1/documents/{id}/retry` | ✅ |
 | 문서 분석 결과 단건 조회 | GET | `/api/v1/documents/{id}` | ✅ |
+| 후속 질문 챗봇 (SSE 스트리밍) | POST | `/api/v1/documents/{id}/chat` | ✅ |
 
 ---
 

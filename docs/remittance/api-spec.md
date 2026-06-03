@@ -24,14 +24,13 @@
 | 지원 통화 조회 | GET | `/api/v1/transfers/supported-currencies` | ✅ |
 | 최근 송금 계좌 | GET | `/api/v1/transfers/recent-recipients/accounts` | ✅ |
 | 지원 은행 목록 | GET | `/api/v1/transfers/supported-banks` | ✅ |
-| 예금주 실명 조회 | GET | `/api/v1/transfers/account-holder?bankCode={}&accountNumber={}` | ✅ |
+| 예금주 실명 조회 (deprecated → `/accounts/holder`) | GET | `/api/v1/transfers/account-holder?bankCode={}&accountNumber={}` | ✅ |
 | 송금 수수료 조회 | POST | `/api/v1/transfers/fee` | ✅ |
 | 송금 PIN 설정 | POST | `/api/v1/transfers/pin` | ✅ |
 | 송금 PIN 검증 | POST | `/api/v1/transfers/pin-verify` | ✅ |
 | **송금 실행** | POST | `/api/v1/transfers` | ✅ |
 | 송금 확인증 조회 | GET | `/api/v1/transfers/{id}/receipt` | ✅ |
 | 정기 송금 대상 검증 | POST | `/api/v1/transfers/scheduled/validate` | ✅ |
-| 정기 송금 지원 통화 | GET | `/api/v1/transfers/scheduled/supported-currencies` | ✅ |
 | 정기 송금 설정 | POST | `/api/v1/transfers/scheduled` | ✅ |
 | 정기 송금 내역 조회 | GET | `/api/v1/transfers/scheduled` | ✅ |
 | 정기 송금 진행 완료 조회 | GET | `/api/v1/transfers/scheduled/{id}/history` | ✅ |
@@ -174,7 +173,7 @@
 ## 5. 송금 사전 검증
 
 - 앱 사용자 검증: `GET /api/v1/transfers/validate-member?email={}` → `data: { receiver_public_id, nickname, is_verified }`
-- 예금주 실명 조회: `GET /api/v1/transfers/account-holder?bankCode={}&accountNumber={}` → `data: { account_holder_name }`
+- 예금주 실명 조회: `GET /api/v1/transfers/account-holder?bankCode={}&accountNumber={}` → `data: { account_holder_name }` **(deprecated — 예금주는 `GET /accounts/holder`로 일원화. 코드 잔존, 추후 제거 예정.)**
 - 송금 PIN 설정: `POST /api/v1/transfers/pin` (Body: `{ "pin": "123456" }`, 숫자 6자리) → 201. 형식 오류 `COMMON4001`, 이미 설정됨 `COMMON4091`. (방식 B라 계정 비밀번호는 IdP가 보유 → 송금 본인확인은 별도 송금 PIN 6자리로 한다.)
 - 송금 PIN 검증: `POST /api/v1/transfers/pin-verify` (Body: `{ "pin": "123456" }`) → 200. 불일치 `TRANSFER4007`, 미설정 `TRANSFER4009`, 5회 연속 실패 시 10분 잠금 `TRANSFER4008`(429). 성공해야 송금 실행(§6)으로 진행.
 
@@ -376,7 +375,7 @@ snapshot 방식이라 회원이 본명을 바꾸거나 외부 계좌의 명의�
 
 ### 7-2. 정기 송금
 
-전체 흐름: `validate`(대상 검증, POST) → `supported-currencies`(GET) → `scheduled`(설정 POST / 내역 GET) → `scheduled/{id}/history`(진행 완료 GET).
+전체 흐름: `validate`(대상 검증, POST) → `supported-currencies`(GET, 정기·일반 공통 — 별도 `scheduled/supported-currencies`는 없음) → `scheduled`(설정 POST / 내역 GET) → `scheduled/{id}/history`(진행 완료 GET).
 
 #### 7-2-1. 정기 송금 대상 유효성 검증 ★
 
