@@ -6,10 +6,13 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -402,6 +405,126 @@ class AccountControllerTest {
                 .andExpect(jsonPath("$.data.accounts[1].account_public_id").value("acct-2"))
                 .andExpect(jsonPath("$.data.accounts[1].is_primary").value(false))
                 .andExpect(jsonPath("$.data.accounts[1].is_verified").value(false));
+    }
+
+    // --- PATCH /{id}/primary ---
+
+    @Test
+    @DisplayName("PATCH /{id}/primary 200: 정상 변경 → ApiResponse(success=true) + is_primary=true, service 호출")
+    void changePrimary_정상_200() throws Exception {
+        given(bankAccountService.changePrimary(USER_ID, ACCT_ID))
+                .willReturn(stubAccountResponse());
+
+        mockMvc.perform(patch("/api/v1/accounts/{id}/primary", ACCT_ID)
+                        .with(authedJwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.is_primary").value(true))
+                .andExpect(jsonPath("$.data.account_public_id").value("acct-uuid"));
+
+        verify(bankAccountService).changePrimary(USER_ID, ACCT_ID);
+    }
+
+    @Test
+    @DisplayName("PATCH /{id}/primary 200: 이미 주 계좌여도 멱등 성공(컨트롤러 관점) → 200 + is_primary=true")
+    void changePrimary_이미_주계좌_멱등_200() throws Exception {
+        // 멱등성은 service가 보장한다(이미 주 계좌면 부수효과 없이 성공). 컨트롤러는 동일하게 200 + 변경 결과를 래핑한다.
+        given(bankAccountService.changePrimary(USER_ID, ACCT_ID))
+                .willReturn(stubAccountResponse());
+
+        mockMvc.perform(patch("/api/v1/accounts/{id}/primary", ACCT_ID)
+                        .with(authedJwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.is_primary").value(true));
+
+        verify(bankAccountService).changePrimary(USER_ID, ACCT_ID);
+    }
+
+    @Test
+    @DisplayName("PATCH /{id}/primary 404: 없는/타인 계좌(ACCOUNT4001) → 404 + code")
+    void changePrimary_없는_계좌_404() throws Exception {
+        willThrow(new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND))
+                .given(bankAccountService).changePrimary(anyString(), anyString());
+
+        mockMvc.perform(patch("/api/v1/accounts/{id}/primary", ACCT_ID)
+                        .with(authedJwt()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("ACCOUNT4001"));
+    }
+
+    @Test
+    @DisplayName("PATCH /{id}/primary 503: 분산락 획득 실패(COMMON5031) → 503 + code")
+    void changePrimary_락_실패_503() throws Exception {
+        willThrow(new BusinessException(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE))
+                .given(bankAccountService).changePrimary(anyString(), anyString());
+
+        mockMvc.perform(patch("/api/v1/accounts/{id}/primary", ACCT_ID)
+                        .with(authedJwt()))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON5031"));
+    }
+
+    @Test
+    @DisplayName("PATCH /{id}/primary 401: 토큰 없음 → AUTH4011, service 미호출")
+    void changePrimary_토큰_없음_401() throws Exception {
+        mockMvc.perform(patch("/api/v1/accounts/{id}/primary", ACCT_ID))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verify(bankAccountService, never()).changePrimary(any(), any());
+    }
+
+    // --- DELETE /{id} ---
+
+    @Test
+    @DisplayName("DELETE /{id} 200: 정상 삭제(soft-delete) → 200 + data:null, service 호출")
+    void deleteAccount_정상_200() throws Exception {
+        // void 메서드라 스텁 없이 호출(기본 do-nothing).
+        mockMvc.perform(delete("/api/v1/accounts/{id}", ACCT_ID)
+                        .with(authedJwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        verify(bankAccountService).deleteAccount(USER_ID, ACCT_ID);
+    }
+
+    @Test
+    @DisplayName("DELETE /{id} 404: 없는/타인/이미 비활성 계좌(ACCOUNT4001) → 404 + code")
+    void deleteAccount_없는_계좌_404() throws Exception {
+        willThrow(new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND))
+                .given(bankAccountService).deleteAccount(anyString(), anyString());
+
+        mockMvc.perform(delete("/api/v1/accounts/{id}", ACCT_ID)
+                        .with(authedJwt()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("ACCOUNT4001"));
+    }
+
+    @Test
+    @DisplayName("DELETE /{id} 401: 토큰 없음 → AUTH4011, service 미호출")
+    void deleteAccount_토큰_없음_401() throws Exception {
+        mockMvc.perform(delete("/api/v1/accounts/{id}", ACCT_ID))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verify(bankAccountService, never()).deleteAccount(any(), any());
+    }
+
+    @Test
+    @DisplayName("DELETE /{id} 400: path id 36자 초과 → @Size 위반 → COMMON4001, service 미호출")
+    void deleteAccount_path_길이_초과_400() throws Exception {
+        String tooLong = "a".repeat(37); // @Size(max=36) 위반 → ConstraintViolationException → COMMON4001
+        mockMvc.perform(delete("/api/v1/accounts/{id}", tooLong)
+                        .with(authedJwt()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verify(bankAccountService, never()).deleteAccount(any(), any());
     }
 
     // --- POST /{id}/charge ---
