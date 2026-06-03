@@ -235,6 +235,18 @@ class PostControllerTest {
         verifyNoInteractions(postService);
     }
 
+    @Test
+    @DisplayName("GET 400: page 상한(10000) 초과 → COMMON4001(@Max 위반), service 미호출")
+    void getPosts_page_초과() throws Exception {
+        mockMvc.perform(get("/api/v1/community/posts")
+                        .with(authedJwt())
+                        .param("page", "10001"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(postService);
+    }
+
     // ----- PATCH /posts/{id} -----
 
     @Test

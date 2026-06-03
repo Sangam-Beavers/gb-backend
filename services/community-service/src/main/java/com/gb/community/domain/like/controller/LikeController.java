@@ -89,7 +89,8 @@ public class LikeController {
     public ApiResponse<LikedPostListResponse> getLikedPosts(
             @CurrentUserPublicId String userPublicId,
             @RequestParam(required = false, defaultValue = "latest") String sort,
-            @RequestParam(defaultValue = "0") @Min(0) int page,
+            // page 상한(10000): 깊은 페이지네이션(거대한 OFFSET) 방어 가드. size와 대칭(둘 다 @Max).
+            @RequestParam(defaultValue = "0") @Min(0) @Max(10000) int page,
             // size 상한(100)은 과도한 조회를 막는 방어적 가드.
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return ApiResponse.success(likeService.getLikedPosts(userPublicId, sort, page, size));

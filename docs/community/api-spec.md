@@ -156,7 +156,70 @@
 
 ## 7. 댓글 목록 조회
 
-`GET /api/v1/community/posts/{id}/comments?page=&size=` · Auth ✅ → 댓글 배열(+ `parent_comment_public_id`, 현재는 항상 null — 대댓글 미지원) + 페이지 메타.
+`GET /api/v1/community/posts/{id}/comments?page=&size=` · Auth ✅
+
+특정 게시글에 달린 댓글을 **작성순(오래된 순)** 으로 페이지네이션해 반환한다. 삭제된 댓글(`deleted_at IS NOT NULL`)은 결과에서 제외된다. 작성자 표시 정보(닉네임/인증 배지)는 MemberClient로 조회해 채운다(DB 직접 SELECT 없음 — MSA 경계, CLAUDE.md §7). 본인 식별을 쓰지 않지만 인증은 필요하다.
+
+**대댓글은 본 사이클 범위 밖** — 모든 항목의 `parent_comment_public_id`는 항상 null이다(§6과 동일 항목 형태).
+
+**Path Variable**: `id` = 게시글 public_id (UUID), 최대 36자
+
+**Query Parameter**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `page` | integer | X | 0-base 페이지 번호 (기본 0, 가드 0~10000) |
+| `size` | integer | X | 페이지당 개수 (기본 20, 가드 1~100) |
+
+**정렬**: `created_at ASC, id ASC` — 작성순(오래된 댓글이 먼저). created_at 동률은 id ASC를 보조 키로 사용한다(id는 외부 비노출, 정렬 키로만).
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `comments` | array | N | 댓글 목록 (작성순) |
+| `comments[].public_id` | string | N | 댓글 UUID |
+| `comments[].post_public_id` | string | N | 게시글 UUID |
+| `comments[].parent_comment_public_id` | string | Y | 부모 댓글 UUID. **현 사이클은 항상 null** (대댓글 미지원) |
+| `comments[].content` | string | N | 댓글 내용 |
+| `comments[].author_nickname` | string | N | 작성자 닉네임 (MemberClient 조회) |
+| `comments[].author_is_verified` | boolean | N | 작성자 인증 배지 여부 |
+| `comments[].created_at` | string | N | 작성 시각 (ISO 8601 UTC `Z`) |
+| `page` | integer | N | 현재 페이지 번호 (0-base) |
+| `size` | integer | N | 페이지당 개수 |
+| `total_elements` | integer | N | 전체 댓글 수 (삭제 제외) |
+| `total_pages` | integer | N | 전체 페이지 수 |
+
+```json
+{
+  "success": true,
+  "data": {
+    "comments": [
+      {
+        "public_id": "c1d2e3f4-...",
+        "post_public_id": "a1b2c3d4-...",
+        "parent_comment_public_id": null,
+        "content": "저도 작년에 똑같은 일 겪었어요. 노동부 1350에 신고해 차액 다 받았어요.",
+        "author_nickname": "Minh",
+        "author_is_verified": true,
+        "created_at": "2026-05-26T04:15:30Z"
+      }
+    ],
+    "page": 0,
+    "size": 20,
+    "total_elements": 1,
+    "total_pages": 1
+  },
+  "message": "요청이 성공적으로 처리되었습니다."
+}
+```
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (page/size 범위 위반, path variable 빈값/36자 초과) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | COMMUNITY4001 | 존재하지 않는 게시글입니다. (없거나 삭제된 게시글) |
+
+> 응답 항목은 §6(댓글 작성)의 `data` 형태 + 페이지 메타다. 코드 구현은 명세보다 풍부할 수 있으나(예: id ASC tie-break) SSOT는 본 표다.
 
 ---
 

@@ -20,6 +20,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,16 +29,17 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 커뮤니티 댓글 API — 댓글 목록 조회 (api-spec §7).
+ * 커뮤니티 댓글 API — 목록 조회 / 작성 / 삭제 (api-spec §6·§7·§7-2).
  *
- * <p>{@code GET /posts/{id}/comments}는 {@code PostController}/{@code LikeController}와 같은 베이스 경로
+ * <p>{@code /posts/{id}/comments}는 {@code PostController}/{@code LikeController}와 같은 베이스 경로
  * ({@code /api/v1/community/posts})에 공존한다. 리터럴 세그먼트(/comments)가 path-variable과 충돌하지 않아
  * 별도 컨트롤러로 둔다(도메인형 패키지 분리, CLAUDE.md §3).
  *
- * <p>본 PR 범위는 댓글 목록 조회만 — 작성/수정/삭제·대댓글·좋아요는 별도 이슈다.
+ * <p>현재 댓글 목록 조회·작성·삭제를 제공한다. 대댓글({@code parent_comment_public_id} 항상 null)·수정은 별도 이슈다.
  */
 @Tag(name = "Community Comment", description = "커뮤니티 댓글 API")
 @RestController
@@ -99,7 +101,8 @@ public class CommentController {
     @GetMapping("/{id}/comments")
     public ApiResponse<CommentListResponse> getComments(
             @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId,
-            @RequestParam(defaultValue = "0") @Min(0) int page,
+            // page 상한(10000): 깊은 페이지네이션(거대한 OFFSET) 방어 가드. size와 대칭(둘 다 @Max).
+            @RequestParam(defaultValue = "0") @Min(0) @Max(10000) int page,
             // size 상한(100)은 명세에 없지만 과도한 조회를 막는 방어적 가드(Post/Like 목록과 동일).
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return ApiResponse.success(commentService.getComments(postPublicId, page, size));
@@ -138,6 +141,7 @@ public class CommentController {
                             examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000)))
     })
     @PostMapping("/{id}/comments")
+    @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<CommentResponse> createComment(
             @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId,
             @CurrentUserPublicId String userPublicId,

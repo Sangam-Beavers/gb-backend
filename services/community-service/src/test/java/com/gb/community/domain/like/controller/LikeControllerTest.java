@@ -132,6 +132,18 @@ class LikeControllerTest {
         verifyNoInteractions(likeService);
     }
 
+    @Test
+    @DisplayName("GET /posts/liked 400: page 상한(10000) 초과 → COMMON4001(@Max 위반), service 미호출")
+    void getLikedPosts_page_초과() throws Exception {
+        mockMvc.perform(get("/api/v1/community/posts/liked")
+                        .with(authedJwt())
+                        .param("page", "10001"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(likeService);
+    }
+
     // ----- POST /posts/{id}/likes -----
 
     @Test
