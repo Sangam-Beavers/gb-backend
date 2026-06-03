@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.gb.community.domain.post.entity.Post;
 import com.gb.community.domain.post.entity.PostCategory;
 import java.time.LocalDateTime;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -186,7 +187,96 @@ class PostRepositoryTest {
         assertThat(postRepository.findByPublicIdAndDeletedAtIsNull("no-such-uuid")).isEmpty();
     }
 
+    // ----- findTopByCategoryOrderByCommentCountDesc (주요 QnA 목록, api-spec §8) -----
+    //
+    // QnA 전용 검증은 setUp의 p1~p5(JOB/VISA/QUESTION)와 겹치지 않는 카테고리
+    // (LIFE_INFO/COUNTRY/RESIDENCE)만 써서 격리한다 — 같은 트랜잭션 안에 p1~p5도 있지만
+    // 카테고리 필터로 자연히 빠지므로 어서션이 오염되지 않는다.
+
+    @Test
+    @DisplayName("QnA: comment_count DESC 정렬 + 동률은 id DESC tie-break")
+    void findTopByCategory_정렬_답변수DESC_id_tiebreak() {
+        Post c2 = persistQnaPost(PostCategory.LIFE_INFO, 2, false);
+        Post c5old = persistQnaPost(PostCategory.LIFE_INFO, 5, false); // 먼저 persist → 낮은 id
+        Post c5new = persistQnaPost(PostCategory.LIFE_INFO, 5, false); // 나중 persist → 높은 id
+        Post c1 = persistQnaPost(PostCategory.LIFE_INFO, 1, false);
+        em.flush();
+        em.clear();
+
+        List<Post> result = postRepository.findTopByCategoryOrderByCommentCountDesc(
+                PostCategory.LIFE_INFO, PageRequest.of(0, 10));
+
+        // 5,5,2,1 — 동률(5)은 id DESC라 나중에 persist된 c5new가 c5old보다 앞.
+        assertThat(result).extracting(Post::getPublicId)
+                .containsExactly(c5new.getPublicId(), c5old.getPublicId(),
+                        c2.getPublicId(), c1.getPublicId());
+    }
+
+    @Test
+    @DisplayName("QnA: 삭제글(deleted_at)은 답변수가 더 높아도 결과에서 제외")
+    void findTopByCategory_삭제글_제외() {
+        Post active = persistQnaPost(PostCategory.COUNTRY, 3, false);
+        persistQnaPost(PostCategory.COUNTRY, 99, true); // 삭제됨 — 답변수 99여도 빠져야 함
+        em.flush();
+        em.clear();
+
+        List<Post> result = postRepository.findTopByCategoryOrderByCommentCountDesc(
+                PostCategory.COUNTRY, PageRequest.of(0, 10));
+
+        assertThat(result).extracting(Post::getPublicId).containsExactly(active.getPublicId());
+    }
+
+    @Test
+    @DisplayName("QnA: category 필터 — 다른 카테고리 글은 답변수가 높아도 제외")
+    void findTopByCategory_타카테고리_제외() {
+        Post target = persistQnaPost(PostCategory.RESIDENCE, 5, false);
+        persistQnaPost(PostCategory.COUNTRY, 99, false); // 다른 카테고리 — 제외돼야 함
+        em.flush();
+        em.clear();
+
+        List<Post> result = postRepository.findTopByCategoryOrderByCommentCountDesc(
+                PostCategory.RESIDENCE, PageRequest.of(0, 10));
+
+        assertThat(result).extracting(Post::getPublicId).containsExactly(target.getPublicId());
+    }
+
+    @Test
+    @DisplayName("QnA: PageRequest.of(0, size)로 Top N 제한 — size=2면 상위 2건만(최저건 제외)")
+    void findTopByCategory_TopN_size제한() {
+        Post c3 = persistQnaPost(PostCategory.LIFE_INFO, 3, false);
+        Post c2 = persistQnaPost(PostCategory.LIFE_INFO, 2, false);
+        persistQnaPost(PostCategory.LIFE_INFO, 1, false); // 상위 2건 밖이라 제외
+        em.flush();
+        em.clear();
+
+        List<Post> result = postRepository.findTopByCategoryOrderByCommentCountDesc(
+                PostCategory.LIFE_INFO, PageRequest.of(0, 2));
+
+        assertThat(result).hasSize(2);
+        assertThat(result).extracting(Post::getPublicId)
+                .containsExactly(c3.getPublicId(), c2.getPublicId());
+    }
+
     // ----- helpers -----
+
+    /**
+     * QnA Top N 쿼리 검증용 — comment_count를 native UPDATE로 통제한 글 1건 영속화.
+     * Post 빌더는 comment_count 기본값(0)만 가능해 정렬을 결정적으로 만들기 위해 native로 박는다
+     * (persistPost가 created_at/like_count를 박는 것과 동일 기법).
+     */
+    private Post persistQnaPost(PostCategory category, int commentCount, boolean deleted) {
+        Post p = Post.of(U1, category, "QnA 제목", "본문");
+        if (deleted) {
+            p.softDelete();
+        }
+        em.persist(p); // IDENTITY → INSERT 즉시 실행되어 id 채워짐(뒤에 persist될수록 큰 id)
+        em.getEntityManager()
+                .createNativeQuery("UPDATE posts SET comment_count = ?1 WHERE id = ?2")
+                .setParameter(1, commentCount)
+                .setParameter(2, p.getId())
+                .executeUpdate();
+        return p;
+    }
 
     /**
      * 게시글 1건 영속화 후 native UPDATE로 created_at/like_count를 지정값으로 덮어쓴다.
