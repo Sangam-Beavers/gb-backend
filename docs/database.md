@@ -1,7 +1,7 @@
 # 데이터베이스 설계 (Database)
 
 > **DB:** MySQL 8.0 (Aurora MySQL = 운영/스테이징 · 온프렘 MySQL = 개발, 공통 스키마)
-> **총 테이블 수:** 14개
+> **총 테이블 수:** 15개
 > **AI 분석 결과:** MySQL `document_results`에 **직접 저장** — **DynamoDB 미사용**
 > Claude Code는 Entity/Repository를 만들 때 이 스키마와 참조 규칙을 그대로 따른다.
 
@@ -71,6 +71,7 @@
 | `nationality` | VARCHAR(10) | NOT NULL | 국적 코드 (KR, VN, PH 등) |
 | `language` | VARCHAR(10) | NOT NULL | 주 사용 언어 (BCP 47 소문자, 예: "vi") |
 | `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | 인증 배지 여부 |
+| `bio` | VARCHAR(200) | NULL | 자기소개(한 줄, 마이페이지 입력, 선택값) |
 | `created_at` | DATETIME | NOT NULL | |
 | `updated_at` | DATETIME | NOT NULL | |
 | `deleted_at` | DATETIME | NULL | soft delete |
@@ -116,6 +117,7 @@
 | `id` | BIGINT | PK, AI | |
 | `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | 대외 UUID |
 | `user_public_id` | VARCHAR(36) | UNIQUE, NOT NULL | **회원 논리 참조 (물리 FK 없음)** |
+| `status` | VARCHAR(20) | NOT NULL | 지갑 상태(WalletStatus: ACTIVE / SUSPENDED / CLOSED). 생성 시 ACTIVE |
 | `transfer_pin_hash` | VARCHAR(72) | NULL | 송금 PIN(숫자 6자리) BCrypt 해시. null = 미설정 |
 | `created_at` | DATETIME | NOT NULL | |
 | `updated_at` | DATETIME | NOT NULL | |
@@ -375,9 +377,11 @@
 | --- | --- | --- | --- |
 | 송금 분산 락 (wallet 단위, 두 개 MultiLock) | `lock:wallet:{walletId}` | Redisson MultiLock(ID 오름차순, waitTime=3s, leaseTime=5s) | 5초 |
 | 계좌 등록 직렬화 락 (user 단위, 단일 키) | `lock:account-register:{userPublicId}` | Redisson Lock(waitTime=3s, leaseTime=5s). 획득 실패 시 503(fail-closed) | 5초(lease) |
+| 정기송금 스케줄러 단일 실행 락 | `scheduler:scheduled-transfer` | Redisson Lock(tryLock, waitTime=3s, leaseTime=5s). 멀티 파드 중 1개만 실행 → 이중 송금 방지 | 5초(lease) |
 | 멱등성 키 (송금 REMITTANCE) | `idempotency:remittance:{key}:{userPublicId}:{bankAccountPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 계좌)로 스코프 → 교차 사용자/계좌는 캐시 미스 → DB(rebuildFromPrior)가 ACCOUNT4001로 차단 | 24시간 |
 | 멱등성 키 (송금 INTERNAL_TRANSFER) | `idempotency:internal_transfer:{key}:{userPublicId}:{receiverPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 수신자)로 스코프 → 교차 응답 노출 차단(rebuildFromPrior → WALLET4001) | 24시간 |
 | 멱등성 키 (충전, 요청자·계좌 스코프) | `idempotency:charge:{key}:{userPublicId}:{accountPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 계좌)로 스코프 → 교차 사용자/계좌는 캐시 미스 → DB(rebuildFromPrior)가 ACCOUNT4001로 차단 | 24시간 |
+| 멱등성 키 (환전 EXCHANGE, 요청자 스코프) | `idempotency:exchange:{key}:{userPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자)로 스코프 → 교차 사용자는 캐시 미스 → DB(rebuildFromPrior)가 차단 | 24시간 |
 | 계좌 인증(verify) rate-limit (IP 단위) | `ratelimit:account-verify:{clientIp}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 ACCOUNT4005(429), Redis 장애 시 fail-open | 윈도(기본 60초) |
 | 송금 rate-limit (user 단위) | `ratelimit:transfer:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 TRANSFER4006(429), Redis 장애 시 fail-open | 윈도(기본 60초, 30회) |
 | 송금 PIN 실패 카운터 (user 단위) | `pin:fail:{userPublicId}` | `INCR`(첫 실패 시 `EXPIRE 600`). 5회 도달 시 잠금 키 설정 후 카운트 삭제 | 10분(윈도) |
