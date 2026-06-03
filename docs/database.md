@@ -384,6 +384,7 @@
 | 송금 PIN 잠금 (user 단위) | `pin:lock:{userPublicId}` | `SET locked EX 600`(5회 연속 실패 시). 존재하면 PIN 검증 TRANSFER4008(429) | 10분 |
 | 토큰 블랙리스트 | `blacklist:{token}` | `SET ... 1 EX <남은만료>` | 토큰 만료까지 |
 | 로그인 실패 카운터 | `login:fail:user:{userPublicId}` | `INCR` + `EXPIRE 300` | 5분 |
+| 비밀번호 재설정 토큰 (member) | `pwreset:{token}` | `SET <email> EX 1800`. 검증 시 조회해 없으면 만료/무효(MEMBER4004), 사용 후 삭제(재사용 방지) | 30분 |
 | 게시글 조회수 | `view:post:{postPublicId}` | `INCR` (배치로 DB 동기화) | — |
 | 환율 캐시 | `rate:{from}-{to}` | `SET ... <rate> EX 60` | 60초 |
 | 세션 캐시 | `session:{id}` | TTL 30분 | 30분 |

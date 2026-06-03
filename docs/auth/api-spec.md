@@ -164,7 +164,7 @@ message: "회원가입이 완료되었습니다."
 ## 6. 비밀번호 찾기/재설정 — ⚠️ 방식 B 재정의 + SMTP 선행 필요
 
 - 재설정 링크 발송: `POST /api/v1/auth/password/reset-request` (Body: `email`) → 이메일 발송. 200.
-- 비밀번호 재설정: `POST /api/v1/auth/password/reset` (Body: `token`, `new_password`) → 200.
+- 비밀번호 재설정: `POST /api/v1/auth/password/reset` (Body: `token`, `new_password`) → 200. 토큰 무효/만료 시 `400 MEMBER4004`.
 
 > 방식 B에서 비밀번호는 IdP가 보관하므로 재설정도 IdP를 경유한다(Authentik recovery flow 위임 또는
 > 백엔드가 IdP `set_password` 호출). 어느 쪽이든 **재설정 메일 발송용 SMTP 인프라가 선행**돼야 한다.
