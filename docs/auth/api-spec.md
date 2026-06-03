@@ -32,7 +32,7 @@
 | --- | --- | --- | --- |
 | 이메일 중복 확인 | GET | `/api/v1/members/check-email?email={}` | ❌ |
 | 닉네임 중복 확인 | GET | `/api/v1/members/check-nickname?nickname={}` | ❌ |
-| Google 가입 후 추가 정보 | POST/PATCH | `/api/v1/members/profile` (소셜 프로필 보완) | ✅ |
+| Google 가입 후 추가 정보 | POST | `/api/v1/members/me/social-profile` (소셜 프로필 보완) | ✅ |
 | 내 프로필 조회 | GET | `/api/v1/members/me` | ✅ |
 | 프로필 수정 | PATCH | `/api/v1/members/me` | ✅ |
 | 프로필 사진 변경 (※ 미구현) | PATCH | `/api/v1/members/me/profile-image` | ✅ |
