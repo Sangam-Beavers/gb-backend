@@ -84,7 +84,9 @@
 | `created_at` | string | N | 작성 시각(UTC Z) |
 | `updated_at` | string | N | 수정 시각(UTC Z) |
 
-**Error**: 400 COMMON4001 / 400 COMMON4002 / 401 AUTH4011
+**Error**: 400 COMMON4001 / 401 AUTH4011
+
+> 필수값 누락·잘못된 category 등 Bean Validation 실패는 `GlobalExceptionHandler`가 **COMMON4001로 통일**한다(컨트롤러 Swagger와 일치). `COMMON4002`(MISSING_REQUIRED_FIELD)는 community 흐름에서 던지지 않는다.
 
 ---
 
