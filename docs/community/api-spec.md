@@ -22,7 +22,7 @@
 | 댓글 목록 조회 | GET | `/api/v1/community/posts/{id}/comments?page=&size=` | ✅ |
 | 댓글 작성 | POST | `/api/v1/community/posts/{postId}/comments` | ✅ |
 | 댓글 삭제 | DELETE | `/api/v1/community/posts/{postId}/comments/{commentId}` | ✅ |
-| 주요 QnA/FAQ | GET | `/api/v1/community/faq` | ✅ |
+| 주요 QnA 목록 | GET | `/api/v1/community/qna?category=&size=` | ❌ (공개) |
 
 ---
 
@@ -119,41 +119,128 @@
 
 `POST /api/v1/community/posts/{postId}/comments` · Auth ✅
 
-**Path Variable**: `postId` = 게시글 public_id (UUID)
+게시글에 댓글을 작성한다. 작성자는 JWT `public_id` claim에서 식별된다.
+
+**대댓글은 본 사이클 범위 밖** — 모든 댓글이 최상위(`parent_id=null`)로 INSERT된다. 향후 대댓글 도입 시 Request에 `parent_comment_public_id` 필드 추가 + Service에 부모 검증·1-depth 강제 로직을 추가한다 (Comment.parent_id 컬럼·Response.parent_comment_public_id 필드는 이미 준비됨).
+
+**Path Variable**: `postId` = 게시글 public_id (UUID), 최대 36자
 
 **Request Body**
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `content` | string | O | 댓글 내용 |
-| `parent_comment_public_id` | string | X | 부모 댓글 UUID. null이면 최상위, 있으면 대댓글 |
+| `content` | string | O | 댓글 내용 (1~2000자, 공백만 입력 차단) |
 
 **Response 201** — `data`
 | 필드 | 타입 | nullable | 설명 |
 | --- | --- | --- | --- |
 | `public_id` | string | N | 댓글 UUID |
 | `post_public_id` | string | N | 게시글 UUID |
-| `parent_comment_public_id` | string | Y | 부모 댓글 UUID. 최상위면 null |
+| `parent_comment_public_id` | string | Y | 부모 댓글 UUID. **현 사이클은 항상 null** (대댓글 미지원) |
 | `content` | string | N | 댓글 내용 |
-| `author_nickname` | string | N | 작성자 닉네임 |
+| `author_nickname` | string | N | 작성자 닉네임 (MemberClient 조회) |
 | `author_is_verified` | boolean | N | 작성자 인증 배지 여부 |
-| `created_at` | string | N | 작성 시각(UTC Z) |
+| `created_at` | string | N | 작성 시각 (ISO 8601 UTC `Z`) |
 
-작성 성공 시 게시글 `comment_count` +1.
+작성 성공 시 게시글 `comment_count`가 1 증가한다 (같은 트랜잭션 내 dirty checking).
 
-**Error**: 401 AUTH4011 / 404 COMMUNITY4001(게시글 없음) / 404 COMMUNITY4002(부모 댓글 없음)
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (content 빈값/2000자 초과/path variable 형식 위반) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | COMMUNITY4001 | 존재하지 않는 게시글입니다. |
+
+> COMMUNITY4002(부모 댓글 없음)는 대댓글 도입 시 활성화. 현재는 사용 안 함.
 
 ---
 
-## 7. 댓글 목록 / 삭제
+## 7. 댓글 목록 조회
 
-- 목록: `GET /api/v1/community/posts/{id}/comments?page=&size=` → 댓글 배열(+ `parent_comment_public_id`로 대댓글 구조) + 페이지 메타.
-- 삭제: `DELETE /api/v1/community/posts/{postId}/comments/{commentId}` (본인만) → comment_count -1.
+`GET /api/v1/community/posts/{id}/comments?page=&size=` · Auth ✅ → 댓글 배열(+ `parent_comment_public_id`, 현재는 항상 null — 대댓글 미지원) + 페이지 메타.
 
 ---
 
-## 8. 주요 QnA / FAQ
+## 7-2. 댓글 삭제
 
-`GET /api/v1/community/faq` · Auth ✅ → 자주 묻는 질문 목록.
+`DELETE /api/v1/community/posts/{postId}/comments/{commentId}` · Auth ✅
+
+본인이 작성한 댓글을 soft delete한다(`deleted_at` 갱신, row 보존). 삭제 성공 시 게시글의 `comment_count`가 1 감소한다(같은 트랜잭션 내 dirty checking, 음수 방지 가드). 작성자는 JWT `public_id` claim에서 식별된다.
+
+**대댓글은 본 사이클 범위 밖** — "삭제된 댓글이 부모면 자식 유지" 같은 정책은 대댓글 도입 시 활성화한다.
+
+**Path Variable**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `postId` | string | O | 게시글 public_id (UUID), 최대 36자 |
+| `commentId` | string | O | 댓글 public_id (UUID), 최대 36자 |
+
+**Response 200** — `data: null`
+
+```json
+{ "success": true, "data": null, "message": "요청이 성공적으로 처리되었습니다." }
+```
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (path variable 빈값/36자 초과) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 403 | COMMON4031 | 본인이 작성한 댓글이 아닙니다. |
+| 404 | COMMUNITY4001 | 존재하지 않는 게시글입니다. |
+| 404 | COMMUNITY4002 | 존재하지 않는 댓글입니다. |
+
+> **COMMUNITY4002 통합 처리**: (a) 댓글 publicId 미존재, (b) 이미 soft delete된 댓글의 재삭제, (c) URL의 `postId`와 댓글의 실제 게시글이 다른 경우 — 셋 다 COMMUNITY4002로 통일한다. 의미상 모두 "이 게시글에 그런 댓글 없음"이며, RESTful 자원 경로 일관성 보장 + 권한 문제(COMMON4031)와 혼동을 피한다.
+>
+> **참고 (v2 명세 캡처 정정)**: Notion 명세에 `COMMON4011`(401)로 적혀 있던 부분은 표준 `AUTH4011`로 정정(CLAUDE.md §9 + 공통 표준). "이미 삭제된 댓글 재삭제"는 별도 코드 신설 대신 COMMUNITY4002로 통합 처리(404 의미상 동일).
+
+---
+
+## 8. 주요 QnA 목록
+
+`GET /api/v1/community/qna` · **Auth ❌ (공개)**
+
+특정 카테고리의 활성 게시글을 답변(댓글) 수 내림차순으로 상위 N건 반환한다. 페이지네이션 메타는 없다(Top N 고정 목록). 작성자 정보·본문은 응답에 포함하지 않으며, 상세는 단건 조회 API(§3 `GET /posts/{id}`)로 별도 조회한다.
+
+> **인증 불필요**: 비로그인 사용자도 인기 질문을 둘러볼 수 있도록 공개로 둔다(SecurityConfig `permitAll`). 본인 식별을 쓰지 않는 read-only Top N 조회라 보안 영향 없음. 다른 community 엔드포인트는 모두 Auth ✅.
+
+**Query Parameter**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `category` | string | X | `LIFE_INFO / JOB / VISA / COUNTRY / RESIDENCE / QUESTION`. 미입력 시 `QUESTION` 카테고리만 반환 |
+| `size` | integer | X | 반환 개수 (기본 5, 가드 1~100) |
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `posts` | array | N | QnA 게시글 목록 (답변 수 내림차순, 동률은 최근 글 우선) |
+| `posts[].public_id` | string | N | 게시글 UUID |
+| `posts[].title` | string | N | 제목 |
+| `posts[].comment_count` | integer | N | 답변(댓글) 수 |
+| `posts[].created_at` | string | N | 작성 시각 (ISO 8601 UTC `Z`) |
+
+```json
+{
+  "success": true,
+  "data": {
+    "posts": [
+      { "public_id": "a1b2c3d4-...", "title": "E-9 비자로 근무지 변경이 가능한가요?", "comment_count": 7, "created_at": "2026-05-20T09:00:00Z" },
+      { "public_id": "b2c3d4e5-...", "title": "건강보험 피부양자 등록은 어떻게 하나요?", "comment_count": 4, "created_at": "2026-05-18T14:20:00Z" }
+    ]
+  },
+  "message": "요청이 성공적으로 처리되었습니다."
+}
+```
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (잘못된 카테고리 / size 범위 1~100 위반) |
+
+> **명세 모호성 해석 (옵션 A)**: 원 명세에 "category = QUESTION 필터"(고정)와 "Query category"(상위 카테고리 필터 — LIFE_INFO 등)가 동시에 적혀 있으나 현 `PostCategory` enum은 단일 카테고리만 갖는다. 가장 자연스러운 운영 의미로 **"category 미입력 → QUESTION 카테고리 / 입력 → 해당 카테고리"** 로 통일했다 (답변 많은 인기글 = QnA의 일반화).
+>
+> **인증 정책**: Notion 명세 캡처에 401 `COMMON4011`(인증 필요)이 적혀 있으나, 본 API는 비로그인 사용자 접근이 가능해야 하므로 SecurityConfig에서 공개 처리 → 401 응답 자체가 발생하지 않는다.
+>
+> **정렬 tie-break**: `comment_count DESC, id DESC` — comment_count 동률에서 최근 글이 위로 오도록 id DESC를 보조 키로 사용한다(id는 외부 비노출, 정렬 키로만).
 
 ---
 
