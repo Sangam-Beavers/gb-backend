@@ -32,12 +32,12 @@
 | --- | --- | --- | --- |
 | 이메일 중복 확인 | GET | `/api/v1/members/check-email?email={}` | ❌ |
 | 닉네임 중복 확인 | GET | `/api/v1/members/check-nickname?nickname={}` | ❌ |
-| Google 가입 후 추가 정보 | POST/PATCH | `/api/v1/members/profile` (소셜 프로필 보완) | ✅ |
+| Google 가입 후 추가 정보 | POST | `/api/v1/members/me/social-profile` (소셜 프로필 보완) | ✅ |
 | 내 프로필 조회 | GET | `/api/v1/members/me` | ✅ |
 | 프로필 수정 | PATCH | `/api/v1/members/me` | ✅ |
-| 프로필 사진 변경 | PATCH | `/api/v1/members/me/profile-image` | ✅ |
-| 인증 상태 조회 | GET | `/api/v1/members/me/verification` | ✅ |
-| 신분증 인증 요청 | POST | `/api/v1/members/me/verification` | ✅ |
+| 프로필 사진 변경 (※ 미구현) | PATCH | `/api/v1/members/me/profile-image` | ✅ |
+| 인증 상태 조회 (※ 미구현) | GET | `/api/v1/members/me/verification` | ✅ |
+| 신분증 인증 요청 (※ 미구현) | POST | `/api/v1/members/me/verification` | ✅ |
 | 언어 설정 조회 | GET | `/api/v1/members/me/language` | ✅ |
 | 언어 설정 변경 | PATCH | `/api/v1/members/me/language` | ✅ |
 | 탈퇴 | DELETE | `/api/v1/members/me` | ✅ |
@@ -164,7 +164,7 @@ message: "회원가입이 완료되었습니다."
 ## 6. 비밀번호 찾기/재설정 — ⚠️ 방식 B 재정의 + SMTP 선행 필요
 
 - 재설정 링크 발송: `POST /api/v1/auth/password/reset-request` (Body: `email`) → 이메일 발송. 200.
-- 비밀번호 재설정: `POST /api/v1/auth/password/reset` (Body: `token`, `new_password`) → 200.
+- 비밀번호 재설정: `POST /api/v1/auth/password/reset` (Body: `token`, `new_password`) → 200. 토큰 무효/만료 시 `400 MEMBER4004`.
 
 > 방식 B에서 비밀번호는 IdP가 보관하므로 재설정도 IdP를 경유한다(Authentik recovery flow 위임 또는
 > 백엔드가 IdP `set_password` 호출). 어느 쪽이든 **재설정 메일 발송용 SMTP 인프라가 선행**돼야 한다.
@@ -191,7 +191,7 @@ message: "회원가입이 완료되었습니다."
 | `nickname` | string | N | 닉네임 |
 | `nationality` | string | N | 국적 코드 |
 | `is_verified` | boolean | N | 인증 배지 여부 |
-| `profile_image_url` | string | Y | 프로필 사진 URL (미설정 시 null) |
+| `profile_image_url` | string | Y | 프로필 사진 URL. **현재 이미지 업로드 도메인 미구현 — 항상 null** |
 | `created_at` | string | N | 가입 일시 (ISO 8601 UTC Z) |
 
 **Error**: 401 AUTH4011 / 404 MEMBER4001
@@ -225,7 +225,7 @@ message: "회원가입이 완료되었습니다."
 
 ## 10. 신분증 인증 요청
 
-`POST /api/v1/members/me/verification` · Auth ✅
+`POST /api/v1/members/me/verification` · Auth ✅ **(※ 미구현 — `user_verifications` 엔티티·AES-256 부재)**
 
 **Request Body**
 | 필드 | 타입 | 필수 | 설명 |
@@ -248,7 +248,7 @@ message: "신분증 인증 요청이 접수되었습니다. 검토 후 결과를
 
 ## 11. 인증 상태 조회
 
-`GET /api/v1/members/me/verification` · Auth ✅
+`GET /api/v1/members/me/verification` · Auth ✅ **(※ 미구현 — `user_verifications` 엔티티 부재)**
 
 **Response 200** — `data`
 | 필드 | 타입 | nullable | 설명 |

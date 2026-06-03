@@ -14,7 +14,6 @@ import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
 import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
 import com.gb.wallet.domain.transaction.dto.request.ValidateScheduledRequest;
-import com.gb.wallet.domain.transaction.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse.AccountItem;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
@@ -34,7 +33,6 @@ import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.MemberInfo;
-import com.gb.wallet.global.client.dto.AccountHolder;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.WalletStatus;
@@ -288,32 +286,6 @@ class TransferServiceTest {
 
         assertThat(response.getAccounts()).isEmpty();
         verifyNoInteractions(bankAccountRepository, memberClient);
-    }
-
-    @Test
-    @DisplayName("getAccountHolder 정상: BankClient.inquiry 결과의 예금주명이 응답에 매핑된다")
-    void getAccountHolder_정상() {
-        given(bankClient.inquiry("KOOKMIN", "123456")).willReturn(new AccountHolder("김민수"));
-
-        AccountHolderResponse response = transferService.getAccountHolder("KOOKMIN", "123456");
-
-        assertThat(response.getAccountHolderName()).isEqualTo("김민수");
-
-        // 이 API가 DB/Member/BankAccount 안 본다는 설계 못 박기.
-        verifyNoInteractions(walletRepository, transactionRepository, bankAccountRepository, memberClient);
-    }
-
-    @Test
-    @DisplayName("getAccountHolder BankClient가 BusinessException(ACCOUNT4001) 던지면 그대로 전파")
-    void getAccountHolder_BankClient_예외_전파() {
-        BusinessException bankFailure = new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND);
-        given(bankClient.inquiry("KOOKMIN", "no-such")).willThrow(bankFailure);
-
-        // Service가 추가 try-catch/변환 없이 동일 인스턴스 그대로 흘려보내는지 검증.
-        assertThatThrownBy(() -> transferService.getAccountHolder("KOOKMIN", "no-such"))
-                .isSameAs(bankFailure);
-
-        verifyNoInteractions(walletRepository, transactionRepository, bankAccountRepository, memberClient);
     }
 
     @Test

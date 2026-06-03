@@ -3,6 +3,7 @@ package com.gb.wallet.domain.wallet.dto.response;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.entity.WalletBalance;
 import io.swagger.v3.oas.annotations.media.Schema;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -99,7 +100,7 @@ public class WalletBalanceResponse {
             return BalanceItem.builder()
                     .currencyCode(walletBalance.getCurrencyCode().name())
                     // 금액은 소수점 4자리 고정 String (지수표기 방지). DB가 DECIMAL(18,4)이라 scale 확장은 안전.
-                    .balance(walletBalance.getBalance().setScale(4).toPlainString())
+                    .balance(walletBalance.getBalance().setScale(4, RoundingMode.HALF_UP).toPlainString())
                     .build();
         }
     }

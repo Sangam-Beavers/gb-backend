@@ -3,7 +3,6 @@ package com.gb.wallet.domain.transaction.service;
 import com.gb.wallet.domain.transaction.dto.request.TransferExecuteRequest;
 import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
 import com.gb.wallet.domain.transaction.dto.request.ValidateScheduledRequest;
-import com.gb.wallet.domain.transaction.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
@@ -40,12 +39,6 @@ public interface TransferService {
      * 1건씩, 최근순으로 size건 반환. size는 1~50, 기본 10. wallet 도메인 내부 DB만 사용한다.
      */
     RecentAccountsResponse getRecentRemittanceAccounts(String userPublicId, int size);
-
-    /**
-     * 예금주 실명 조회. {@code BankClient.inquiry}로 외부 Mock 은행만 호출하며 DB는 보지 않는다.
-     * 외부 에러는 BankErrorMapper가 BusinessException으로 변환해 던지므로 Service는 그대로 전파한다.
-     */
-    AccountHolderResponse getAccountHolder(String bankCode, String accountNumber);
 
     /**
      * 송금 수수료 계산. 순수 계산 로직 — DB·외부 호출 없음.

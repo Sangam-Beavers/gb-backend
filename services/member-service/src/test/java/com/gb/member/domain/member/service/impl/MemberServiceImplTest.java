@@ -29,6 +29,7 @@ import com.gb.member.global.client.IdpUserClient;
 import com.gb.member.global.exception.code.MemberErrorCode;
 import com.gb.member.global.mail.EmailSender;
 import com.gb.member.global.redis.PasswordResetTokenStore;
+import java.time.LocalDateTime;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -294,17 +295,17 @@ class MemberServiceImplTest {
     }
 
     @Test
-    @DisplayName("재설정 실행: 유효한 토큰이면 IdP 비번 변경 후 토큰 삭제")
+    @DisplayName("재설정 실행: 유효한 토큰이면 원자 소비(consume) 후 IdP 비번 변경")
     void resetPassword_성공() {
         PasswordResetRequest request = new PasswordResetRequest();
         ReflectionTestUtils.setField(request, "token", "valid-token");
         ReflectionTestUtils.setField(request, "newPassword", "NewP@ssw0rd!");
-        when(passwordResetTokenStore.findEmail("valid-token")).thenReturn(Optional.of("user@example.com"));
+        when(passwordResetTokenStore.consume("valid-token")).thenReturn(Optional.of("user@example.com"));
 
         memberService.resetPassword(request);
 
+        verify(passwordResetTokenStore).consume("valid-token"); // 원자 소비(GETDEL) — 별도 delete 없음
         verify(idpUserClient).changePassword("user@example.com", "NewP@ssw0rd!");
-        verify(passwordResetTokenStore).delete("valid-token");
     }
 
     @Test
@@ -313,7 +314,7 @@ class MemberServiceImplTest {
         PasswordResetRequest request = new PasswordResetRequest();
         ReflectionTestUtils.setField(request, "token", "expired-token");
         ReflectionTestUtils.setField(request, "newPassword", "NewP@ssw0rd!");
-        when(passwordResetTokenStore.findEmail("expired-token")).thenReturn(Optional.empty());
+        when(passwordResetTokenStore.consume("expired-token")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> memberService.resetPassword(request))
                 .isInstanceOf(BusinessException.class)
@@ -321,7 +322,6 @@ class MemberServiceImplTest {
                 .isEqualTo(MemberErrorCode.INVALID_RESET_TOKEN);
 
         verify(idpUserClient, never()).changePassword(anyString(), anyString());
-        verify(passwordResetTokenStore, never()).delete(anyString());
     }
 
     // ───────────────────────── 언어 조회/변경 ─────────────────────────
@@ -467,6 +467,19 @@ class MemberServiceImplTest {
         assertThat(response.getTemperatureGrade()).isEqualTo("GREEN");
         assertThat(response.getProfileImageUrl()).isNull();
         verifyNoInteractions(idpUserClient);
+    }
+
+    @Test
+    @DisplayName("getMyProfile: createdAt은 ISO-8601 UTC 'Z' 문자열(초 단위 절삭)로 직렬화된다")
+    void getMyProfile_createdAt_UTC_Z_포맷() {
+        Member member = memberWith("global_neighbor", "ko");
+        // 단위 테스트라 @PrePersist 미동작 → reflection 세팅이 auditing에 덮이지 않는다. 0.5초 → 초 단위 절삭 확인.
+        ReflectionTestUtils.setField(member, "createdAt", LocalDateTime.of(2026, 6, 3, 18, 21, 8, 500_000_000));
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
+
+        ProfileResponse response = memberService.getMyProfile("pub-1");
+
+        assertThat(response.getCreatedAt()).isEqualTo("2026-06-03T18:21:08Z");
     }
 
     @Test

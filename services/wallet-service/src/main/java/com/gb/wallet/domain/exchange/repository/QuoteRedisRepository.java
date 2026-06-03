@@ -66,8 +66,17 @@ public class QuoteRedisRepository {
         }
     }
 
-    /** 실행 완료된 견적을 삭제한다(재사용 방지). 없으면 no-op. */
+    /**
+     * 실행 완료된 견적을 삭제한다(재사용 방지). 없으면 no-op.
+     *
+     * <p>이미 환전이 완료된 뒤의 정리 작업이라 best-effort다 — Redis 일시 장애로 삭제가 실패해도 견적은
+     * TTL(5분)로 자동 만료되므로, 예외를 전파해 완료된 거래 응답을 깨뜨리지 않고 경고만 남긴다(find의 비치명 패턴).
+     */
     public void delete(String quotePublicId) {
-        redissonClient.getBucket(KEY_PREFIX + quotePublicId).delete();
+        try {
+            redissonClient.getBucket(KEY_PREFIX + quotePublicId).delete();
+        } catch (Exception e) {
+            log.warn("견적 Redis 삭제 실패(무시 — TTL로 자동 만료). quotePublicId={}", quotePublicId, e);
+        }
     }
 }

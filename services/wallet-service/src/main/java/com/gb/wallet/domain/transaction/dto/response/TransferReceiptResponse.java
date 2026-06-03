@@ -21,7 +21,7 @@ import java.time.temporal.ChronoUnit;
  *
  * <p><b>nullable 필드 — 도메인별 다름:</b>
  * <ul>
- *   <li>{@code receiverName} — INTERNAL은 MemberClient 응답의 nickname(외부 장애 시 null),
+ *   <li>{@code receiverName} — INTERNAL은 MemberClient 응답의 name(본명)(외부 장애 시 null),
  *       REMITTANCE는 {@link BankAccount#getHolderName()} snapshot(컬럼 추가 전 등록 계좌면 null).</li>
  *   <li>{@code bankName} · {@code accountNumber} — REMITTANCE만 값 있음. INTERNAL은 외부 계좌가
  *       없으므로 둘 다 {@code null}.</li>
@@ -38,12 +38,12 @@ public record TransferReceiptResponse(
                 example = "9b2e4c1a-7f3d-4b8e-9a1c-2d5e6f7a8b9c")
         String publicId,
 
-        @Schema(description = "송금인 닉네임(요청자 본인). 본인 확인증이므로 호출 시점 user_public_id로 풀어 표시할 수도 있으나, "
-                + "송금 당시 정보 보존을 위해 거래 시점 snapshot 가능. 현재 구현은 호출 시 sender 닉네임 fetch.",
+        @Schema(description = "송금인 본명(name, 요청자 본인). 본인 확인증이므로 호출 시점 user_public_id로 풀어 표시할 수도 있으나, "
+                + "송금 당시 정보 보존을 위해 거래 시점 snapshot 가능. 현재 구현은 호출 시 sender 본명(name) fetch.",
                 example = "Linh")
         String senderName,
 
-        @Schema(description = "수취인명. INTERNAL은 수신자 닉네임, REMITTANCE는 등록 시 저장된 예금주명"
+        @Schema(description = "수취인명. INTERNAL은 수신자 본명(name), REMITTANCE는 등록 시 저장된 예금주명"
                 + "(holder_name, GET /accounts/holder 응답 출처). 외부 장애·구 계좌 등으로 null 가능",
                 example = "NGUYEN VAN A", nullable = true)
         String receiverName,

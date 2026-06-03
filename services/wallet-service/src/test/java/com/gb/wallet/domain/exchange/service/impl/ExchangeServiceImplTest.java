@@ -135,6 +135,25 @@ class ExchangeServiceImplTest {
         verify(quoteRedisRepository, never()).save(any());
     }
 
+    @Test
+    @DisplayName("견적: exchange_type과 from/to 방향이 모순이면 COMMON4001 (저장 안 함)")
+    void createQuote_방향불일치_COMMON4001() {
+        // EXCHANGE(원화→외화)인데 from=USD, to=KRW(외화→원화) — 라벨↔방향 모순. 환율 조회 전에 차단된다.
+        QuoteRequest request = new QuoteRequest();
+        ReflectionTestUtils.setField(request, "exchangeType", "EXCHANGE");
+        ReflectionTestUtils.setField(request, "fromCurrencyCode", "USD");
+        ReflectionTestUtils.setField(request, "toCurrencyCode", "KRW");
+        ReflectionTestUtils.setField(request, "amount", "100.0000");
+
+        assertThatThrownBy(() -> exchangeService.createQuote(USER, request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+
+        verify(quoteRedisRepository, never()).save(any());
+        verify(exchangeRateClient, never()).getRateToKrw(any()); // 방향 검증 실패는 외부 환율 조회 전에 차단된다
+    }
+
     // ───────────────────── 실행 ─────────────────────
 
     @Test

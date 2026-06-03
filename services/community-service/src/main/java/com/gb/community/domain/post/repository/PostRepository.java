@@ -21,12 +21,6 @@ import org.springframework.data.repository.query.Param;
  */
 public interface PostRepository extends JpaRepository<Post, Long> {
 
-    /**
-     * 스켈레톤부터 있던 단건 조회. soft delete된 글도 잡히므로 CRUD 흐름에서는 쓰지 않는다.
-     * (삭제건 제외가 필요하면 {@link #findByPublicIdAndDeletedAtIsNull}을 쓴다.)
-     */
-    Optional<Post> findByPublicId(String publicId);
-
     /** 활성(미삭제) 게시글 단건 조회. 단건 조회/수정/삭제 흐름에서 사용한다. */
     Optional<Post> findByPublicIdAndDeletedAtIsNull(String publicId);
 
@@ -80,6 +74,23 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     @Modifying
     @Query("UPDATE Post p SET p.likeCount = p.likeCount - 1 WHERE p.id = :id AND p.likeCount > 0")
     void decrementLikeCount(@Param("id") Long id);
+
+    /**
+     * 댓글 수 캐시({@code comment_count}) 원자적 +1 (댓글 작성 시). 엔티티 RMW의 lost update를 피해
+     * DB에서 원자적으로 증가시킨다({@link #incrementLikeCount}와 동일 패턴). 벌크 UPDATE라 1차 캐시의
+     * Post 인스턴스 {@code commentCount}는 갱신되지 않으나, 응답에 댓글 수를 싣지 않아 보정 불필요.
+     */
+    @Modifying
+    @Query("UPDATE Post p SET p.commentCount = p.commentCount + 1 WHERE p.id = :id")
+    void incrementCommentCount(@Param("id") Long id);
+
+    /**
+     * 댓글 수 캐시({@code comment_count}) 원자적 -1 (댓글 삭제 시).
+     * {@code comment_count > 0} 가드로 음수로 내려가지 않게 막는다.
+     */
+    @Modifying
+    @Query("UPDATE Post p SET p.commentCount = p.commentCount - 1 WHERE p.id = :id AND p.commentCount > 0")
+    void decrementCommentCount(@Param("id") Long id);
 
     /**
      * like_count 캐시의 현재 저장값 단건 조회.

@@ -163,7 +163,6 @@ class CommentServiceTest {
     @DisplayName("createComment 정상: Comment INSERT + Post.commentCount +1 + 응답 매핑")
     void createComment_정상() {
         Post post = post(PID);
-        int beforeCount = post.getCommentCount();
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(commentRepository.save(any(Comment.class))).willAnswer(inv -> {
             Comment c = inv.getArgument(0);
@@ -183,8 +182,8 @@ class CommentServiceTest {
         assertThat(resp.isAuthorIsVerified()).isTrue();
         assertThat(resp.getParentCommentPublicId()).as("대댓글 미지원 — 항상 null").isNull();
 
-        // commentCount 증가 (dirty checking으로 UPDATE)
-        assertThat(post.getCommentCount()).isEqualTo(beforeCount + 1);
+        // comment_count 증가는 DB 원자 UPDATE(incrementCommentCount) 호출로 검증(like_count와 동일)
+        verify(postRepository).incrementCommentCount(post.getId());
 
         // Comment INSERT 시 parentId는 null (최상위만)
         ArgumentCaptor<Comment> commentCaptor = ArgumentCaptor.forClass(Comment.class);
@@ -221,8 +220,7 @@ class CommentServiceTest {
     @DisplayName("deleteComment 정상: softDelete + post.commentCount -1, MemberClient 호출 없음")
     void deleteComment_정상() {
         Post post = post(PID);
-        // 시드 commentCount = 5 → 4로 감소해야 함
-        ReflectionTestUtils.setField(post, "commentCount", 5);
+        ReflectionTestUtils.setField(post, "commentCount", 5); // 시드값(원자 UPDATE 호출은 repo verify로 검증)
         Comment c = comment(post, USER, "내용", LocalDateTime.of(2026, 5, 26, 4, 15, 30));
         ReflectionTestUtils.setField(c, "publicId", C_PID);
 
@@ -232,7 +230,7 @@ class CommentServiceTest {
         service.deleteComment(PID, C_PID, USER);
 
         assertThat(c.isDeleted()).as("softDelete로 deleted_at이 설정됨").isTrue();
-        assertThat(post.getCommentCount()).as("comment_count -1 (dirty checking)").isEqualTo(4);
+        verify(postRepository).decrementCommentCount(post.getId()); // comment_count -1 DB 원자 UPDATE
         verifyNoInteractions(memberClient); // 삭제는 작성자 정보 조회 불필요
     }
 

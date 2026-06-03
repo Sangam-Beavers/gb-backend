@@ -14,7 +14,6 @@ import com.gb.wallet.domain.transaction.scheduled.entity.ScheduledTransfer;
 import com.gb.wallet.domain.transaction.scheduled.repository.ScheduledTransferRepository;
 import com.gb.wallet.domain.transaction.scheduled.service.NextRunDateCalculator;
 import com.gb.wallet.domain.transaction.scheduled.service.ScheduledTransferService;
-import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.MemberInfo;

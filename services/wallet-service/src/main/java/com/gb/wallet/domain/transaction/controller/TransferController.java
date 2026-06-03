@@ -5,7 +5,6 @@ import com.gb.common.response.ErrorResponse;
 import com.gb.wallet.domain.transaction.dto.request.TransferExecuteRequest;
 import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
 import com.gb.wallet.domain.transaction.dto.request.ValidateScheduledRequest;
-import com.gb.wallet.domain.transaction.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
@@ -222,56 +221,6 @@ public class TransferController {
         return ApiResponse.success(transferService.getRecentRemittanceAccounts(userPublicId, size));
     }
 
-    /** 외부 은행 예금주 실명 조회. 🔒 JWT 필요. */
-    @Operation(
-            summary = "예금주 실명 조회",
-            description = "타행 송금 화면에서 사용자가 입력한 계좌의 예금주명을 외부 Mock 은행에 조회한다. "
-                    + "wallet DB는 조회하지 않으며 BankClient.inquiry만 호출. "
-                    + "Mock 은행 에러는 BankErrorMapper(§13-4)가 본체 코드로 변환한다 "
-                    + "— BANK4040→ACCOUNT4001(404), BANK4004→COMMON4001(400), 네트워크/알 수 없는 코드→COMMON5031(503). "
-                    + "사용자는 JWT의 public_id claim으로 식별한다.")
-    @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "200",
-                    description = "조회 성공. 응답은 공통 ApiResponse로 감싸지며 data에 AccountHolderResponse가 담긴다."),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400",
-                    description = "COMMON4001 - 파라미터 누락/형식 오류, 또는 외부 Mock 은행이 BANK4004로 거절.",
-                    content = @Content(
-                            schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "401",
-                    description = "AUTH4011 - 인증이 필요합니다.",
-                    content = @Content(
-                            schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "404",
-                    description = "ACCOUNT4001 - 존재하지 않는 계좌(외부 Mock 은행 BANK4040 매핑).",
-                    content = @Content(
-                            schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "ACCOUNT4001", value = EX_ACCOUNT4001))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "500",
-                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
-                    content = @Content(
-                            schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "503",
-                    description = "COMMON5031 - 외부 은행 일시 장애(네트워크 실패 또는 알 수 없는 BANK 코드).",
-                    content = @Content(
-                            schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON5031", value = EX_COMMON5031)))
-    })
-    @GetMapping("/account-holder")
-    public ApiResponse<AccountHolderResponse> getAccountHolder(
-            @RequestParam @NotBlank String bankCode,
-            @RequestParam @NotBlank String accountNumber) {
-        return ApiResponse.success(transferService.getAccountHolder(bankCode, accountNumber));
-    }
-
     /** 송금 수수료 계산. 🔒 JWT 필요. */
     @Operation(
             summary = "송금 수수료 조회",
@@ -375,7 +324,7 @@ public class TransferController {
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<TransferExecuteResponse> executeTransfer(
             @CurrentUserPublicId String userPublicId,
-            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 100) String idempotencyKey,
             @Valid @RequestBody TransferExecuteRequest request) {
         TransferExecuteResponse response = transferService.execute(userPublicId, idempotencyKey, request);
         return ApiResponse.success(response, "송금이 완료되었습니다.");

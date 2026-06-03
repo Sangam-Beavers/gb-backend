@@ -3,6 +3,9 @@ package com.gb.member.domain.member.dto.response;
 import com.gb.member.domain.member.entity.Member;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -46,13 +49,13 @@ public class ProfileResponse {
     @Schema(description = "프로필 사진 URL. 미설정 시 null", nullable = true)
     private final String profileImageUrl;
 
-    @Schema(description = "가입 일시(ISO 8601)")
-    private final LocalDateTime createdAt;
+    @Schema(description = "가입 일시(ISO 8601, UTC Z)", example = "2026-06-03T18:21:08Z")
+    private final String createdAt;
 
     @Builder
     private ProfileResponse(String publicId, String email, String nickname, String nationality,
                             String language, String bio, Boolean isVerified, String temperatureGrade,
-                            String profileImageUrl, LocalDateTime createdAt) {
+                            String profileImageUrl, String createdAt) {
         this.publicId = publicId;
         this.email = email;
         this.nickname = nickname;
@@ -77,7 +80,16 @@ public class ProfileResponse {
                 .isVerified(false)
                 .temperatureGrade("GREEN")
                 .profileImageUrl(null)
-                .createdAt(member.getCreatedAt())
+                .createdAt(toUtcZ(member.getCreatedAt()))
                 .build();
+    }
+
+    /** LocalDateTime → ISO-8601 UTC 'Z' 문자열(초 단위 절삭). wallet/community DTO와 동일 규칙. */
+    private static String toUtcZ(LocalDateTime dateTime) {
+        if (dateTime == null) {
+            return null;
+        }
+        return DateTimeFormatter.ISO_INSTANT.format(
+                dateTime.toInstant(ZoneOffset.UTC).truncatedTo(ChronoUnit.SECONDS));
     }
 }

@@ -9,7 +9,6 @@ import com.gb.wallet.domain.account.repository.BankAccountRepository;
 import com.gb.wallet.domain.transaction.dto.request.TransferExecuteRequest;
 import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
 import com.gb.wallet.domain.transaction.dto.request.ValidateScheduledRequest;
-import com.gb.wallet.domain.transaction.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse.AccountItem;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
@@ -266,20 +265,13 @@ public class TransferServiceImpl implements TransferService {
                             .accountHolder(lastTx != null ? lastTx.getReceiverName() : null)
                             .currencyCode(lastTx != null ? lastTx.getCurrencyCode().name() : null)
                             // 금액은 소수점 4자리 고정 string (잔액 조회 BalanceItem과 동일 규칙).
-                            .lastAmount(lastTx != null ? lastTx.getAmount().setScale(4).toPlainString() : null)
+                            .lastAmount(lastTx != null ? lastTx.getAmount().setScale(4, RoundingMode.HALF_UP).toPlainString() : null)
                             .lastTransferredAt(RecentAccountsResponse.toUtcZ(p.getLastTransferredAt()))
                             .build();
                 })
                 .toList();
 
         return RecentAccountsResponse.of(items);
-    }
-
-    @Override
-    public AccountHolderResponse getAccountHolder(String bankCode, String accountNumber) {
-        // DB 안 보고 외부 Mock 은행만 호출. 외부 에러는 BankErrorMapper가 BusinessException으로 변환해
-        // 던지므로 (BANK4040→ACCOUNT4001, 네트워크 실패→COMMON5031 등) Service에서 try-catch 불필요.
-        return AccountHolderResponse.from(bankClient.inquiry(bankCode, accountNumber));
     }
 
     @Override

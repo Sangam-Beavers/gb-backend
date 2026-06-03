@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -80,9 +81,9 @@ public class ChargeResponse {
         return ChargeResponse.builder()
                 .publicId(tx.getPublicId())
                 .accountPublicId(accountPublicId)
-                .amount(tx.getAmount().setScale(4).toPlainString())
+                .amount(tx.getAmount().setScale(4, RoundingMode.HALF_UP).toPlainString())
                 .currencyCode(tx.getCurrencyCode().name())
-                .walletBalance(afterBalance.setScale(4).toPlainString())
+                .walletBalance(afterBalance.setScale(4, RoundingMode.HALF_UP).toPlainString())
                 .status(tx.getStatus().name())
                 .createdAt(toUtcZ(tx.getCreatedAt()))
                 .build();

@@ -172,6 +172,22 @@ class PostServiceTest {
         verifyNoInteractions(memberClient);
     }
 
+    @Test
+    @DisplayName("수정: 본인 글이지만 all-blank(category·title·content 모두 비움) → COMMON4001, 변경·member 호출 없음")
+    void updatePost_all_blank() {
+        Post post = Post.of(USER, PostCategory.JOB, "title", "content");
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+
+        // title은 공백("  ") — nullIfBlank로 null 정규화되어 세 값 모두 변경 없음 → 빈 PATCH로 거절돼야 한다.
+        assertThatThrownBy(() -> service.updatePost(USER, PID, updateReq(null, "  ", null)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+
+        assertThat(post.getTitle()).isEqualTo("title"); // 변경 안 됨
+        verifyNoInteractions(memberClient);
+    }
+
     // ----- delete -----
 
     @Test
