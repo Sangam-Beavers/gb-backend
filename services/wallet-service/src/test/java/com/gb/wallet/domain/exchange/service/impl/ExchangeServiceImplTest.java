@@ -151,6 +151,7 @@ class ExchangeServiceImplTest {
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
 
         verify(quoteRedisRepository, never()).save(any());
+        verify(exchangeRateClient, never()).getRateToKrw(any()); // 방향 검증 실패는 외부 환율 조회 전에 차단된다
     }
 
     // ───────────────────── 실행 ─────────────────────
