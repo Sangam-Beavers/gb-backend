@@ -23,6 +23,8 @@ import com.gb.wallet.domain.account.dto.response.AccountResponse;
 import com.gb.wallet.domain.account.dto.response.ChargeResponse;
 import com.gb.wallet.domain.account.dto.response.SupportedBankListResponse;
 import com.gb.wallet.domain.account.dto.response.VerifyAccountResponse;
+import com.gb.wallet.domain.account.entity.Bank;
+import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.service.BankAccountService;
 import com.gb.wallet.domain.account.service.ChargeService;
 import com.gb.wallet.domain.account.service.HolderService;
@@ -31,6 +33,7 @@ import com.gb.wallet.global.client.dto.AccountToken;
 import com.gb.wallet.global.config.WebConfig;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.security.CurrentUserPublicIdArgumentResolver;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -44,6 +47,7 @@ import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
@@ -376,6 +380,30 @@ class AccountControllerTest {
                 .andExpect(jsonPath("$.data.accounts.length()").value(0));
     }
 
+    @Test
+    @DisplayName("GET /accounts 200: 비어있지 않은 목록을 snake_case로 직렬화(순서·마스킹·created_at 보존)")
+    void getMyAccounts_목록_직렬화() throws Exception {
+        BankAccount primary = accountEntity("acct-1", "004", "KB국민은행", "12345678901234",
+                true, true, LocalDateTime.of(2026, 5, 29, 10, 0, 0));
+        BankAccount second = accountEntity("acct-2", "088", "신한은행", "98765432109876",
+                false, false, LocalDateTime.of(2026, 5, 28, 9, 0, 0));
+        given(bankAccountService.getMyAccounts(USER_ID))
+                .willReturn(AccountListResponse.from(List.of(primary, second)));
+
+        mockMvc.perform(get("/api/v1/accounts").with(authedJwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.accounts.length()").value(2))
+                .andExpect(jsonPath("$.data.accounts[0].account_public_id").value("acct-1"))
+                .andExpect(jsonPath("$.data.accounts[0].bank_code").value("004"))
+                .andExpect(jsonPath("$.data.accounts[0].account_number_masked").value("123*********34"))
+                .andExpect(jsonPath("$.data.accounts[0].is_primary").value(true))
+                .andExpect(jsonPath("$.data.accounts[0].is_verified").value(true))
+                .andExpect(jsonPath("$.data.accounts[0].created_at").value("2026-05-29T10:00:00Z"))
+                .andExpect(jsonPath("$.data.accounts[1].account_public_id").value("acct-2"))
+                .andExpect(jsonPath("$.data.accounts[1].is_primary").value(false))
+                .andExpect(jsonPath("$.data.accounts[1].is_verified").value(false));
+    }
+
     // --- POST /{id}/charge ---
 
     @Test
@@ -557,6 +585,31 @@ class AccountControllerTest {
                 .status("COMPLETED")
                 .createdAt("2026-05-30T04:15:30Z")
                 .build();
+    }
+
+    /**
+     * 목록 직렬화 검증용 BankAccount 엔티티. AccountListResponse.from(엔티티)이 실제 변환(마스킹·is_verified·
+     * created_at)을 거치도록 실제 엔티티를 만든다. created_at은 비영속이라 auditing이 덮어쓰지 않으므로
+     * reflection으로 주입한다(@WebMvcTest 슬라이스, JPA 없음).
+     */
+    private BankAccount accountEntity(String publicId, String bankCode, String bankName,
+                                      String accountNumber, boolean primary, boolean verified,
+                                      LocalDateTime createdAt) {
+        Bank bank = Bank.builder()
+                .code(bankCode).name(bankName).country("KR").isDomestic(true).isActive(true).build();
+        BankAccount account = BankAccount.builder()
+                .publicId(publicId)
+                .userPublicId(USER_ID)
+                .bank(bank)
+                .accountNumber(accountNumber)
+                .holderName("홍길동")
+                .mockAccountToken(verified ? "tok" : null)
+                .isVirtual(false)
+                .isPrimary(primary)
+                .isActive(true)
+                .build();
+        ReflectionTestUtils.setField(account, "createdAt", createdAt);
+        return account;
     }
 
     private AccountResponse stubAccountResponse() {

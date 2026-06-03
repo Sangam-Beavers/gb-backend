@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.gb.wallet.domain.account.entity.Bank;
 import com.gb.wallet.domain.account.entity.BankAccount;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -188,6 +189,48 @@ class BankAccountRepositoryTest {
 
         assertThat(repository.findFirstByUserPublicIdAndIsActiveTrueAndIdNotOrderByCreatedAtDesc(
                 USER_A, only.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("findAllBy…OrderByIsPrimaryDescCreatedAtDesc: 주계좌 우선 + 최신 등록순, 비활성·타user 제외")
+    void findMyAccounts_정렬_필터_제외() {
+        // USER_A: 활성 주계좌 1(가장 과거 등록) + 활성 비주계좌 2(created_at 상이) + 비활성 1
+        BankAccount primary = persistAccount(USER_A, kbBank, "1000000000", true, true);
+        BankAccount mid = persistAccount(USER_A, shinhanBank, "2000000000", false, true);
+        BankAccount newest = persistAccount(USER_A, kbBank, "3000000000", false, true);
+        BankAccount inactive = persistAccount(USER_A, shinhanBank, "4000000000", false, false); // 제외(비활성)
+        BankAccount otherUser = persistAccount(USER_B, kbBank, "5000000000", true, true);        // 제외(타user)
+        em.flush();
+        // created_at을 명시 고정. 주계좌(primary)를 일부러 가장 과거로 둬, 정렬 1순위가 created_at이 아니라
+        // is_primary(주계좌가 등록 시각과 무관하게 맨 앞)임을 실증한다.
+        setCreatedAt(primary.getId(), LocalDateTime.of(2026, 5, 1, 0, 0, 0));
+        setCreatedAt(mid.getId(), LocalDateTime.of(2026, 5, 2, 0, 0, 0));
+        setCreatedAt(newest.getId(), LocalDateTime.of(2026, 5, 3, 0, 0, 0));
+        setCreatedAt(inactive.getId(), LocalDateTime.of(2026, 5, 9, 0, 0, 0));
+        setCreatedAt(otherUser.getId(), LocalDateTime.of(2026, 5, 9, 0, 0, 0));
+        em.clear();
+
+        List<BankAccount> result = repository
+                .findAllByUserPublicIdAndIsActiveTrueOrderByIsPrimaryDescCreatedAtDesc(USER_A);
+
+        // 순서: [주계좌, 그다음 created_at 최신순(newest → mid)]. 비활성·USER_B는 빠진다.
+        assertThat(result).extracting(BankAccount::getPublicId)
+                .containsExactly(primary.getPublicId(), newest.getPublicId(), mid.getPublicId());
+        // 제외 검증(CLAUDE.md §10): 비활성·타user public_id가 결과에 없다.
+        assertThat(result).extracting(BankAccount::getPublicId)
+                .doesNotContain(inactive.getPublicId(), otherUser.getPublicId());
+    }
+
+    @Test
+    @DisplayName("findAllBy…: 활성 계좌가 없으면(비활성만 존재) 빈 리스트")
+    void findMyAccounts_활성없으면_빈리스트() {
+        persistAccount(USER_A, kbBank, "1000000000", true, false); // 비활성뿐
+        em.flush();
+        em.clear();
+
+        assertThat(repository
+                .findAllByUserPublicIdAndIsActiveTrueOrderByIsPrimaryDescCreatedAtDesc(USER_A))
+                .isEmpty();
     }
 
     // ----- helpers -----
