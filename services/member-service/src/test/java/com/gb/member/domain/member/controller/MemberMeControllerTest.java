@@ -217,7 +217,9 @@ class MemberMeControllerTest {
         mockMvc.perform(delete("/api/v1/members/me")
                         .with(authedJwt()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true));
+                .andExpect(jsonPath("$.success").value(true))
+                // ApiResponse는 @JsonInclude(ALWAYS)라 data:null이 키째 노출된다 — 탈퇴 응답에 payload 없음을 단언.
+                .andExpect(jsonPath("$.data").isEmpty());
 
         verify(memberService).withdraw(USER_ID);
     }
