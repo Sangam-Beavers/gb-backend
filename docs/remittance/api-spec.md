@@ -23,7 +23,7 @@
 | 앱 사용자 유효성 검증 | GET | `/api/v1/transfers/validate-member?email={}` | ✅ |
 | 지원 통화 조회 | GET | `/api/v1/transfers/supported-currencies` | ✅ |
 | 최근 송금 계좌 | GET | `/api/v1/transfers/recent-recipients/accounts` | ✅ |
-| 지원 은행 목록 | GET | `/api/v1/transfers/supported-banks` | ✅ |
+| 지원 은행 목록 (※ `/accounts/supported-banks`로 제공 — 별도 transfers 경로 미구현) | GET | `/api/v1/transfers/supported-banks` | ✅ |
 | 예금주 실명 조회 (deprecated → `/accounts/holder`) | GET | `/api/v1/transfers/account-holder?bankCode={}&accountNumber={}` | ✅ |
 | 송금 수수료 조회 | POST | `/api/v1/transfers/fee` | ✅ |
 | 송금 PIN 설정 | POST | `/api/v1/transfers/pin` | ✅ |

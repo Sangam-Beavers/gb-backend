@@ -35,9 +35,9 @@
 | Google 가입 후 추가 정보 | POST/PATCH | `/api/v1/members/profile` (소셜 프로필 보완) | ✅ |
 | 내 프로필 조회 | GET | `/api/v1/members/me` | ✅ |
 | 프로필 수정 | PATCH | `/api/v1/members/me` | ✅ |
-| 프로필 사진 변경 | PATCH | `/api/v1/members/me/profile-image` | ✅ |
-| 인증 상태 조회 | GET | `/api/v1/members/me/verification` | ✅ |
-| 신분증 인증 요청 | POST | `/api/v1/members/me/verification` | ✅ |
+| 프로필 사진 변경 (※ 미구현) | PATCH | `/api/v1/members/me/profile-image` | ✅ |
+| 인증 상태 조회 (※ 미구현) | GET | `/api/v1/members/me/verification` | ✅ |
+| 신분증 인증 요청 (※ 미구현) | POST | `/api/v1/members/me/verification` | ✅ |
 | 언어 설정 조회 | GET | `/api/v1/members/me/language` | ✅ |
 | 언어 설정 변경 | PATCH | `/api/v1/members/me/language` | ✅ |
 | 탈퇴 | DELETE | `/api/v1/members/me` | ✅ |
@@ -191,7 +191,7 @@ message: "회원가입이 완료되었습니다."
 | `nickname` | string | N | 닉네임 |
 | `nationality` | string | N | 국적 코드 |
 | `is_verified` | boolean | N | 인증 배지 여부 |
-| `profile_image_url` | string | Y | 프로필 사진 URL (미설정 시 null) |
+| `profile_image_url` | string | Y | 프로필 사진 URL. **현재 이미지 업로드 도메인 미구현 — 항상 null** |
 | `created_at` | string | N | 가입 일시 (ISO 8601 UTC Z) |
 
 **Error**: 401 AUTH4011 / 404 MEMBER4001
@@ -225,7 +225,7 @@ message: "회원가입이 완료되었습니다."
 
 ## 10. 신분증 인증 요청
 
-`POST /api/v1/members/me/verification` · Auth ✅
+`POST /api/v1/members/me/verification` · Auth ✅ **(※ 미구현 — `user_verifications` 엔티티·AES-256 부재)**
 
 **Request Body**
 | 필드 | 타입 | 필수 | 설명 |
@@ -248,7 +248,7 @@ message: "신분증 인증 요청이 접수되었습니다. 검토 후 결과를
 
 ## 11. 인증 상태 조회
 
-`GET /api/v1/members/me/verification` · Auth ✅
+`GET /api/v1/members/me/verification` · Auth ✅ **(※ 미구현 — `user_verifications` 엔티티 부재)**
 
 **Response 200** — `data`
 | 필드 | 타입 | nullable | 설명 |

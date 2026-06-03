@@ -15,7 +15,7 @@
 | 분석 진행 상태 조회 (폴링) | GET | `/api/v1/documents/{id}/status` | ✅ |
 | 분석 결과 상세 조회 | GET | `/api/v1/documents/{id}/result` | ✅ |
 | 분석 재요청 (FAILED 시) | POST | `/api/v1/documents/{id}/retry` | ✅ |
-| 문서 분석 결과 단건 조회 | GET | `/api/v1/documents/{id}` | ✅ |
+| 문서 분석 결과 단건 조회 (※ 미구현) | GET | `/api/v1/documents/{id}` | ✅ |
 | 후속 질문 챗봇 (SSE 스트리밍) | POST | `/api/v1/documents/{id}/chat` | ✅ |
 
 ---
@@ -150,7 +150,7 @@ FAILED 상태 문서의 분석을 다시 트리거. (S3 원본 유지 시 재사
 
 ## 6. 문서 분석 결과 단건 조회
 
-`GET /api/v1/documents/{id}` · Auth ✅ — 마이페이지 진입용 단건 조회. 응답은 §3의 결과 또는 메타 요약(구현 시 통일).
+`GET /api/v1/documents/{id}` · Auth ✅ — 마이페이지 진입용 단건 조회. **(※ 미구현 — 코드에 매핑 없음.)** 응답은 §3의 결과 또는 메타 요약(구현 시 통일).
 
 ---
 

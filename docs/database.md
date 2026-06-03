@@ -34,7 +34,7 @@
 | # | 도메인 | 테이블 | 핵심 역할 |
 | --- | --- | --- | --- |
 | 1 | member | `members` | 회원 기본 정보 |
-| 2 | member | `user_verifications` | 신분증 인증 → 인증 배지 근거 |
+| 2 | member | `user_verifications` | 신분증 인증 → 인증 배지 근거 (엔티티 미구현·계획) |
 | 3 | wallet | `banks` | 은행 마스터 (Beaver/Quokka Bank 포함) |
 | 4 | wallet | `wallets` | 사용자 주머니 메타 |
 | 5 | wallet | `wallet_balances` | 통화별 잔액 (캐시 금지) |
@@ -70,7 +70,7 @@
 | `nickname` | VARCHAR(50) | NOT NULL | 닉네임 |
 | `nationality` | VARCHAR(10) | NOT NULL | 국적 코드 (KR, VN, PH 등) |
 | `language` | VARCHAR(10) | NOT NULL | 주 사용 언어 (BCP 47 소문자, 예: "vi") |
-| `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | 인증 배지 여부 |
+| `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | 인증 배지 여부. **(미구현 — 엔티티 미반영, `user_verifications` APPROVED 시 반영 예정. 현재 응답 false 고정)** |
 | `bio` | VARCHAR(200) | NULL | 자기소개(한 줄, 마이페이지 입력, 선택값) |
 | `created_at` | DATETIME | NOT NULL | |
 | `updated_at` | DATETIME | NOT NULL | |
@@ -80,6 +80,7 @@
 
 ### `user_verifications`
 > 신분증 인증. APPROVED 시 `members.is_verified = TRUE`. **member 내부 테이블 → `user_id`는 BIGINT FK 유지.**
+> ⚠️ **엔티티 미구현(계획 테이블)** — 신분증 인증 도메인 구현 시 추가한다. 총 15개 문서화 테이블 중 본 테이블만 JPA 엔티티 미반영(구현 14 + 계획 1).
 
 | 컬럼 | 타입 | 제약 | 설명 |
 | --- | --- | --- | --- |
