@@ -75,13 +75,9 @@ public class DocumentSubmissionServiceImpl implements DocumentSubmissionService 
 
     @Override
     public DocumentResultResponse getResult(String userPublicId, String publicId) {
-        Document document = loadOwned(userPublicId, publicId);
+        loadOwned(userPublicId, publicId); // 존재(404) + 소유자(403) 검증 — 결과는 publicId로 조회한다.
         DocumentResult result = documentResultRepository.findBySubmission_PublicId(publicId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.UNPROCESSABLE_ENTITY));
-        // 권한 검증은 submission으로 이미 끝났지만, lazy proxy로 result.submission 접근을 피하려 document만 사용.
-        if (!document.isOwnedBy(userPublicId)) {
-            throw new BusinessException(CommonErrorCode.FORBIDDEN);
-        }
         return DocumentResultResponse.from(result);
     }
 
