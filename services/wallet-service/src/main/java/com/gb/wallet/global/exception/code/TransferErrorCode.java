@@ -18,7 +18,11 @@ public enum TransferErrorCode implements ErrorCode {
     UNSUPPORTED_TRANSFER_TYPE(HttpStatus.BAD_REQUEST, "TRANSFER4003", "지원하지 않는 송금 유형입니다."),
     SELF_TRANSFER_NOT_ALLOWED(HttpStatus.BAD_REQUEST, "TRANSFER4004", "자기 자신에게 송금할 수 없습니다."),
     UNSUPPORTED_CURRENCY_PAIR(HttpStatus.BAD_REQUEST, "TRANSFER4005", "지원하지 않는 통화 조합입니다."),
-    RATE_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "TRANSFER4006", "송금 요청 횟수를 초과했습니다.");
+    RATE_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "TRANSFER4006", "송금 요청 횟수를 초과했습니다."),
+    // 송금 PIN(별도 PIN — 방식 B라 계정 비밀번호는 미보유). 번호는 명세 §12 등록 후 확정.
+    PIN_MISMATCH(HttpStatus.BAD_REQUEST, "TRANSFER4007", "송금 PIN이 일치하지 않습니다."),
+    PIN_LOCKED(HttpStatus.TOO_MANY_REQUESTS, "TRANSFER4008", "송금 PIN 입력 횟수를 초과했습니다. 잠시 후 다시 시도해주세요."),
+    PIN_NOT_SET(HttpStatus.BAD_REQUEST, "TRANSFER4009", "송금 PIN이 설정되지 않았습니다.");
 
     private final HttpStatus httpStatus; // @Getter가 getHttpStatus/getCode/getMessage 생성 → ErrorCode 충족
     private final String code;
