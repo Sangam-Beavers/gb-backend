@@ -38,12 +38,13 @@
 ### 환전 (/exchanges)
 | API | Method | Endpoint | Auth |
 | --- | --- | --- | --- |
-| 지원 환전 통화 | GET | `/api/v1/exchanges/supported-currencies` | ✅ |
-| 지원 재환전 통화 | GET | `/api/v1/exchanges/re-exchange/supported-currencies` | ✅ |
+| 지원 (재)환전 통화 | GET | `/api/v1/exchanges/supported-currencies` | ✅ |
 | 견적 조회·검증 | POST | `/api/v1/exchanges/quote` | ✅ |
 | 환전 실행 | POST | `/api/v1/exchanges` | ✅ |
 | 환전 완료 내역 조회 | GET | `/api/v1/exchanges/{id}` | ✅ |
 | 환전 내역 목록 조회 | GET | `/api/v1/exchanges` | ✅ |
+
+> 환전·재환전은 **별도 엔드포인트가 아니라** 견적/실행 요청의 `exchange_type`(EXCHANGE/RE_EXCHANGE) 파라미터로 구분한다(정본 §8/§9). 지원 통화 목록은 양방향 공통이므로 단일 `GET /supported-currencies` 하나가 커버한다.
 
 ### 계좌/충전 (/accounts)
 | API | Method | Endpoint | Auth |
@@ -650,7 +651,8 @@ wallet:
 | `receive_currency_code` | string | N | 수령 통화 |
 | `expires_at` | string | N | 견적 만료 시각 (ISO 8601 UTC Z) |
 
-**Error**: 400 TRANSFER4002 (미지원 통화) / 401 AUTH4011 / 422 WALLET4002 (잔액 부족)
+**Error**: 400 TRANSFER4002 (미지원 통화) / 400 COMMON4001 (요청 값 오류) / 401 AUTH4011
+> 견적은 잔액을 차감하지 않으므로 WALLET4002(잔액 부족)는 발생하지 않는다 — 잔액 검증은 실행(§9)에서만 한다.
 
 ---
 
