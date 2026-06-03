@@ -104,6 +104,37 @@ class MockBankClientTest {
                 .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
     }
 
+    @Test
+    @DisplayName("inquiry 200 + 빈 본문(data null) → BusinessException(COMMON5031)")
+    void inquiry_emptyBody_mappedToCommon5031() {
+        // 200이지만 본문이 비어 data()가 null → null 가드(BANK5000 합성)가 COMMON5031로 매핑된다.
+        // verify 경로엔 동일 가드 테스트가 있으나 inquiry엔 없어 회귀 사각지대였다.
+        server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/inquiry"))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{}"));
+
+        assertThatThrownBy(() -> client.inquiry("004", "12345"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("inquiry 200 + data.account_holder_name 누락 → BusinessException(COMMON5031)")
+    void inquiry_missingHolderName_mappedToCommon5031() {
+        // data는 있으나 account_holder_name이 null인 경계 — 가드의 세 번째 조건(holder null)을 검증.
+        server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/inquiry"))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"success\":true,\"data\":{},\"message\":\"ok\"}"));
+
+        assertThatThrownBy(() -> client.inquiry("004", "12345"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
+    }
+
     // --- payout (현금화 지급) ---
 
     @Test

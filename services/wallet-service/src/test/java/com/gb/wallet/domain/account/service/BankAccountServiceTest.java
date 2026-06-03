@@ -15,6 +15,7 @@ import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.account.dto.request.RegisterAccountRequest;
 import com.gb.wallet.domain.account.dto.request.VerifyAccountRequest;
+import com.gb.wallet.domain.account.dto.response.AccountListResponse;
 import com.gb.wallet.domain.account.dto.response.AccountResponse;
 import com.gb.wallet.domain.account.dto.response.VerifyAccountResponse;
 import com.gb.wallet.domain.account.entity.Bank;
@@ -29,6 +30,7 @@ import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.redis.DistributedLockHelper;
 import com.gb.wallet.global.redis.RateLimitHelper;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -73,6 +75,38 @@ class BankAccountServiceTest {
         // 실제 객체로 기본값(60s/10회)을 박아 기존 동작을 유지한다.
         ReflectionTestUtils.setField(service, "verifyRateLimitProperties",
                 new VerifyRateLimitProperties(60, 10));
+    }
+
+    // --- getMyAccounts (목록 조회) ---
+
+    @Test
+    @DisplayName("getMyAccounts: 활성 계좌 목록을 AccountListResponse로 매핑(순서 보존), 다른 finder·client 미호출")
+    void getMyAccounts_매핑_및_다른의존_미호출() {
+        BankAccount first = bankAccount("acct-1", true, true);
+        BankAccount second = bankAccount("acct-2", false, true);
+        given(bankAccountRepository
+                .findAllByUserPublicIdAndIsActiveTrueOrderByIsPrimaryDescCreatedAtDesc(USER_PUBLIC_ID))
+                .willReturn(List.of(first, second));
+
+        AccountListResponse response = service.getMyAccounts(USER_PUBLIC_ID);
+
+        assertThat(response.getAccounts())
+                .extracting(AccountResponse::getAccountPublicId)
+                .containsExactly("acct-1", "acct-2");
+        verify(bankAccountRepository)
+                .findAllByUserPublicIdAndIsActiveTrueOrderByIsPrimaryDescCreatedAtDesc(USER_PUBLIC_ID);
+        // 목록 조회는 다른 finder·외부 의존을 건드리지 않는다(불필요 호출 부재 검증).
+        verifyNoInteractions(bankRepository, bankClient, rateLimitHelper, distributedLockHelper);
+    }
+
+    @Test
+    @DisplayName("getMyAccounts: 활성 계좌가 없으면 빈 목록(200 + [])")
+    void getMyAccounts_빈결과() {
+        given(bankAccountRepository
+                .findAllByUserPublicIdAndIsActiveTrueOrderByIsPrimaryDescCreatedAtDesc(USER_PUBLIC_ID))
+                .willReturn(List.of());
+
+        assertThat(service.getMyAccounts(USER_PUBLIC_ID).getAccounts()).isEmpty();
     }
 
     // --- verifyAccount (rate-limit) ---

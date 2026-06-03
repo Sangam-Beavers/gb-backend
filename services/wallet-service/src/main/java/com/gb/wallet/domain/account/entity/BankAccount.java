@@ -56,9 +56,9 @@ public class BankAccount extends BaseEntity {
     private String accountNumber;
 
     /**
-     * 외부 계좌 예금주명. 계좌 등록 시 verify 응답(외부 은행이 알려준 진짜 예금주)에서 받아 저장한다 —
-     * 사용자 입력값이 아닌 외부 신뢰 source. REMITTANCE 송금 시 {@code Transaction.receiverName}에
-     * snapshot으로 복사돼 송금 확인증의 receiver_name 출처가 된다.
+     * 외부 계좌 예금주명. 계좌 등록 시 holder 조회({@code GET /accounts/holder}) 응답에서 받아 저장한다
+     * (외부 은행이 알려준 진짜 예금주) — 사용자 입력값이 아닌 외부 신뢰 source. REMITTANCE 송금 시
+     * {@code Transaction.receiverName}에 snapshot으로 복사돼 송금 확인증의 receiver_name 출처가 된다.
      *
      * <p>NULLABLE — 컬럼 추가 전 등록된 기존 계좌는 null. 신규 등록은 Service에서 항상 채움.
      */

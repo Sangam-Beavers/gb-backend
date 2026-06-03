@@ -697,9 +697,9 @@ wallet:
 - 목록: `GET /api/v1/accounts` → `data: { accounts: [...] }`
 - 지원 은행: `GET /api/v1/accounts/supported-banks`
 - 예금주 실명 조회: `GET /api/v1/accounts/holder?bankCode={}&accountNumber={}`
-- 계좌 연결+자동이체 인증 요청: `POST /api/v1/accounts/verify` (※ Mock/화면용. 실제 인증 미구현). 응답으로 `account_token` + `account_holder_name`(외부 은행이 검증한 진짜 예금주) 반환.
+- 계좌 연결+자동이체 인증 요청: `POST /api/v1/accounts/verify` (※ Mock/화면용. 실제 인증 미구현). 응답으로 `account_token`만 반환한다(§13 은행 연동·`VerifyAccountResponse` 정본). 예금주 실명은 위 `GET /api/v1/accounts/holder`로 받는다.
 - 계좌 등록 최종 완료: `POST /api/v1/accounts` → 201, `bank_accounts` INSERT
-    - **Body 필수 필드**: `bank_code`, `account_number`, `account_token`(verify 응답), **`holder_name`(verify 응답의 `account_holder_name`을 그대로 전달, 최대 100자)**.
+    - **Body 필수 필드**: `bank_code`, `account_number`, `account_token`(verify 응답), **`holder_name`(`GET /accounts/holder` 응답의 `account_holder_name`을 그대로 전달, 최대 100자)**.
     - holder_name은 REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot되어 송금 확인증의 `receiver_name` 출처가 된다(외부 신뢰 source, 사용자 임의 입력 금지).
 - 주 계좌 변경: `PATCH /api/v1/accounts/{id}/primary`
 - 계좌 삭제: `DELETE /api/v1/accounts/{id}`
@@ -737,6 +737,7 @@ wallet:
 | 404 | ACCOUNT4001 | 존재하지 않는 계좌입니다. |
 | 404 | WALLET4001 | 존재하지 않는 지갑입니다. (계좌는 있으나 해당 회원의 지갑이 없는 방어 케이스) |
 | 422 | ACCOUNT4007 | 충전 한도를 초과했습니다. |
+| 500 | COMMON5000 | 서버 오류가 발생했습니다. (멱등성 일관성 위반 등 정상 흐름에서 발생 불가 — 방어) |
 | 503 | COMMON5031 | 일시적으로 처리할 수 없습니다. |
 
 > 구현 수준 2(Mock): 실제 출금은 Mock 은행(Beaver/Quokka Bank) 응답으로 시뮬레이션. 충전 처리는 `@Transactional`에서 [잔액 조회→검증→증액→audit_log INSERT→커밋].
