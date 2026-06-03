@@ -486,7 +486,9 @@ class AccountControllerTest {
         mockMvc.perform(delete("/api/v1/accounts/{id}", ACCT_ID)
                         .with(authedJwt()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true));
+                .andExpect(jsonPath("$.success").value(true))
+                // ApiResponse는 @JsonInclude(ALWAYS)라 data:null이 키째 노출된다 — 삭제 응답에 payload 없음을 단언.
+                .andExpect(jsonPath("$.data").isEmpty());
 
         verify(bankAccountService).deleteAccount(USER_ID, ACCT_ID);
     }
