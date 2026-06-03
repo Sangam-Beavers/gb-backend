@@ -1,9 +1,11 @@
 package com.gb.wallet.global.redis;
 
 import java.time.Duration;
+import java.util.List;
 import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RAtomicLong;
+import org.redisson.api.RScript;
 import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.StringCodec;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
@@ -43,15 +45,24 @@ public class RateLimitHelper {
      */
     public boolean tryAcquire(String key, long limit, Duration window) {
         try {
-            RAtomicLong counter = redissonClient.getAtomicLong(key);
-            long count = counter.incrementAndGet();
-            if (count == 1L) {
-                counter.expire(window);
-            }
+            // INCR + (첫 증가=1일 때만)PEXPIRE를 한 Lua로 원자 실행 — 둘 사이에 JVM/연결이 끊겨도
+            // TTL 없는 영구 키가 남지 않게 한다(원자성만 추가, 카운트·TTL·fail-open 동작은 동일). ARGV는 ms.
+            long count = redissonClient.getScript(StringCodec.INSTANCE).<Long>eval(
+                    RScript.Mode.READ_WRITE,
+                    INCR_WITH_TTL_LUA,
+                    RScript.ReturnType.INTEGER,
+                    List.<Object>of(key),
+                    String.valueOf(window.toMillis()));
             return count <= limit;
         } catch (RuntimeException e) {
             log.warn("Rate-limit 카운터 접근 실패 — fail-open(통과). key={}", key, e);
             return true;
         }
     }
+
+    /** 고정 윈도 카운터의 INCR + 첫 증가(=1) 시 PEXPIRE를 원자 실행하는 Lua. KEYS[1]=카운터 키, ARGV[1]=윈도(ms). */
+    private static final String INCR_WITH_TTL_LUA =
+            "local count = redis.call('incr', KEYS[1]); "
+            + "if count == 1 then redis.call('pexpire', KEYS[1], ARGV[1]); end; "
+            + "return count;";
 }

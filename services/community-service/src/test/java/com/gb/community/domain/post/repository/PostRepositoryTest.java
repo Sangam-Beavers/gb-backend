@@ -283,6 +283,38 @@ class PostRepositoryTest {
         assertThat(postRepository.findLikeCountById(p1.getId())).contains(0);
     }
 
+    @Test
+    @DisplayName("incrementCommentCount: comment_count +1이 실 DB에 반영된다(엔티티 RMW 아님 — 원자 UPDATE)")
+    void incrementCommentCount_반영() {
+        postRepository.incrementCommentCount(p1.getId()); // p1 comment_count = 0 (setUp) → 1
+        em.flush();
+        em.clear();
+
+        assertThat(em.find(Post.class, p1.getId()).getCommentCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("decrementCommentCount: -1 반영 + comment_count=0에서는 더 내려가지 않는다(> 0 가드, 음수 방지)")
+    void decrementCommentCount_0_가드() {
+        // comment_count를 1로 통제(native — persistQnaPost와 동일 기법).
+        em.getEntityManager()
+                .createNativeQuery("UPDATE posts SET comment_count = 1 WHERE id = ?1")
+                .setParameter(1, p1.getId())
+                .executeUpdate();
+        em.flush();
+        em.clear();
+
+        postRepository.decrementCommentCount(p1.getId()); // 1 → 0
+        em.flush();
+        em.clear();
+        assertThat(em.find(Post.class, p1.getId()).getCommentCount()).isEqualTo(0);
+
+        postRepository.decrementCommentCount(p1.getId()); // 0 → 0 (comment_count > 0 가드로 음수 차단)
+        em.flush();
+        em.clear();
+        assertThat(em.find(Post.class, p1.getId()).getCommentCount()).isEqualTo(0);
+    }
+
     // ----- helpers -----
 
     /**

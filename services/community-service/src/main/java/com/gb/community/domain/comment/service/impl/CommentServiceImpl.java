@@ -77,8 +77,8 @@ public class CommentServiceImpl implements CommentService {
                 .content(request.getContent())
                 .build());
 
-        // (3) 게시글 comment_count +1 — dirty checking으로 UPDATE(같은 트랜잭션이라 자동 반영).
-        post.increaseCommentCount();
+        // (3) 게시글 comment_count +1 — 동시 작성 lost update 방지를 위해 DB 원자 UPDATE(like_count와 동일).
+        postRepository.incrementCommentCount(post.getId());
 
         // (4) 작성자 표시 정보(닉네임/인증배지) MemberClient로 조회.
         //     MockMemberClient는 미존재 시 fallback "Unknown" 반환하므로 null 우려 없음.
@@ -112,9 +112,9 @@ public class CommentServiceImpl implements CommentService {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
 
-        // (5) Soft delete + 카운터 캐시 -1. 같은 트랜잭션이라 dirty checking으로 두 UPDATE 자동 반영.
+        // (5) Soft delete + comment_count -1(동시 삭제 lost update 방지 위해 DB 원자 UPDATE, count>0 가드).
         comment.softDelete();
-        post.decreaseCommentCount();
+        postRepository.decrementCommentCount(post.getId());
     }
 
     // ----- helpers -----
