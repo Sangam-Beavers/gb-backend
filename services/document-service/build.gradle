@@ -10,7 +10,7 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.kafka:spring-kafka'
-    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.14'
 
     // R1 PoC — Lambda Function URL을 IAM(SigV4)로 서명해 호출하기 위한 AWS SDK v2 auth 모듈.
     // HTTP 자체는 Java 17 java.net.http.HttpClient로 처리하고, 여기서는 서명 유틸만 사용한다.
