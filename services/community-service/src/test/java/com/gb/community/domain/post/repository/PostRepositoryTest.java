@@ -257,6 +257,32 @@ class PostRepositoryTest {
                 .containsExactly(c3.getPublicId(), c2.getPublicId());
     }
 
+    // ----- like_count 증감 정합(C-O4) — 좋아요/취소가 쓰는 벌크 UPDATE의 실 DB 반영·음수 가드 검증 -----
+
+    @Test
+    @DisplayName("incrementLikeCount: like_count +1이 실 DB에 반영된다(findLikeCountById 재조회)")
+    void incrementLikeCount_반영() {
+        postRepository.incrementLikeCount(p1.getId()); // p1 like_count = 1 (setUp) → 2
+        em.flush();
+        em.clear();
+
+        assertThat(postRepository.findLikeCountById(p1.getId())).contains(2);
+    }
+
+    @Test
+    @DisplayName("decrementLikeCount: -1 반영 + like_count=0에서는 더 내려가지 않는다(> 0 가드, 음수 방지)")
+    void decrementLikeCount_0_가드() {
+        postRepository.decrementLikeCount(p1.getId()); // 1 → 0
+        em.flush();
+        em.clear();
+        assertThat(postRepository.findLikeCountById(p1.getId())).contains(0);
+
+        postRepository.decrementLikeCount(p1.getId()); // 0 → 0 (like_count > 0 가드로 음수 차단)
+        em.flush();
+        em.clear();
+        assertThat(postRepository.findLikeCountById(p1.getId())).contains(0);
+    }
+
     // ----- helpers -----
 
     /**
