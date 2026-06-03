@@ -24,7 +24,6 @@
 | 지원 통화 조회 | GET | `/api/v1/transfers/supported-currencies` | ✅ |
 | 최근 송금 계좌 | GET | `/api/v1/transfers/recent-accounts` | ✅ |
 | 지원 은행 목록 (※ `/accounts/supported-banks`로 제공 — 별도 transfers 경로 미구현) | GET | `/api/v1/transfers/supported-banks` | ✅ |
-| 예금주 실명 조회 (deprecated → `/accounts/holder`) | GET | `/api/v1/transfers/account-holder?bankCode={}&accountNumber={}` | ✅ |
 | 송금 수수료 조회 | POST | `/api/v1/transfers/fee` | ✅ |
 | 송금 PIN 설정 | POST | `/api/v1/transfers/pin` | ✅ |
 | 송금 PIN 검증 | POST | `/api/v1/transfers/pin-verify` | ✅ |
@@ -173,7 +172,6 @@
 ## 5. 송금 사전 검증
 
 - 앱 사용자 검증: `GET /api/v1/transfers/validate-member?email={}` → `data: { receiver_public_id, nickname, is_verified }`
-- 예금주 실명 조회: `GET /api/v1/transfers/account-holder?bankCode={}&accountNumber={}` → `data: { account_holder_name }` **(deprecated — 예금주는 `GET /accounts/holder`로 일원화. 코드 잔존, 추후 제거 예정.)**
 - 송금 PIN 설정: `POST /api/v1/transfers/pin` (Body: `{ "pin": "123456" }`, 숫자 6자리) → 201. 형식 오류 `COMMON4001`, 이미 설정됨 `COMMON4091`. (방식 B라 계정 비밀번호는 IdP가 보유 → 송금 본인확인은 별도 송금 PIN 6자리로 한다.)
 - 송금 PIN 검증: `POST /api/v1/transfers/pin-verify` (Body: `{ "pin": "123456" }`) → 200. 불일치 `TRANSFER4007`, 미설정 `TRANSFER4009`, 5회 연속 실패 시 10분 잠금 `TRANSFER4008`(429). 성공해야 송금 실행(§6)으로 진행.
 
