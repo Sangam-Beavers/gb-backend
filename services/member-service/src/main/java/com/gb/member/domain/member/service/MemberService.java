@@ -2,10 +2,12 @@ package com.gb.member.domain.member.service;
 
 import com.gb.member.domain.member.dto.request.PasswordResetEmailRequest;
 import com.gb.member.domain.member.dto.request.PasswordResetRequest;
+import com.gb.member.domain.member.dto.request.ProfileUpdateRequest;
 import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.request.SocialProfileRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.LanguageResponse;
+import com.gb.member.domain.member.dto.response.ProfileResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.dto.response.SocialProfileResponse;
 
@@ -42,4 +44,13 @@ public interface MemberService {
 
     /** 현재 회원을 탈퇴 처리한다(로컬 soft delete + IdP 비활성화). 없는(탈퇴 포함) 회원이면 MEMBER4001. */
     void withdraw(String userPublicId);
+
+    /** 마이페이지 내 프로필을 조회한다. 없는(탈퇴 포함) 회원이면 MEMBER4001. */
+    ProfileResponse getMyProfile(String userPublicId);
+
+    /**
+     * 마이페이지 프로필(닉네임/언어/자기소개)을 수정하고 변경된 프로필을 반환한다.
+     * 닉네임을 다른 값으로 바꿀 때만 중복 확인(중복이면 MEMBER4003). 없는(탈퇴 포함) 회원이면 MEMBER4001.
+     */
+    ProfileResponse updateMyProfile(String userPublicId, ProfileUpdateRequest request);
 }

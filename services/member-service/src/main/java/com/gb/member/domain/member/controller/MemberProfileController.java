@@ -5,9 +5,12 @@ import com.gb.common.exception.BusinessException;
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
 import com.gb.common.response.SuccessStatus;
+import com.gb.member.domain.member.dto.request.ProfileUpdateRequest;
 import com.gb.member.domain.member.dto.request.SocialProfileRequest;
+import com.gb.member.domain.member.dto.response.ProfileResponse;
 import com.gb.member.domain.member.dto.response.SocialProfileResponse;
 import com.gb.member.domain.member.service.MemberService;
+import com.gb.member.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -19,6 +22,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -93,5 +98,56 @@ public class MemberProfileController {
         return ApiResponse.success(
                 SuccessStatus.CREATED,
                 memberService.completeSocialProfile(publicId, email, name, authProviderId, request));
+    }
+
+    @GetMapping
+    @Operation(
+            summary = "내 프로필 조회",
+            description = "마이페이지 내 프로필을 조회한다. is_verified/temperature_grade/profile_image_url은 "
+                    + "각각 인증·커뮤니티·이미지 도메인 소관이라 현재 기본값으로 내려간다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "조회 성공. data에 ProfileResponse."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401", description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "MEMBER4001 - 존재하지 않는 회원입니다.",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    public ApiResponse<ProfileResponse> getMyProfile(@CurrentUserPublicId String userPublicId) {
+        return ApiResponse.success(memberService.getMyProfile(userPublicId));
+    }
+
+    @PatchMapping
+    @Operation(
+            summary = "내 프로필 수정",
+            description = "닉네임/주 사용 언어/자기소개를 수정한다. 닉네임을 다른 값으로 바꿀 때만 중복 확인한다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "수정 성공. data에 변경된 ProfileResponse."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400", description = "COMMON4001 - 요청 값이 올바르지 않습니다.",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401", description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "MEMBER4001 - 존재하지 않는 회원입니다.",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409", description = "MEMBER4003 - 이미 사용 중인 닉네임입니다.",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    public ApiResponse<ProfileResponse> updateMyProfile(
+            @CurrentUserPublicId String userPublicId,
+            @Valid @RequestBody ProfileUpdateRequest request) {
+        return ApiResponse.success(memberService.updateMyProfile(userPublicId, request));
     }
 }
