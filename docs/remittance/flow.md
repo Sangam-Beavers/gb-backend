@@ -100,8 +100,7 @@
 
 ```
 [환전]
-지원 환전 통화      GET /api/v1/exchanges/supported-currencies
-(재환전 통화)       GET /api/v1/exchanges/re-exchange/supported-currencies
+지원 (재)환전 통화   GET /api/v1/exchanges/supported-currencies  (환전·재환전 공통 단일 엔드포인트)
   │
 견적 조회·검증      POST /api/v1/exchanges/quote
   Body: exchange_type(EXCHANGE/RE_EXCHANGE), from_currency_code, to_currency_code, amount

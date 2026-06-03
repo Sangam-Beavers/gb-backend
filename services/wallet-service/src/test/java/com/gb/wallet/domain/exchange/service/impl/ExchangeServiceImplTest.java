@@ -49,6 +49,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -304,5 +305,273 @@ class ExchangeServiceImplTest {
         assertThat(response.getSize()).isEqualTo(20);
         assertThat(response.getTotalElements()).isEqualTo(1);
         assertThat(response.getTotalPages()).isEqualTo(1);
+    }
+
+    // ───────────────────── EX-T1: RE_EXCHANGE(외화→원화) 견적·실행·역산 ─────────────────────
+
+    @Test
+    @DisplayName("견적 RE_EXCHANGE: USD 100→원화, 역방향 환율·수수료·수령액을 계산한다(노출 환율=from 외화)")
+    void createQuote_재환전_계산() {
+        // given — RE_EXCHANGE, USD 100 → KRW
+        QuoteRequest request = new QuoteRequest();
+        ReflectionTestUtils.setField(request, "exchangeType", "RE_EXCHANGE");
+        ReflectionTestUtils.setField(request, "fromCurrencyCode", "USD");
+        ReflectionTestUtils.setField(request, "toCurrencyCode", "KRW");
+        ReflectionTestUtils.setField(request, "amount", "100.0000");
+        when(exchangeRateClient.getRateToKrw(CurrencyType.USD)).thenReturn(new BigDecimal("1380"));
+        when(exchangeRateClient.getRateToKrw(CurrencyType.KRW)).thenReturn(new BigDecimal("1"));
+
+        // when
+        QuoteResponse response = exchangeService.createQuote(USER, request);
+
+        // then — amountInKrw = 100*1380 = 138000, 수수료 = 138000*0.5% = 690, 수령 = (138000-690)/1 = 137310
+        assertThat(response.getFee()).isEqualTo("690.0000");
+        assertThat(response.getFeeCurrencyCode()).isEqualTo("KRW");
+        assertThat(response.getReceiveCurrencyCode()).isEqualTo("KRW");
+        assertThat(new BigDecimal(response.getReceiveAmount()))
+                .isEqualByComparingTo(new BigDecimal("137310.0000"));
+        // RE_EXCHANGE는 from(외화=USD) 환율을 노출한다("1 외화→KRW" 표기).
+        assertThat(new BigDecimal(response.getExchangeRate()))
+                .isEqualByComparingTo(new BigDecimal("1380"));
+        verify(quoteRedisRepository).save(any(QuoteData.class));
+    }
+
+    @Test
+    @DisplayName("실행 RE_EXCHANGE: 외화(USD) 차감·원화(KRW) 증가 후 거래를 저장하고 RE_EXCHANGE로 응답한다")
+    void executeInTransaction_재환전_성공() {
+        QuoteData quote = new QuoteData("quote-re", USER, ExchangeType.RE_EXCHANGE,
+                CurrencyType.USD, CurrencyType.KRW, new BigDecimal("100"),
+                new BigDecimal("1380"), new BigDecimal("690"), CurrencyType.KRW,
+                new BigDecimal("137310.0000"), CurrencyType.KRW);
+
+        Wallet wallet = Wallet.builder().publicId("w-1").userPublicId(USER).status(WalletStatus.ACTIVE).build();
+        when(walletRepository.findByUserPublicId(USER)).thenReturn(Optional.of(wallet));
+        WalletBalance fromBalance = WalletBalance.builder()
+                .wallet(wallet).currencyCode(CurrencyType.USD).balance(new BigDecimal("500")).build();
+        WalletBalance toBalance = WalletBalance.builder()
+                .wallet(wallet).currencyCode(CurrencyType.KRW).balance(BigDecimal.ZERO).build();
+        when(walletBalanceRepository.findForUpdateByWalletAndCurrency(eq(wallet), any(CurrencyType.class)))
+                .thenAnswer(inv -> {
+                    CurrencyType c = inv.getArgument(1);
+                    return Optional.of(c == CurrencyType.USD ? fromBalance : toBalance);
+                });
+        when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // when
+        ExchangeResponse response = exchangeService.executeInTransaction(USER, "idem-re", quote);
+
+        // then — from(USD) 차감, to(KRW) 증가
+        assertThat(fromBalance.getBalance()).isEqualByComparingTo(new BigDecimal("400"));      // 500-100
+        assertThat(toBalance.getBalance()).isEqualByComparingTo(new BigDecimal("137310.0000")); // 0+137310
+        assertThat(response.getExchangeType()).isEqualTo("RE_EXCHANGE");
+        assertThat(response.getFromCurrencyCode()).isEqualTo("USD");
+        assertThat(response.getToCurrencyCode()).isEqualTo("KRW");
+        assertThat(response.getReceiveCurrencyCode()).isEqualTo("KRW");
+        verify(transactionRepository).save(any(Transaction.class));
+    }
+
+    // ───────────────────── EX-T2: 멱등성 Layer 2(DB)·Layer 3(race) ─────────────────────
+
+    @Test
+    @DisplayName("실행 Layer 2: 캐시 miss + DB에 동일 키 거래 존재 → 견적 조회·재실행 없이 첫 거래를 재반환")
+    void execute_Layer2_prior_재반환() {
+        ExchangeExecuteRequest request = new ExchangeExecuteRequest();
+        ReflectionTestUtils.setField(request, "quotePublicId", "quote-1");
+        String cacheKey = "exchange:idem-1:" + USER;
+        Wallet wallet = Wallet.builder().publicId("w-1").userPublicId(USER).status(WalletStatus.ACTIVE).build();
+        Transaction prior = exchangeTx(wallet, "ex-prior");
+        when(idempotencyCacheHelper.get(cacheKey)).thenReturn(Optional.empty()); // 캐시 miss
+        when(transactionRepository.findByIdempotencyKey("idem-1")).thenReturn(Optional.of(prior));
+
+        ExchangeResponse result = exchangeService.execute(USER, "idem-1", request);
+
+        assertThat(result.getPublicId()).isEqualTo("ex-prior");
+        // Layer 2 hit이면 견적 재조회·재실행·잔액 변경이 일어나지 않는다.
+        verify(quoteRedisRepository, never()).find(any());
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("실행 Layer 3: 실행 중 UNIQUE race(DataIntegrityViolation) → readPrior로 첫 거래를 재반환(견적 미삭제)")
+    void execute_Layer3_race_readPrior() {
+        ReflectionTestUtils.setField(exchangeService, "self", self); // self-proxy 위임 검증용
+        ExchangeExecuteRequest request = new ExchangeExecuteRequest();
+        ReflectionTestUtils.setField(request, "quotePublicId", "quote-1");
+        String cacheKey = "exchange:idem-1:" + USER;
+        QuoteData quote = new QuoteData("quote-1", USER, ExchangeType.EXCHANGE,
+                CurrencyType.KRW, CurrencyType.USD, new BigDecimal("100000"),
+                new BigDecimal("1380"), new BigDecimal("500"), CurrencyType.KRW,
+                new BigDecimal("72.1014"), CurrencyType.USD);
+        ExchangeResponse priorResponse = ExchangeResponse.builder().publicId("ex-prior").status("COMPLETED").build();
+        when(idempotencyCacheHelper.get(cacheKey)).thenReturn(Optional.empty());
+        when(transactionRepository.findByIdempotencyKey("idem-1")).thenReturn(Optional.empty());
+        when(quoteRedisRepository.find("quote-1")).thenReturn(Optional.of(quote));
+        when(self.executeInTransaction(USER, "idem-1", quote))
+                .thenThrow(new DataIntegrityViolationException("duplicate idempotency_key"));
+        when(self.readPrior(USER, "idem-1")).thenReturn(priorResponse);
+
+        ExchangeResponse result = exchangeService.execute(USER, "idem-1", request);
+
+        assertThat(result).isSameAs(priorResponse);
+        verify(self).readPrior(USER, "idem-1"); // 소유자 스코프로 재조회(EX-FIX)
+        // race로 빠졌으므로 성공 경로의 견적 삭제(delete)는 일어나지 않는다.
+        verify(quoteRedisRepository, never()).delete(any());
+    }
+
+    // ───────────────────── EX-T2: 멱등 재반환 cross-user/cross-type 차단(EX-FIX 회귀) ─────────────────────
+
+    @Test
+    @DisplayName("실행 Layer 2: 타인의 idempotency_key 거래가 잡히면 EXCHANGE4001로 차단(남의 거래 미노출)")
+    void execute_Layer2_타인키_차단() {
+        ExchangeExecuteRequest request = new ExchangeExecuteRequest();
+        ReflectionTestUtils.setField(request, "quotePublicId", "quote-1");
+        String cacheKey = "exchange:idem-1:" + USER;
+        // 같은 idempotency_key(전역 UNIQUE)지만 거래 주인은 다른 사용자
+        Wallet othersWallet = Wallet.builder()
+                .publicId("w-2").userPublicId("other-user").status(WalletStatus.ACTIVE).build();
+        Transaction othersTx = exchangeTx(othersWallet, "ex-others");
+        when(idempotencyCacheHelper.get(cacheKey)).thenReturn(Optional.empty());
+        when(transactionRepository.findByIdempotencyKey("idem-1")).thenReturn(Optional.of(othersTx));
+
+        assertThatThrownBy(() -> exchangeService.execute(USER, "idem-1", request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(ExchangeErrorCode.EXCHANGE_NOT_FOUND);
+
+        // 남의 거래를 재반환하지도, 새 거래를 만들지도 않는다.
+        verify(quoteRedisRepository, never()).find(any());
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("실행 Layer 2: 같은 키가 본인의 비-EXCHANGE(CHARGE) 거래면 EXCHANGE4001로 차단(유형 교차 방지)")
+    void execute_Layer2_타유형키_차단() {
+        ExchangeExecuteRequest request = new ExchangeExecuteRequest();
+        ReflectionTestUtils.setField(request, "quotePublicId", "quote-1");
+        String cacheKey = "exchange:idem-1:" + USER;
+        Wallet wallet = Wallet.builder().publicId("w-1").userPublicId(USER).status(WalletStatus.ACTIVE).build();
+        // 본인 거래지만 유형이 CHARGE — 환전 응답으로 재현하면 안 됨
+        Transaction charge = Transaction.builder()
+                .publicId("ch-1").wallet(wallet).type(TransactionType.CHARGE)
+                .amount(new BigDecimal("100000")).currencyCode(CurrencyType.KRW)
+                .fee(BigDecimal.ZERO).status(TransactionStatus.COMPLETED).idempotencyKey("idem-1").build();
+        when(idempotencyCacheHelper.get(cacheKey)).thenReturn(Optional.empty());
+        when(transactionRepository.findByIdempotencyKey("idem-1")).thenReturn(Optional.of(charge));
+
+        assertThatThrownBy(() -> exchangeService.execute(USER, "idem-1", request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(ExchangeErrorCode.EXCHANGE_NOT_FOUND);
+
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("readPrior(Layer 3): 재조회한 거래가 타인 것이면 EXCHANGE4001로 차단")
+    void readPrior_타인거래_차단() {
+        Wallet othersWallet = Wallet.builder()
+                .publicId("w-2").userPublicId("other-user").status(WalletStatus.ACTIVE).build();
+        Transaction othersTx = exchangeTx(othersWallet, "ex-others");
+        when(transactionRepository.findByIdempotencyKey("idem-1")).thenReturn(Optional.of(othersTx));
+
+        assertThatThrownBy(() -> exchangeService.readPrior(USER, "idem-1"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(ExchangeErrorCode.EXCHANGE_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("readPrior(Layer 3): 본인 EXCHANGE 거래면 정상 재반환")
+    void readPrior_본인거래_재반환() {
+        Wallet wallet = Wallet.builder().publicId("w-1").userPublicId(USER).status(WalletStatus.ACTIVE).build();
+        Transaction prior = exchangeTx(wallet, "ex-prior");
+        when(transactionRepository.findByIdempotencyKey("idem-1")).thenReturn(Optional.of(prior));
+
+        ExchangeResponse result = exchangeService.readPrior(USER, "idem-1");
+
+        assertThat(result.getPublicId()).isEqualTo("ex-prior");
+        assertThat(result.getExchangeType()).isEqualTo("EXCHANGE"); // 수령=USD → 역산
+    }
+
+    // ───────────────────── EX-T4: 내역 단건(getExchange) ─────────────────────
+
+    @Test
+    @DisplayName("내역 단건: 본인 EXCHANGE 거래면 응답으로 변환(수령 통화 KRW면 RE_EXCHANGE로 역산)")
+    void getExchange_본인_재환전_역산() {
+        Wallet wallet = Wallet.builder().publicId("w-1").userPublicId(USER).status(WalletStatus.ACTIVE).build();
+        Transaction tx = Transaction.builder()
+                .publicId("ex-1").wallet(wallet).type(TransactionType.EXCHANGE)
+                .amount(new BigDecimal("100")).currencyCode(CurrencyType.USD)
+                .fee(new BigDecimal("690")).status(TransactionStatus.COMPLETED)
+                .idempotencyKey("k").receiveAmount(new BigDecimal("137310"))
+                .receiveCurrencyCode(CurrencyType.KRW).exchangeRate(new BigDecimal("1380"))
+                .toAmount(new BigDecimal("137310")).build();
+        when(transactionRepository.findByPublicId("ex-1")).thenReturn(Optional.of(tx));
+
+        ExchangeResponse response = exchangeService.getExchange(USER, "ex-1");
+
+        assertThat(response.getPublicId()).isEqualTo("ex-1");
+        assertThat(response.getExchangeType()).isEqualTo("RE_EXCHANGE"); // 수령=KRW → 역산
+        assertThat(response.getFromCurrencyCode()).isEqualTo("USD");
+        assertThat(response.getToCurrencyCode()).isEqualTo("KRW");
+    }
+
+    @Test
+    @DisplayName("내역 단건: 없는 id면 EXCHANGE4001")
+    void getExchange_없음() {
+        when(transactionRepository.findByPublicId("nope")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> exchangeService.getExchange(USER, "nope"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(ExchangeErrorCode.EXCHANGE_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("내역 단건: EXCHANGE 타입이 아니면(CHARGE 등) EXCHANGE4001 (존재 미노출)")
+    void getExchange_비환전타입() {
+        Wallet wallet = Wallet.builder().publicId("w-1").userPublicId(USER).status(WalletStatus.ACTIVE).build();
+        Transaction charge = Transaction.builder()
+                .publicId("ch-1").wallet(wallet).type(TransactionType.CHARGE)
+                .amount(new BigDecimal("100000")).currencyCode(CurrencyType.KRW)
+                .fee(BigDecimal.ZERO).status(TransactionStatus.COMPLETED).idempotencyKey("k").build();
+        when(transactionRepository.findByPublicId("ch-1")).thenReturn(Optional.of(charge));
+
+        assertThatThrownBy(() -> exchangeService.getExchange(USER, "ch-1"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(ExchangeErrorCode.EXCHANGE_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("내역 단건: 타인의 환전 거래면 COMMON4031")
+    void getExchange_타인거래_거절() {
+        Wallet othersWallet = Wallet.builder()
+                .publicId("w-2").userPublicId("other-user").status(WalletStatus.ACTIVE).build();
+        Transaction tx = Transaction.builder()
+                .publicId("ex-9").wallet(othersWallet).type(TransactionType.EXCHANGE)
+                .amount(new BigDecimal("100000")).currencyCode(CurrencyType.KRW)
+                .fee(new BigDecimal("500")).status(TransactionStatus.COMPLETED).idempotencyKey("k")
+                .receiveAmount(new BigDecimal("72")).receiveCurrencyCode(CurrencyType.USD)
+                .exchangeRate(new BigDecimal("1380")).toAmount(new BigDecimal("72")).build();
+        when(transactionRepository.findByPublicId("ex-9")).thenReturn(Optional.of(tx));
+
+        assertThatThrownBy(() -> exchangeService.getExchange(USER, "ex-9"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.FORBIDDEN);
+    }
+
+    // ----- helpers -----
+
+    /** toResponse가 읽는 필수 필드를 채운 본인(EXCHANGE, 수령=USD) 거래. 멱등 재반환 경로 검증용. */
+    private static Transaction exchangeTx(Wallet wallet, String publicId) {
+        return Transaction.builder()
+                .publicId(publicId).wallet(wallet).type(TransactionType.EXCHANGE)
+                .amount(new BigDecimal("100000")).currencyCode(CurrencyType.KRW)
+                .fee(new BigDecimal("500")).status(TransactionStatus.COMPLETED)
+                .idempotencyKey("idem-1").receiveAmount(new BigDecimal("72.1014"))
+                .receiveCurrencyCode(CurrencyType.USD).exchangeRate(new BigDecimal("1380"))
+                .toAmount(new BigDecimal("72.1014")).build();
     }
 }

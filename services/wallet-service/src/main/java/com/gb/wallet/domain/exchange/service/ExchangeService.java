@@ -31,6 +31,10 @@ public interface ExchangeService {
      */
     ExchangeResponse executeInTransaction(String userPublicId, String idempotencyKey, QuoteData quote);
 
-    /** 동시 race(멱등 키 UNIQUE 위반) 시 별도 트랜잭션으로 첫 거래를 재조회한다. self-proxy 호출용. */
-    ExchangeResponse readPrior(String idempotencyKey);
+    /**
+     * 동시 race(멱등 키 UNIQUE 위반) 시 별도 트랜잭션으로 첫 거래를 재조회한다. self-proxy 호출용.
+     * {@code idempotency_key}는 전역 UNIQUE(도메인·사용자 무관)라, 재조회한 거래가 요청자 본인의 EXCHANGE인지
+     * 검증한 뒤 반환한다(교차 사용자/유형 노출 차단 — 충전 {@code readPrior}와 동일 정책).
+     */
+    ExchangeResponse readPrior(String userPublicId, String idempotencyKey);
 }
