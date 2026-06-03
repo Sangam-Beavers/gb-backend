@@ -136,7 +136,7 @@ public class ScheduledTransferController {
     @Operation(
             summary = "정기 송금 회차 실행 이력 조회",
             description = "특정 정기 송금의 회차별 실행 이력(transactions)을 페이지 단위로 조회한다. "
-                    + "회차 거래는 스케줄러가 idempotency_key='scheduled:{publicId}:{today}' 형태로 INSERT한 행. "
+                    + "회차 거래는 스케줄러가 idempotency_key='scheduled:{publicId}:{nextRunDate}' 형태로 INSERT한 행. "
                     + "송신자 본인만 조회 가능하며, 미존재·본인 아님 모두 TRANSFER4001로 모호 매핑(정보 누설 방지). "
                     + "현 단계는 status가 항상 COMPLETED — 송금 실패 시 transactions INSERT 자체 안 됨.")
     @ApiResponses({
