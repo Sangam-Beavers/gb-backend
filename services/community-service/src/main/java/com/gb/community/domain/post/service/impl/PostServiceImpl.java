@@ -84,7 +84,13 @@ public class PostServiceImpl implements PostService {
 
         // category는 보냈을 때만 파싱(잘못된 값 → COMMON4001). title/content는 blank를 "변경 없음"으로 정규화.
         PostCategory newCategory = parseCategory(request.getCategory());
-        post.update(newCategory, nullIfBlank(request.getTitle()), nullIfBlank(request.getContent()));
+        String newTitle = nullIfBlank(request.getTitle());
+        String newContent = nullIfBlank(request.getContent());
+        // 세 값이 모두 없으면 변경할 내용이 없는 빈 PATCH → 조용한 no-op 대신 명시적으로 거절(COMMON4001).
+        if (newCategory == null && newTitle == null && newContent == null) {
+            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+        }
+        post.update(newCategory, newTitle, newContent);
         // 변경은 영속성 컨텍스트 dirty checking으로 커밋 시 반영(별도 save 불필요).
 
         return PostDetailResponse.from(post, memberClient.getMember(post.getUserPublicId()));
