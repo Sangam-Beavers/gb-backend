@@ -155,9 +155,11 @@ public class ExchangeServiceImpl implements ExchangeService {
     private ExchangeResponse doExecute(String userPublicId, String idempotencyKey,
                                        ExchangeExecuteRequest request) {
         // Layer 2 — 이미 처리된 키면 첫 거래를 재반환(잔액 재변경 없음).
+        //   idempotency_key는 전역 UNIQUE(도메인·사용자 무관)라 타 사용자/유형 거래가 잡힐 수 있으므로,
+        //   요청자 본인의 EXCHANGE 거래인지 검증 후 재반환한다(충전 rebuildFromPrior와 동일 — 교차 노출 차단).
         Optional<Transaction> prior = transactionRepository.findByIdempotencyKey(idempotencyKey);
         if (prior.isPresent()) {
-            return toResponse(prior.get());
+            return rebuildPrior(prior.get(), userPublicId);
         }
 
         // 견적 조회 — 없으면(TTL 만료/미존재) 만료 처리.
@@ -175,8 +177,8 @@ public class ExchangeServiceImpl implements ExchangeService {
             quoteRedisRepository.delete(quote.quotePublicId()); // 성공 시 견적 삭제(재사용 방지)
             return response;
         } catch (DataIntegrityViolationException race) {
-            // Layer 3 — 동시 race로 같은 키가 먼저 커밋됨 → 첫 거래 재조회.
-            return self.readPrior(idempotencyKey);
+            // Layer 3 — 동시 race로 같은 키가 먼저 커밋됨 → 첫 거래 재조회(소유자·유형 검증 포함).
+            return self.readPrior(userPublicId, idempotencyKey);
         }
     }
 
@@ -298,10 +300,10 @@ public class ExchangeServiceImpl implements ExchangeService {
 
     @Override
     @Transactional(readOnly = true)
-    public ExchangeResponse readPrior(String idempotencyKey) {
+    public ExchangeResponse readPrior(String userPublicId, String idempotencyKey) {
         Transaction prior = transactionRepository.findByIdempotencyKey(idempotencyKey)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
-        return toResponse(prior);
+        return rebuildPrior(prior, userPublicId);
     }
 
     // ───────────────────────────── 내역 조회 ─────────────────────────────
@@ -336,6 +338,20 @@ public class ExchangeServiceImpl implements ExchangeService {
     }
 
     // ───────────────────────────── 헬퍼 ─────────────────────────────
+
+    /**
+     * 멱등 재반환(Layer 2/3) 전용 검증. {@code idempotency_key}는 전역 UNIQUE라 같은 키로 다른 사용자/유형의
+     * 거래가 잡힐 수 있으므로, 이 환전 요청의 응답으로 재현해도 되는 거래인지 확인하고 아니면 EXCHANGE4001로
+     * 차단한다(존재 미노출 — 충전 {@code rebuildFromPrior}와 동일 정책). 단건 조회({@link #getExchange})가 이미
+     * 적용 중인 "본인 + EXCHANGE" 검증을 멱등 경로에도 동일하게 적용해 교차 사용자/유형 노출을 막는다.
+     */
+    private ExchangeResponse rebuildPrior(Transaction prior, String userPublicId) {
+        if (!prior.getWallet().getUserPublicId().equals(userPublicId)
+                || prior.getType() != TransactionType.EXCHANGE) {
+            throw new BusinessException(ExchangeErrorCode.EXCHANGE_NOT_FOUND);
+        }
+        return toResponse(prior);
+    }
 
     /** 멱등성 재반환·내역 조회 공용. transactions에 환전 유형 컬럼이 없어 from/to 통화로 유형을 역산한다. */
     private ExchangeResponse toResponse(Transaction tx) {
