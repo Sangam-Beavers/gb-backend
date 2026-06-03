@@ -67,7 +67,7 @@ public enum WalletErrorCode implements ErrorCode {
 
     // 명세 §12-4 WALLET 도메인 표 기준
     WALLET_NOT_FOUND(HttpStatus.NOT_FOUND, "WALLET4001", "존재하지 않는 지갑입니다."),
-    INSUFFICIENT_BALANCE(HttpStatus.BAD_REQUEST, "WALLET4002", "지갑 잔액이 부족합니다.");
+    INSUFFICIENT_BALANCE(HttpStatus.UNPROCESSABLE_ENTITY, "WALLET4002", "지갑 잔액이 부족합니다.");
 
     private final HttpStatus httpStatus; // @Getter가 getHttpStatus/getCode/getMessage 생성 → 인터페이스 충족
     private final String code;
@@ -127,7 +127,7 @@ throw new BusinessException(WalletErrorCode.WALLET_NOT_FOUND);
 | 도메인 | 코드 | HTTP | message |
 |---|---|---|---|
 | WALLET | WALLET4001 | 404 | 존재하지 않는 지갑입니다. |
-| WALLET | WALLET4002 | 400 | 지갑 잔액이 부족합니다. |
+| WALLET | WALLET4002 | 422 | 지갑 잔액이 부족합니다. |
 | TRANSFER | TRANSFER4001 | 404 | 존재하지 않는 송금 내역입니다. |
 | TRANSFER | TRANSFER4002 | 400 | 지원하지 않는 통화입니다. |
 

@@ -196,7 +196,7 @@
 | HTTP | code | message |
 | --- | --- | --- |
 | 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (Body 검증 실패, REMITTANCE 시 `bank_account_public_id` 누락 포함) |
-| 400 | WALLET4002 | 지갑 잔액이 부족합니다. (REMITTANCE는 amount + fee ≤ 송신자 잔액) |
+| 422 | WALLET4002 | 지갑 잔액이 부족합니다. (REMITTANCE는 amount + fee ≤ 송신자 잔액. 요청 형식은 정상이나 잔액 부족으로 처리 불가) |
 | 400 | TRANSFER4002 | 지원하지 않는 통화입니다. |
 | 400 | TRANSFER4003 | 지원하지 않는 송금 유형입니다. (INTERNAL_TRANSFER/REMITTANCE 외 — 예: CHARGE/EXCHANGE) |
 | 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. (INTERNAL_TRANSFER 한정) |

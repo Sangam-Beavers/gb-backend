@@ -327,7 +327,7 @@ public class TransferController {
                     description = "송금 성공. 응답은 공통 ApiResponse로 감싸지며 data에 TransferExecuteResponse가 담긴다."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "COMMON4001 - Body 검증 실패 / WALLET4002 - 잔액 부족 / "
+                    description = "COMMON4001 - Body 검증 실패 / "
                             + "TRANSFER4002 - 미지원 통화 / TRANSFER4003 - 미지원 송금 유형 / "
                             + "TRANSFER4004 - 자기 송금 / TRANSFER4005 - 미지원 통화 조합. "
                             + "같은 400이지만 비즈니스 코드가 다르다 (examples 드롭다운 참고).",
@@ -335,7 +335,6 @@ public class TransferController {
                             schema = @Schema(implementation = ErrorResponse.class),
                             examples = {
                                     @ExampleObject(name = "COMMON4001", value = EX_COMMON4001),
-                                    @ExampleObject(name = "WALLET4002", value = EX_WALLET4002),
                                     @ExampleObject(name = "TRANSFER4002", value = EX_TRANSFER4002),
                                     @ExampleObject(name = "TRANSFER4003", value = EX_TRANSFER4003),
                                     @ExampleObject(name = "TRANSFER4004", value = EX_TRANSFER4004),
@@ -353,6 +352,12 @@ public class TransferController {
                     content = @Content(
                             schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "WALLET4001", value = EX_WALLET4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "422",
+                    description = "WALLET4002 - 지갑 잔액이 부족합니다 (요청 형식은 정상이나 잔액 부족으로 처리 불가).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "WALLET4002", value = EX_WALLET4002))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
