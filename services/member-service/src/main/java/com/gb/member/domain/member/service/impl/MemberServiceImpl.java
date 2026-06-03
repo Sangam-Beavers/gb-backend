@@ -155,17 +155,15 @@ public class MemberServiceImpl implements MemberService {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public void resetPassword(PasswordResetRequest request) {
-        // 토큰 검증 — Redis에 없으면(만료/무효) 거절.
-        String email = passwordResetTokenStore.findEmail(request.getToken())
+        // 토큰을 원자적으로 소비(GETDEL) — IdP 호출 전에 단 한 번만 쓰이게 한다. 없으면(만료/무효/이미 소비) 거절.
+        // 동시 요청·더블클릭이 들어와도 정확히 한 번만 통과한다(GET-then-DELETE 경쟁 제거).
+        String email = passwordResetTokenStore.consume(request.getToken())
                 .orElseThrow(() -> new BusinessException(MemberErrorCode.INVALID_RESET_TOKEN));
 
         // 비밀번호는 IdP가 보유하므로 IdP 관리 API로 변경한다.
+        // (토큰은 이미 소비됨 — IdP 실패 시 재설정을 다시 요청해야 한다. 토큰 단일 사용 보안 우선.)
         idpUserClient.changePassword(email, request.getNewPassword());
-
-        // 사용 완료된 토큰 삭제(재사용 방지).
-        passwordResetTokenStore.delete(request.getToken());
     }
 
     @Override

@@ -14,6 +14,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 /**
  * 실제 외부 IdP(개발=Authentik)의 관리 API를 호출해 회원을 등록하는 구현체.
@@ -32,8 +33,9 @@ import org.springframework.web.client.RestClientException;
  * <p>이 호출은 로그인 중계와 달리 <b>관리자 토큰</b>(Authorization: Bearer)이 필요하다.
  * 토큰은 평문 금지: {@code auth.idp.admin-token}으로 받되 실제 값은 환경변수(AUTH_ADMIN_TOKEN)로만 주입한다.
  *
- * <p>실패는 모두 통합 변환한다: 어떤 단계든 IdP가 거절·실패하면 가입을 진행할 수 없으므로
- * {@link CommonErrorCode#INTERNAL_SERVER_ERROR}로 변환한다(연동 장애는 서버 측 문제로 취급 — CLAUDE §6).
+ * <p>IdP 응답 에러는 상태로 분기한다: 4xx(이메일/username 충돌 등 클라이언트 입력 문제)는
+ * {@link CommonErrorCode#INVALID_REQUEST}(400), 5xx·연결 실패(서버측 연동 장애)는
+ * {@link CommonErrorCode#INTERNAL_SERVER_ERROR}(500)로 변환한다(CLAUDE §6).
  *
  * <p>주의(설정 의존): 반환하는 {@code uuid}가 로그인 토큰의 {@code sub}와 일치하려면 Authentik
  * Provider의 subject mode를 "Based on the User's UUID"로 맞춰야 한다. 기본값(hashed id)이면
@@ -97,9 +99,14 @@ public class RealIdpUserClient implements IdpUserClient {
 
             return created.uuid();
 
+        } catch (RestClientResponseException e) {
+            // IdP 응답 에러 — 4xx(이메일/username 충돌 등 입력 문제)→COMMON4001, 5xx→COMMON5000.
+            log.error("Authentik 사용자 프로비저닝 실패: email={}, status={}, msg={}",
+                    email, e.getStatusCode(), e.getMessage());
+            throw new BusinessException(idpStatusToError(e));
         } catch (RestClientException e) {
-            // 4xx(이메일/username 충돌 등)·연결 실패·5xx 모두 포함. 가입 진행 불가 → 통합 변환.
-            log.error("Authentik 사용자 프로비저닝 실패: email={}, msg={}", email, e.getMessage());
+            // 연결 실패·타임아웃 등(응답 없음) → 서버측 연동 장애 → COMMON5000.
+            log.error("Authentik 사용자 프로비저닝 연결 실패: email={}, msg={}", email, e.getMessage());
             throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
         }
     }
@@ -140,8 +147,12 @@ public class RealIdpUserClient implements IdpUserClient {
                     .retrieve()
                     .toBodilessEntity();
 
+        } catch (RestClientResponseException e) {
+            log.error("Authentik 비밀번호 변경 실패: email={}, status={}, msg={}",
+                    email, e.getStatusCode(), e.getMessage());
+            throw new BusinessException(idpStatusToError(e));
         } catch (RestClientException e) {
-            log.error("Authentik 비밀번호 변경 실패: email={}, msg={}", email, e.getMessage());
+            log.error("Authentik 비밀번호 변경 연결 실패: email={}, msg={}", email, e.getMessage());
             throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
         }
     }
@@ -157,9 +168,9 @@ public class RealIdpUserClient implements IdpUserClient {
      *   <li>{@code PATCH /core/users/{pk}/} body {@code {"is_active": false}} — 비활성화(200).</li>
      * </ol>
      *
-     * <p>모든 실패(연결 실패·4xx·5xx)는 {@link CommonErrorCode#INTERNAL_SERVER_ERROR}로 통합 변환한다
-     * (연동 장애는 서버 측 문제로 취급 — CLAUDE §6). Service에서 이 예외가 올라오면 @Transactional이
-     * 롤백되어 로컬 soft delete도 반영되지 않는다(정합성, 지시서 §F).
+     * <p>IdP 응답 4xx는 {@link CommonErrorCode#INVALID_REQUEST}(400), 5xx·연결 실패는
+     * {@link CommonErrorCode#INTERNAL_SERVER_ERROR}(500)로 변환한다. 어느 쪽이든 BusinessException이라
+     * Service에서 이 예외가 올라오면 @Transactional이 롤백되어 로컬 soft delete도 반영되지 않는다(정합성, 지시서 §F).
      *
      * <p>TODO: 가입 시 {@code pk}도 함께 저장해 두면 탈퇴 때 조회 1회(GET)를 줄일 수 있으나
      *          스키마 변경이라 본 작업 범위 밖이다(지시서 §D-2).
@@ -201,12 +212,27 @@ public class RealIdpUserClient implements IdpUserClient {
                     .retrieve()
                     .toBodilessEntity();
 
+        } catch (RestClientResponseException e) {
+            // IdP 응답 에러 — 4xx→COMMON4001, 5xx→COMMON5000. 어느 쪽이든 BusinessException이라 Service의
+            // @Transactional이 롤백돼 로컬 soft delete도 반영되지 않는다(IdP에서 계속 로그인 가능 방지).
+            log.error("Authentik 사용자 비활성화 실패: uuid={}, status={}, msg={}",
+                    authProviderId, e.getStatusCode(), e.getMessage());
+            throw new BusinessException(idpStatusToError(e));
         } catch (RestClientException e) {
-            // 연결 실패·4xx·5xx 모두 포함. 비활성화 실패 시 탈퇴를 확정하면 안 되므로(IdP에서 계속 로그인 가능)
-            // 통합 변환 → Service의 @Transactional 롤백.
-            log.error("Authentik 사용자 비활성화 실패: uuid={}, msg={}", authProviderId, e.getMessage());
+            // 연결 실패·타임아웃 등(응답 없음) → COMMON5000 → @Transactional 롤백.
+            log.error("Authentik 사용자 비활성화 연결 실패: uuid={}, msg={}", authProviderId, e.getMessage());
             throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /**
+     * IdP 응답 상태를 본체 에러로 매핑한다: 4xx(클라이언트 입력·충돌 등) → COMMON4001(400),
+     * 그 외(5xx 등 서버측) → COMMON5000(500). 연결 실패(응답 없음)는 호출부에서 별도로 COMMON5000 처리.
+     */
+    private CommonErrorCode idpStatusToError(RestClientResponseException e) {
+        return e.getStatusCode().is4xxClientError()
+                ? CommonErrorCode.INVALID_REQUEST
+                : CommonErrorCode.INTERNAL_SERVER_ERROR;
     }
 
     /** 요청 본문 맵을 JSON 문자열로 직렬화한다. 실패는 연동 불가이므로 COMMON5000으로 변환. */

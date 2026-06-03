@@ -295,17 +295,17 @@ class MemberServiceImplTest {
     }
 
     @Test
-    @DisplayName("재설정 실행: 유효한 토큰이면 IdP 비번 변경 후 토큰 삭제")
+    @DisplayName("재설정 실행: 유효한 토큰이면 원자 소비(consume) 후 IdP 비번 변경")
     void resetPassword_성공() {
         PasswordResetRequest request = new PasswordResetRequest();
         ReflectionTestUtils.setField(request, "token", "valid-token");
         ReflectionTestUtils.setField(request, "newPassword", "NewP@ssw0rd!");
-        when(passwordResetTokenStore.findEmail("valid-token")).thenReturn(Optional.of("user@example.com"));
+        when(passwordResetTokenStore.consume("valid-token")).thenReturn(Optional.of("user@example.com"));
 
         memberService.resetPassword(request);
 
+        verify(passwordResetTokenStore).consume("valid-token"); // 원자 소비(GETDEL) — 별도 delete 없음
         verify(idpUserClient).changePassword("user@example.com", "NewP@ssw0rd!");
-        verify(passwordResetTokenStore).delete("valid-token");
     }
 
     @Test
@@ -314,7 +314,7 @@ class MemberServiceImplTest {
         PasswordResetRequest request = new PasswordResetRequest();
         ReflectionTestUtils.setField(request, "token", "expired-token");
         ReflectionTestUtils.setField(request, "newPassword", "NewP@ssw0rd!");
-        when(passwordResetTokenStore.findEmail("expired-token")).thenReturn(Optional.empty());
+        when(passwordResetTokenStore.consume("expired-token")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> memberService.resetPassword(request))
                 .isInstanceOf(BusinessException.class)
@@ -322,7 +322,6 @@ class MemberServiceImplTest {
                 .isEqualTo(MemberErrorCode.INVALID_RESET_TOKEN);
 
         verify(idpUserClient, never()).changePassword(anyString(), anyString());
-        verify(passwordResetTokenStore, never()).delete(anyString());
     }
 
     // ───────────────────────── 언어 조회/변경 ─────────────────────────

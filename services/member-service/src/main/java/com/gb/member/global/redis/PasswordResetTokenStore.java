@@ -31,13 +31,12 @@ public class PasswordResetTokenStore {
         redisTemplate.opsForValue().set(KEY_PREFIX + token, email, TTL);
     }
 
-    /** 토큰으로 email을 조회한다. 없거나(만료/미존재) 비어 있으면 {@link Optional#empty()}. */
-    public Optional<String> findEmail(String token) {
-        return Optional.ofNullable(redisTemplate.opsForValue().get(KEY_PREFIX + token));
-    }
-
-    /** 사용 완료된 토큰을 삭제한다(재사용 방지). 없으면 no-op. */
-    public void delete(String token) {
-        redisTemplate.delete(KEY_PREFIX + token);
+    /**
+     * 토큰을 원자적으로 소비한다(Redis GETDEL) — 조회와 삭제를 한 연산으로 처리해 토큰이 단 한 번만 쓰이게 한다.
+     * 동시 요청·재시도가 같은 토큰으로 들어와도 정확히 한 호출만 email을 받고 나머지는 {@link Optional#empty()}다.
+     * 없거나(만료/미존재/이미 소비) 비어 있으면 empty.
+     */
+    public Optional<String> consume(String token) {
+        return Optional.ofNullable(redisTemplate.opsForValue().getAndDelete(KEY_PREFIX + token));
     }
 }
