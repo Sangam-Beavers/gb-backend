@@ -21,12 +21,6 @@ import org.springframework.data.repository.query.Param;
  */
 public interface PostRepository extends JpaRepository<Post, Long> {
 
-    /**
-     * 스켈레톤부터 있던 단건 조회. soft delete된 글도 잡히므로 CRUD 흐름에서는 쓰지 않는다.
-     * (삭제건 제외가 필요하면 {@link #findByPublicIdAndDeletedAtIsNull}을 쓴다.)
-     */
-    Optional<Post> findByPublicId(String publicId);
-
     /** 활성(미삭제) 게시글 단건 조회. 단건 조회/수정/삭제 흐름에서 사용한다. */
     Optional<Post> findByPublicIdAndDeletedAtIsNull(String publicId);
 
