@@ -7,7 +7,7 @@ import java.util.Optional;
  * MSA 경계를 넘어가는 호출이라 식별자는 user_public_id(UUID) 또는 이메일을 사용한다.
  *
  * <p>TODO: member-service 구현 후 실제 HTTP/feign 기반 RealMemberClient(@Profile prod)로 교체.
- *       현재는 개발용 {@link MockMemberClient}(@Profile("dev"))만 존재.
+ *       현재는 개발용 {@link MockMemberClient}(@Profile({"dev", "stage"}))만 존재.
  */
 public interface MemberClient {
 

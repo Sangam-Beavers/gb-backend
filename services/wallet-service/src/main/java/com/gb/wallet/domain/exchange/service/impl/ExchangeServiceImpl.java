@@ -102,6 +102,15 @@ public class ExchangeServiceImpl implements ExchangeService {
             throw new BusinessException(TransferErrorCode.UNSUPPORTED_CURRENCY);
         }
 
+        // exchange_type 라벨과 from/to 방향 일치 검증 — EXCHANGE(원화→외화)는 from=KRW, RE_EXCHANGE(외화→원화)는 to=KRW.
+        // exactlyOneKrw로 한쪽만 KRW임이 보장되므로, KRW 위치가 type과 맞는지만 보면 충분. 불일치는 COMMON4001.
+        boolean directionOk = (exchangeType == ExchangeType.EXCHANGE)
+                ? (from == CurrencyType.KRW)
+                : (to == CurrencyType.KRW);
+        if (!directionOk) {
+            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+        }
+
         // 2) 환율 계산. 견적은 "1 외화 → KRW" 환율을 기준으로 from→to 환산.
         //    EXCHANGE(원화→외화): KRW amount → 외화. RE_EXCHANGE(외화→원화): 외화 amount → KRW.
         BigDecimal fromRate = rateToKrw(from);   // 1 from = ?KRW

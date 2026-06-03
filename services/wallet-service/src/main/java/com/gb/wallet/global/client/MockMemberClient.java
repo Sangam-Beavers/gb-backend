@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component;
  * 이메일은 아래 FIXTURES의 두 번째 컬럼(예: {@code "linh@example.com"})을 사용한다.
  */
 @Component
-@Profile("dev")
+@Profile({"dev", "stage"})
 public class MockMemberClient implements MemberClient {
 
     /** 개발용 고정 회원 데이터. 키는 wallets.user_public_id와 1:1로 맞춰 사용한다. */
