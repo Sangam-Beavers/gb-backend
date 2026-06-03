@@ -15,8 +15,6 @@ import com.gb.community.global.client.MemberInfo;
 import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -46,12 +44,11 @@ public class CommentServiceImpl implements CommentService {
         Page<Comment> result = commentRepository.findByPostAndDeletedAtIsNull(post, pageable);
         List<Comment> comments = result.getContent();
 
-        // 작성자 표시 정보 조립. 같은 페이지 안의 중복 작성자는 1회만 조회한다(N+1 회피).
-        // TODO: member-service 도입 시 건별 호출(N+1)을 batch 조회 API(예: GET /members?ids=...)로 교체.
-        Map<String, MemberInfo> authorsByPublicId = comments.stream()
-                .map(Comment::getUserPublicId)
-                .distinct()
-                .collect(Collectors.toMap(Function.identity(), memberClient::getMember));
+        // 작성자 표시 정보를 배치로 1회 조회한다(N+1 회피). 중복 작성자는 distinct로 1회만.
+        // getMembers는 요청한 모든 id를 키로 포함(누락=fallback)하므로 아래 .get(id)는 null이 되지 않는다.
+        List<String> authorIds = comments.stream().map(Comment::getUserPublicId).distinct().toList();
+        Map<String, MemberInfo> authorsByPublicId =
+                authorIds.isEmpty() ? Map.of() : memberClient.getMembers(authorIds);
 
         List<CommentResponse> items = comments.stream()
                 .map(comment -> CommentResponse.from(

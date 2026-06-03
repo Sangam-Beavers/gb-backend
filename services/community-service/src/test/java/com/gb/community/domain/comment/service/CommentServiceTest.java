@@ -24,6 +24,7 @@ import com.gb.community.global.client.MemberInfo;
 import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -116,7 +117,7 @@ class CommentServiceTest {
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(commentRepository.findByPostAndDeletedAtIsNull(any(), any()))
                 .willReturn(new PageImpl<>(List.of(c1, c2), PageRequest.of(0, 20), 2));
-        given(memberClient.getMember(USER)).willReturn(MINH);
+        given(memberClient.getMembers(List.of(USER))).willReturn(Map.of(USER, MINH));
 
         CommentListResponse res = service.getComments(PID, 0, 20);
 
@@ -132,7 +133,7 @@ class CommentServiceTest {
         assertThat(first.getParentCommentPublicId()).isNull(); // 대댓글 미구현 — 항상 null
         assertThat(first.getCreatedAt()).isEqualTo("2026-05-26T04:15:30Z");
 
-        verify(memberClient, times(1)).getMember(USER); // 같은 작성자 2건이어도 1회
+        verify(memberClient, times(1)).getMembers(List.of(USER)); // 같은 작성자 2건 → distinct 1명 배치 1회
     }
 
     @Test
@@ -144,15 +145,14 @@ class CommentServiceTest {
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(commentRepository.findByPostAndDeletedAtIsNull(any(), any()))
                 .willReturn(new PageImpl<>(List.of(c1, c2), PageRequest.of(0, 20), 2));
-        given(memberClient.getMember(USER)).willReturn(MINH);
-        given(memberClient.getMember(OTHER)).willReturn(SOKHA);
+        given(memberClient.getMembers(List.of(USER, OTHER)))
+                .willReturn(Map.of(USER, MINH, OTHER, SOKHA));
 
         CommentListResponse res = service.getComments(PID, 0, 20);
 
         assertThat(res.getComments().get(1).getAuthorNickname()).isEqualTo("Sokha");
         assertThat(res.getComments().get(1).isAuthorIsVerified()).isFalse();
-        verify(memberClient).getMember(USER);
-        verify(memberClient).getMember(OTHER);
+        verify(memberClient).getMembers(List.of(USER, OTHER));
     }
 
     // ==========================================================================

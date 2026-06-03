@@ -335,6 +335,7 @@
 | 컬럼 | 타입 | 제약 | 설명 |
 | --- | --- | --- | --- |
 | `id` | BIGINT | PK, AI | |
+| `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | 대외 식별자(UUID) — 댓글 목록/작성/삭제 응답·URL은 public_id 사용(posts와 동일 규칙) |
 | `post_id` | BIGINT | FK → posts.id, NOT NULL | 스키마 내부 참조 |
 | `user_public_id` | VARCHAR(36) | NOT NULL | **회원 논리 참조** |
 | `parent_id` | BIGINT | FK → comments.id, NULL | NULL이면 최상위, 값 있으면 대댓글 |

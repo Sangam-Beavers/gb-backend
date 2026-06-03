@@ -22,6 +22,7 @@ import com.gb.community.global.client.MemberClient;
 import com.gb.community.global.client.MemberInfo;
 import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -254,12 +255,13 @@ class PostServiceTest {
         Post b = Post.of(USER, PostCategory.VISA, "t2", "c2");
         given(postRepository.search(any(), any(), any()))
                 .willReturn(new PageImpl<>(List.of(a, b), PageRequest.of(0, 20), 2));
-        given(memberClient.getMember(USER)).willReturn(MINH);
+        given(memberClient.getMembers(List.of(USER))).willReturn(Map.of(USER, MINH));
 
         PostListResponse res = service.getPosts(null, null, "latest", 0, 20);
 
         assertThat(res.getPosts()).hasSize(2);
-        verify(memberClient, times(1)).getMember(USER);
+        // 같은 작성자 2건이어도 distinct로 묶어 배치 1회(작성자 1명짜리 리스트)만 호출한다.
+        verify(memberClient, times(1)).getMembers(List.of(USER));
     }
 
     @Test
@@ -293,15 +295,15 @@ class PostServiceTest {
         Post p2 = Post.of(OTHER, PostCategory.VISA, "t2", "c2");
         Page<Post> page = new PageImpl<>(List.of(p1, p2), PageRequest.of(0, 20), 2);
         given(postRepository.search(any(), any(), any())).willReturn(page);
-        given(memberClient.getMember(USER)).willReturn(MINH);
-        given(memberClient.getMember(OTHER)).willReturn(new MemberInfo("Sokha", false));
+        given(memberClient.getMembers(List.of(USER, OTHER)))
+                .willReturn(Map.of(USER, MINH, OTHER, new MemberInfo("Sokha", false)));
 
         PostListResponse res = service.getPosts(null, null, "latest", 0, 20);
 
         assertThat(res.getPosts()).hasSize(2);
         assertThat(res.getTotalElements()).isEqualTo(2);
-        verify(memberClient).getMember(USER);
-        verify(memberClient).getMember(OTHER);
+        // 서로 다른 작성자 2명을 배치 1회(distinct 작성자 id 리스트)로 조회한다.
+        verify(memberClient).getMembers(List.of(USER, OTHER));
     }
 
     // ----- helpers -----

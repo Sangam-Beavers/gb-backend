@@ -4,6 +4,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
@@ -291,6 +292,31 @@ class PostControllerTest {
                 .andExpect(jsonPath("$.success").value(true));
 
         verify(postService).deletePost(USER, PID);
+    }
+
+    @Test
+    @DisplayName("DELETE 404: 없는/이미삭제 글(service가 COMMUNITY4001) → 404 + code")
+    void deletePost_없음_404() throws Exception {
+        willThrow(new BusinessException(CommunityErrorCode.POST_NOT_FOUND))
+                .given(postService).deletePost(USER, PID);
+
+        mockMvc.perform(delete("/api/v1/community/posts/{id}", PID)
+                        .with(authedJwt()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMUNITY4001"));
+    }
+
+    @Test
+    @DisplayName("DELETE 403: 타인 글(service가 COMMON4031) → 403 + code")
+    void deletePost_타인_403() throws Exception {
+        willThrow(new BusinessException(CommonErrorCode.FORBIDDEN))
+                .given(postService).deletePost(USER, PID);
+
+        mockMvc.perform(delete("/api/v1/community/posts/{id}", PID)
+                        .with(authedJwt()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("COMMON4031"));
     }
 
     // ----- helpers -----

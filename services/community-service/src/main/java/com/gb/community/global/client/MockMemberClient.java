@@ -1,6 +1,9 @@
 package com.gb.community.global.client;
 
+import java.util.Collection;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -33,5 +36,14 @@ public class MockMemberClient implements MemberClient {
     @Override
     public MemberInfo getMember(String userPublicId) {
         return FIXTURES.getOrDefault(userPublicId, FALLBACK);
+    }
+
+    @Override
+    public Map<String, MemberInfo> getMembers(Collection<String> userPublicIds) {
+        // 요청한 모든 id를 키로 채운다(중복 제거). 미존재는 getMember와 동일 fallback — 계약 일관.
+        // Mock은 메모리 조회라 배치 이득이 없지만, 호출 측 코드는 이미 1회 호출로 정리돼 RealMemberClient 전환 시 그대로 동작한다.
+        return userPublicIds.stream()
+                .distinct()
+                .collect(Collectors.toMap(Function.identity(), this::getMember));
     }
 }
