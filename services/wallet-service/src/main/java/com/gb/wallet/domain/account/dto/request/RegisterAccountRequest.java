@@ -37,4 +37,15 @@ public class RegisterAccountRequest {
     @NotBlank
     @Size(max = 36)
     private String accountToken;
+
+    /**
+     * 예금주명. {@code POST /accounts/verify} 응답({@code account_holder_name}) 또는 holder 조회 응답에서
+     * 받은 값을 그대로 전달한다 — 사용자 직접 입력이 아닌 외부 은행 검증 통과 값. 송금 확인증
+     * ({@code Transaction.receiverName} snapshot)의 출처가 된다.
+     */
+    @Schema(description = "예금주명. verify/holder 조회 응답값을 그대로 전달",
+            example = "NGUYEN VAN A", maxLength = 100)
+    @NotBlank
+    @Size(max = 100)
+    private String holderName;
 }

@@ -29,7 +29,7 @@
 | 송금 비밀번호 검증 (※ 미구현) | POST | `/api/v1/transfers/verify-password` | ✅ |
 | **송금 실행** | POST | `/api/v1/transfers` | ✅ |
 | 송금 확인증 조회 | GET | `/api/v1/transfers/{id}/receipt` | ✅ |
-| 정기 송금 대상 검증 | GET | `/api/v1/transfers/scheduled/validate` | ✅ |
+| 정기 송금 대상 검증 | POST | `/api/v1/transfers/scheduled/validate` | ✅ |
 | 정기 송금 지원 통화 | GET | `/api/v1/transfers/scheduled/supported-currencies` | ✅ |
 | 정기 송금 설정 | POST | `/api/v1/transfers/scheduled` | ✅ |
 | 정기 송금 내역 조회 | GET | `/api/v1/transfers/scheduled` | ✅ |
@@ -296,8 +296,334 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 
 ## 7. 송금 확인증 / 정기 송금
 
-- 확인증: `GET /api/v1/transfers/{id}/receipt` → 적용 환율·수수료 등 상세.
-- 정기 송금: `validate`(대상 검증, GET) → `supported-currencies`(GET) → `scheduled`(설정 POST / 내역 GET) → `scheduled/{id}/history`(진행 완료 GET).
+### 7-1. 송금 확인증 조회 ★
+
+`GET /api/v1/transfers/{transferPublicId}/receipt` · Auth ✅
+
+완료된 송금 한 건의 확인증(송·수취인, 금액, 수수료, 적용 환율 등)을 반환한다.
+
+**대상 거래**: `INTERNAL_TRANSFER` · `REMITTANCE`만. 충전·환전·기타 유형은 `TRANSFER4001`로 차단(확인증 대상 아님).
+
+**본인 검증**: 송신자(거래 wallet 주인) 본인만 조회 가능. 수신자는 별도 "받은 거래 내역" API 영역. 본인 아님·미존재·미지원 유형 실패는 모두 `TRANSFER4001`로 모호 매핑(충전 `rebuildFromPrior` 정책 답습 — cross-user 응답 노출 방지).
+
+**Path Variable**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `transferPublicId` | string | O | 송금 거래 식별자(UUID, `transactions.public_id`). 최대 36자 |
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `public_id` | string | N | 거래 식별자(UUID) |
+| `sender_name` | string | N | 송금인 본명. 요청자(JWT `public_id`)의 회원 본명. MemberClient 조회 |
+| `receiver_name` | string | Y | 수취인 본명. INTERNAL은 수신자 본명(MemberClient 장애 시 null), REMITTANCE는 계좌 등록 시 verify 응답으로 받은 예금주(컬럼 추가 전 등록된 구 계좌면 null) |
+| `bank_name` | string | Y | 수취 은행명. REMITTANCE만 값 있음, INTERNAL은 null |
+| `account_number` | string | Y | 수취 계좌번호(마스킹). REMITTANCE만 값 있음, INTERNAL은 null |
+| `amount` | string | N | 송금 금액 (string 십진수, 소수점 4자리) |
+| `currency_code` | string | N | 출금 통화 코드 |
+| `fee` | string | N | 수수료 (string 십진수) |
+| `exchange_rate` | string | Y | 적용 환율. 1·2단계 same-currency는 항상 null. 3단계(다통화)부터 값 |
+| `receive_amount` | string | N | 수취 금액 (1·2단계는 amount와 동일) |
+| `receive_currency_code` | string | N | 수취 통화 코드 |
+| `status` | string | N | 거래 상태 (예: COMPLETED) |
+| `created_at` | string | N | 송금 시각 (ISO 8601, UTC `Z`) |
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다(path variable 형식 위반). |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | TRANSFER4001 | 존재하지 않는 송금 내역입니다. (미존재 / 본인 아님 / 미지원 유형(CHARGE·EXCHANGE 등) 모두 동일 매핑 — 정보 누설 방지) |
+| 500 | COMMON5000 | 서버 오류가 발생했습니다. (REMITTANCE 거래의 `bank_account_id`가 사라진 정합성 불변식 위반 — 정상 흐름에서 발생 불가) |
+
+**구현 노트 — receiver_name snapshot 정책**
+
+`Transaction.receiverName`은 송금 시점에 **snapshot으로 박힌 값**을 그대로 응답한다(외부 호출 없음).
+- INTERNAL_TRANSFER: 송금 시 `MemberClient.getMember(receiverPublicId).name`을 snapshot (fail-open — MemberClient 장애 시 null로 저장하고 송금 진행)
+- REMITTANCE: 송금 시 `BankAccount.holderName`을 snapshot. 그 holder_name은 계좌 등록(`POST /accounts`) 시 `POST /accounts/verify` 응답의 예금주를 받아 저장됨(외부 신뢰 source, 사용자 입력 X)
+
+snapshot 방식이라 회원이 본명을 바꾸거나 외부 계좌의 명의가 바뀌어도 과거 거래 영수증은 송금 당시 이름 그대로 유지된다(금융 영수증 표준 패턴).
+
+### 7-2. 정기 송금
+
+전체 흐름: `validate`(대상 검증, POST) → `supported-currencies`(GET) → `scheduled`(설정 POST / 내역 GET) → `scheduled/{id}/history`(진행 완료 GET).
+
+#### 7-2-1. 정기 송금 대상 유효성 검증 ★
+
+`POST /api/v1/transfers/scheduled/validate` · Auth ✅
+
+정기 송금 설정 화면에서 본 설정 전에 (수취 대상, 금액, 통화) 조합이 정합한지 사전 검증한다.
+
+**대상 송금 유형**: `INTERNAL_TRANSFER` · `REMITTANCE` 둘 다 (송금 실행 API와 동일하게 `transfer_type`으로 분기).
+
+**Request Body**
+| 필드 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `transfer_type` | string | O | `INTERNAL_TRANSFER` / `REMITTANCE` |
+| `receiver_public_id` | string | △ | INTERNAL_TRANSFER 필수 (수신자 회원 UUID) |
+| `bank_account_public_id` | string | △ | REMITTANCE 필수 (수신 은행 계좌 UUID) |
+| `amount` | string | O | 회차당 송금액 (string 십진수, 소수점 최대 4자리) |
+| `currency_code` | string | O | 출금 통화 코드 |
+| `receive_currency_code` | string | O | 수취 통화 코드 |
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `is_valid` | boolean | N | 검증 통과 여부 |
+| `reason` | string | Y | 미통과 사유. `is_valid=true`면 null |
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (Body 검증 실패, 조건부 필수 필드 누락 포함) |
+| 400 | TRANSFER4002 | 지원하지 않는 통화입니다. |
+| 400 | TRANSFER4003 | 지원하지 않는 송금 유형입니다. (CHARGE/EXCHANGE 등) |
+| 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. (INTERNAL_TRANSFER 한정) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 403 | ACCOUNT4006 | 인증되지 않은 계좌입니다. (REMITTANCE — `mock_account_token` 미발급) |
+| 404 | ACCOUNT4001 | 존재하지 않는 계좌입니다. (REMITTANCE — 본인 + active 미매칭) |
+| 404 | WALLET4001 | 존재하지 않는 지갑입니다. (INTERNAL — 수신자 wallet 부재) |
+
+**검증 흐름**
+
+1. `transfer_type` 파싱 → 허용 유형(INTERNAL_TRANSFER/REMITTANCE)이 아니면 `TRANSFER4003`
+2. 통화 enum 파싱 → 미지원이면 `TRANSFER4002`
+3. 도메인별 대상 검증:
+    - **REMITTANCE**: `bank_account_public_id` 누락 시 `COMMON4001`. 본인 소유 + 활성 계좌 검증(`ACCOUNT4001`). 계좌 인증 토큰 검증(`ACCOUNT4006`).
+    - **INTERNAL_TRANSFER**: `receiver_public_id` 누락 시 `COMMON4001`. 자기 자신 송금 차단(`TRANSFER4004`). 수신자 wallet 존재 검증(`WALLET4001`).
+4. `currency_code == receive_currency_code` 검증 — 1·2단계는 same-currency 강제, 다르면 200 + `is_valid=false` + `reason="1·2단계는 같은 통화 송금만 지원합니다. 다통화는 3단계 도입 후 지원 예정."`. 3단계(다통화) 도입 시 본 검증 조건 완화.
+
+**mock data (통과)**
+```json
+{
+  "success": true,
+  "data": { "is_valid": true, "reason": null },
+  "message": "요청이 성공적으로 처리되었습니다."
+}
+```
+
+**mock data (미통과 — currency 불일치)**
+```json
+{
+  "success": true,
+  "data": {
+    "is_valid": false,
+    "reason": "1·2단계는 같은 통화 송금만 지원합니다. 다통화는 3단계 도입 후 지원 예정."
+  },
+  "message": "요청이 성공적으로 처리되었습니다."
+}
+```
+
+> 외부 호출 없음 — 우리 DB만으로 사전 검증한다(빠른 검증). 정기 송금 실제 실행(`POST /scheduled`) 시점에 외부 은행 호출이 일어난다.
+
+#### 7-2-2. 정기 송금 설정 ★
+
+`POST /api/v1/transfers/scheduled` · Auth ✅
+
+매주/매월 자동 실행되는 정기 송금을 설정한다. 설정 즉시 `ACTIVE` 상태로 등록되며 다음 실행 예정일(`next_run_date`)이 **KST(`Asia/Seoul`) 기준**으로 계산된다.
+
+**대상 송금 유형**: `INTERNAL_TRANSFER` · `REMITTANCE` 둘 다 (송금 실행·validate와 동일하게 `transfer_type`으로 분기).
+
+**Request Body**
+| 필드 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `transfer_type` | string | O | `INTERNAL_TRANSFER` / `REMITTANCE` |
+| `receiver_public_id` | string | △ | INTERNAL_TRANSFER 필수 (수신자 회원 UUID) |
+| `bank_account_public_id` | string | △ | REMITTANCE 필수 (수신 은행 계좌 UUID) |
+| `amount` | string | O | 회차당 송금액 (string 십진수, 소수점 최대 4자리) |
+| `currency_code` | string | O | 출금 통화 코드 (KRW/USD/PHP/VND) |
+| `receive_currency_code` | string | O | 수취 통화 코드 |
+| `frequency` | string | O | 반복 주기 — `WEEKLY` / `MONTHLY` |
+| `schedule_day` | integer | O | 실행 기준일 — MONTHLY=1~31, WEEKLY=1~7 (ISO 요일, 1=월요일) |
+| `memo` | string | X | 메모, 최대 255자 |
+
+**Response 201** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `public_id` | string | N | 정기 송금 식별자(UUID) |
+| `transfer_type` | string | N | INTERNAL_TRANSFER / REMITTANCE |
+| `amount` | string | N | 회차당 송금액 |
+| `currency_code` | string | N | 출금 통화 |
+| `receive_currency_code` | string | N | 수취 통화 |
+| `frequency` | string | N | WEEKLY / MONTHLY |
+| `schedule_day` | integer | N | 실행 기준일 |
+| `next_run_date` | string | N | 다음 실행 예정일 (ISO 8601 date `YYYY-MM-DD`, KST 기준) |
+| `last_run_at` | string | Y | 마지막 실행 시각 (ISO 8601 UTC `Z`). 최초 실행 전이면 null (설정 직후 응답엔 항상 null) |
+| `status` | string | N | 상태 (ACTIVE) |
+| `created_at` | string | N | 생성 시각 (ISO 8601 UTC `Z`) |
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (필수 필드 누락·형식 오류·미지원 frequency) |
+| 400 | TRANSFER4002 | 지원하지 않는 통화입니다. |
+| 400 | TRANSFER4003 | 지원하지 않는 송금 유형입니다. (CHARGE/EXCHANGE 등) |
+| 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. (INTERNAL_TRANSFER 한정) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 403 | ACCOUNT4006 | 인증되지 않은 계좌입니다. (REMITTANCE — `mock_account_token` 미발급) |
+| 404 | ACCOUNT4001 | 존재하지 않는 계좌입니다. (REMITTANCE — 본인 + active 미매칭) |
+| 404 | WALLET4001 | 존재하지 않는 지갑입니다. (INTERNAL — 수신자 wallet 부재) |
+| 422 | COMMON4221 | 처리할 수 없는 요청입니다. (`schedule_day` 범위 초과 또는 `currency_code != receive_currency_code` — 값 자체가 비호환) |
+
+**next_run_date 계산 정책 (`NextRunDateCalculator`)**
+
+- KST(`Asia/Seoul`) 기준 `LocalDate` 계산.
+- **WEEKLY**: 오늘 이후 가장 가까운 `schedule_day` 요일. 오늘이 그 요일이면 **다음 주** (오늘 이미 지났음 정책).
+- **MONTHLY**: 이번 달의 `schedule_day` 일자가 오늘 이후면 채택, 같거나 지났으면 다음 달. **해당 달 일수보다 큰 값은 그 달 마지막 날로 fallback** (예: 31일인데 4월이면 4/30, 2월 비윤년이면 2/28).
+
+**receiver_name snapshot 정책**
+
+설정 시점에 `receiverName`을 미리 박아 둠 — 정기 송금 실행 회차마다 외부 호출 없이 빠르게 transactions에 복사.
+- INTERNAL → `MemberClient.getMember(receiver).name` (fail-open: 장애 시 null로 저장, 송금 자체는 진행)
+- REMITTANCE → `bankAccount.holderName` (구 계좌면 null)
+
+> **연관 API**: 설정한 정기송금 목록은 §7-2-3, 자동 실행 스케줄러는 §7-2-4(KST 매일 새벽 1시 `0 0 1 * * *`, Redisson 분산 락으로 단일 인스턴스 실행 보장), 회차 실행 이력은 §7-2-5에서 조회. 단건 조회·일시정지(PAUSED)·취소(CANCELLED)·재개는 후속 사이클.
+
+#### 7-2-3. 정기 송금 내역 조회 ★
+
+`GET /api/v1/transfers/scheduled` · Auth ✅
+
+로그인한 회원 본인이 설정한 정기 송금 목록을 페이지 단위로 조회한다. `status`로 선택적 필터링.
+
+**Query Parameter**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `status` | string | X | 상태 필터 (`ACTIVE` / `PAUSED` / `CANCELLED`). 미지정 시 전체. 허용 외 값은 COMMON4001 |
+| `page` | integer | X | 페이지 번호 (0-base, 기본 0) |
+| `size` | integer | X | 페이지 크기 (기본 20, 최대 100) |
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `scheduled_transfers` | array | N | 정기 송금 목록 |
+| `scheduled_transfers[].public_id` | string | N | 정기송금 식별자(UUID) |
+| `scheduled_transfers[].receiver_name` | string | Y | 수취인명 (설정 시 snapshot. INTERNAL은 MemberClient.name, REMITTANCE는 bankAccount.holderName. 외부 장애·구 계좌면 null) |
+| `scheduled_transfers[].amount` | string | N | 회차당 송금액 (string 십진수) |
+| `scheduled_transfers[].currency_code` | string | N | 출금 통화 |
+| `scheduled_transfers[].receive_currency_code` | string | N | 수취 통화 |
+| `scheduled_transfers[].frequency` | string | N | 반복 주기 (`WEEKLY` / `MONTHLY`) |
+| `scheduled_transfers[].schedule_day` | integer | N | 실행 기준일 |
+| `scheduled_transfers[].next_run_date` | string | N | 다음 실행 예정일 (ISO 8601 date) |
+| `scheduled_transfers[].last_run_at` | string | Y | 마지막 실행 시각 (ISO 8601 UTC `Z`). 최초 실행 전이면 null |
+| `scheduled_transfers[].status` | string | N | 상태 (`ACTIVE` / `PAUSED` / `CANCELLED`) |
+| `scheduled_transfers[].created_at` | string | N | 생성 시각 (ISO 8601 UTC `Z`) |
+| `page` | integer | N | 현재 페이지 (0-base) |
+| `size` | integer | N | 페이지 크기 |
+| `total_elements` | integer | N | 전체 건수 |
+| `total_pages` | integer | N | 전체 페이지 수 |
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (status 허용 enum 외, page·size 범위 위반 등) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+
+**정렬**
+
+`created_at DESC` (최신 설정 우선). 향후 status 우선 정렬·next_run_date 정렬 옵션 검토 가능.
+
+**전용 응답 DTO**
+
+설정 응답({@link ScheduledTransferResponse})과 별도 DTO. 목록 응답엔 `transfer_type`/`bank_name`/`account_number` 미포함 — 명세 단순화. 수신자 식별은 `receiver_name` snapshot으로. `last_run_at`은 스케줄러 도입과 함께 두 응답(설정·목록)에 추가됨.
+
+#### 7-2-4. 정기 송금 자동 실행 (스케줄러) ★
+
+API 엔드포인트는 아니지만(시스템 자동 동작) 정기 송금 도메인의 핵심 동작이라 본 절에 정리한다.
+
+**동작 개요**
+
+| 항목 | 값 |
+|---|---|
+| 실행 주체 | `ScheduledTransferRunner` (`com.gb.wallet.domain.transaction.scheduled.service`) |
+| 트리거 | `@Scheduled(cron = "${wallet.scheduled-transfer.cron:0 0 1 * * *}", zone = "Asia/Seoul")` — 운영 기본: KST 매일 새벽 1시. dev/데모는 yml로 덮어쓰기 |
+| 분산 락 | Redisson `lock:scheduler:scheduled-transfer` (k8s multi-replica 환경에서 단일 인스턴스 실행 보장) |
+| 대상 조회 | `status=ACTIVE AND next_run_date <= today_kst` (인덱스 `idx_scheduled_transfers_status_next` 활용) |
+| 실행 단위 | 각 회차를 별도 트랜잭션(`REQUIRES_NEW`)으로 처리 — 한 회차 실패가 다른 회차 차단하지 않음 |
+| 송금 호출 | `TransferService.execute(userPublicId, idempotencyKey, request)` 그대로 재사용 (멱등성·재시도·rate-limit·remittance_attempts 일괄) |
+| 멱등성 키 | `scheduled:{public_id}:{today}` — 같은 날 두 번 트리거돼도 Layer 1/2/3 멱등으로 송금 1회만 |
+| 성공 후 처리 | `markExecuted(now, nextRunDate)` — `last_run_at` 기록 + `next_run_date` 다음 주기로 갱신 |
+| 실패 처리 | 로그만 + status 유지(ACTIVE). 다음 트리거에서 자동 재시도 (resume API 없는 현재 단계에서 PAUSED 자동 전환은 데드락 위험) |
+| 누락 회차 | 가장 최근 1회만 실행 — `next_run_date <= today` 조건이 한 번만 만족하고 markExecuted 후 다음 주기로 점프하므로 자연스럽게 이중 실행 방지 |
+
+**도래 행 조회 시점부터 트랜잭션 진입까지 race 회피**
+
+스케줄러가 락 안에서 `findAll(...)`로 가져온 행을 별도 트랜잭션 안에서 다시 `findById`하는 시점에 status/next_run_date가 바뀌어 있을 수 있다(사용자가 그 사이 취소 등). `executeSingle`은 진입 직후 **double-check** — `status != ACTIVE` 또는 `next_run_date > today`면 송금 호출 없이 종료한다.
+
+**변환 (ScheduledTransfer → TransferExecuteRequest)**
+
+- INTERNAL_TRANSFER → `receiverPublicId` 그대로
+- REMITTANCE → 저장된 `bankAccountId`(internal id)를 `bankAccountRepository.findById`로 풀어 `public_id`를 채움 (execute API 시그니처가 public_id를 받음)
+
+**데모 시연**
+
+운영 cron 그대로 두면 새벽 1시까지 기다려야 함. 데모용으로는 `application-dev.yml`에 임시로:
+```yaml
+wallet:
+  scheduled-transfer:
+    cron: "0 * * * * *"   # 매 분 0초마다 (데모 후 원복 또는 yml 항목 삭제)
+```
+변경 + wallet-service 재기동. 정기 송금 설정 후 1분 내 자동 실행 시연 가능.
+
+**응답 필드 갱신**
+
+스케줄러 도입과 함께 `last_run_at` 필드가 §7-2-2(설정) / §7-2-3(목록) 응답에 추가됨 — 사용자가 "마지막 실행이 언제?" 확인 가능. 최초 실행 전이면 `null`.
+
+#### 7-2-5. 정기 송금 회차 실행 이력 조회 ★
+
+`GET /api/v1/transfers/scheduled/{transferPublicId}/history` · Auth ✅
+
+특정 정기 송금의 회차별 실행 이력을 페이지 단위로 조회한다. 회차 거래는 `transactions` 테이블의 송금 거래 중 스케줄러가 `idempotency_key = "scheduled:{publicId}:{date}"` 형태로 INSERT한 행 — `idempotency_key` prefix 검색(UNIQUE 인덱스 활용)으로 잡는다.
+
+**Path Variable**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `transferPublicId` | string | O | 정기송금 식별자(UUID, `scheduled_transfers.public_id`). 최대 36자 |
+
+**Query Parameter**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `page` | integer | X | 페이지 번호 (0-base, 기본 0) |
+| `size` | integer | X | 페이지 크기 (기본 20, 최대 100) |
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `histories` | array | N | 회차 실행 이력 목록 (회차 0건이면 빈 배열) |
+| `histories[].public_id` | string | N | 회차 거래 식별자(UUID, `transactions.public_id`) |
+| `histories[].amount` | string | N | 송금 금액 (string 십진수) |
+| `histories[].currency_code` | string | N | 출금 통화 |
+| `histories[].fee` | string | N | 수수료 (string 십진수) |
+| `histories[].receive_amount` | string | N | 수취 금액 (string 십진수) |
+| `histories[].receive_currency_code` | string | N | 수취 통화 |
+| `histories[].status` | string | N | 거래 상태 (`COMPLETED` / `FAILED`). **현 단계는 COMPLETED만** — 송금 실패 시 transactions INSERT 자체 안 일어남 (FAILED 흔적은 `remittance_attempts`에만). 향후 FAILED 저장 도입 시 자연스럽게 노출 |
+| `histories[].executed_at` | string | N | 실행 시각 (ISO 8601 UTC `Z`) = `transactions.created_at` |
+| `page` | integer | N | 현재 페이지 (0-base) |
+| `size` | integer | N | 페이지 크기 |
+| `total_elements` | integer | N | 전체 회차 건수 |
+| `total_pages` | integer | N | 전체 페이지 수 |
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (page·size 범위 위반·path variable 형식 위반) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | TRANSFER4001 | 존재하지 않는 송금 내역입니다. (정기송금 미존재 / 본인 아님 모두 동일 매핑 — 정보 누설 방지) |
+
+**정렬**
+
+`executed_at DESC` (= `transactions.created_at DESC`) — 최근 실행 우선.
+
+**본인 검증**
+
+정기송금 조회 후 `userPublicId` 일치 확인. 불일치 시 미존재와 동일한 `TRANSFER4001`로 모호 매핑 (충전 `rebuildFromPrior` / 송금 확인증 정책 답습).
+
+**구현 노트 — idempotency_key prefix 검색**
+
+회차 거래를 정기송금과 연결하기 위해 `transactions.scheduled_transfer_id` 같은 FK 컬럼을 추가하는 대안도 있었으나, 다음 이유로 prefix 검색 채택:
+- 정기송금 회차는 보통 수~수십(월 1회 × 1년 = 12개) — 인덱스 효율 큰 차이 없음
+- `idempotency_key` UNIQUE 인덱스의 prefix 검색이 RDBMS에서 활용됨 (`LIKE 'prefix%'`)
+- transactions 테이블 변경·스케줄러 변경 없이 가능
+- 운영에서 회차가 비대화하면 그때 FK 컬럼으로 전환 검토
 
 ---
 
@@ -371,8 +697,10 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 - 목록: `GET /api/v1/accounts` → `data: { accounts: [...] }`
 - 지원 은행: `GET /api/v1/accounts/supported-banks`
 - 예금주 실명 조회: `GET /api/v1/accounts/holder?bankCode={}&accountNumber={}`
-- 계좌 연결+자동이체 인증 요청: `POST /api/v1/accounts/verify` (※ Mock/화면용. 실제 인증 미구현)
+- 계좌 연결+자동이체 인증 요청: `POST /api/v1/accounts/verify` (※ Mock/화면용. 실제 인증 미구현). 응답으로 `account_token` + `account_holder_name`(외부 은행이 검증한 진짜 예금주) 반환.
 - 계좌 등록 최종 완료: `POST /api/v1/accounts` → 201, `bank_accounts` INSERT
+    - **Body 필수 필드**: `bank_code`, `account_number`, `account_token`(verify 응답), **`holder_name`(verify 응답의 `account_holder_name`을 그대로 전달, 최대 100자)**.
+    - holder_name은 REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot되어 송금 확인증의 `receiver_name` 출처가 된다(외부 신뢰 source, 사용자 임의 입력 금지).
 - 주 계좌 변경: `PATCH /api/v1/accounts/{id}/primary`
 - 계좌 삭제: `DELETE /api/v1/accounts/{id}`
 

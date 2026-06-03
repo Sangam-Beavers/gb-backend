@@ -256,7 +256,8 @@ class AccountControllerTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
                                 "account_number", "1234567890",
-                                "account_token", "tok-abcdef"))))
+                                "account_token", "tok-abcdef",
+                                "holder_name", "홍길동"))))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.bank_code").value("004"))
@@ -278,7 +279,8 @@ class AccountControllerTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
                                 "account_number", "1234567890",
-                                "account_token", "tok-abcdef"))))
+                                "account_token", "tok-abcdef",
+                                "holder_name", "홍길동"))))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("ACCOUNT4004"));
     }
@@ -307,7 +309,8 @@ class AccountControllerTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "0".repeat(21),
                                 "account_number", "1234567890",
-                                "account_token", "tok-abcdef"))))
+                                "account_token", "tok-abcdef",
+                                "holder_name", "홍길동"))))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("COMMON4001"));
 

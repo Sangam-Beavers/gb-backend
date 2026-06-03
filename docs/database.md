@@ -42,11 +42,12 @@
 | 7 | wallet | `transactions` | 모든 금융 거래 마스터 |
 | 8 | wallet | `transaction_audit_logs` | 거래 감사 로그 + 상태 이력 (append-only) |
 | 9 | wallet | `remittance_attempts` | REMITTANCE 외부 호출 시도 흔적 (운영 reconcile 입력, append-only) |
-| 10 | document | `document_submissions` | 문서 업로드 ~ 분석 전 메타 |
-| 11 | document | `document_results` | 분석 완료 결과 메타 **+ 분석 내용** |
-| 12 | community | `posts` | 게시글 + 번역 캐시 |
-| 13 | community | `comments` | 댓글 + 대댓글 |
-| 14 | community | `likes` | 게시글/댓글 좋아요 통합 |
+| 10 | wallet | `scheduled_transfers` | 정기 송금 설정 (매주/매월 자동 실행 대상) |
+| 11 | document | `document_submissions` | 문서 업로드 ~ 분석 전 메타 |
+| 12 | document | `document_results` | 분석 완료 결과 메타 **+ 분석 내용** |
+| 13 | community | `posts` | 게시글 + 번역 캐시 |
+| 14 | community | `comments` | 댓글 + 대댓글 |
+| 15 | community | `likes` | 게시글/댓글 좋아요 통합 |
 
 > **통화 마스터 테이블 없음** — 지원 통화 4개(KRW/USD/PHP/VND) 고정. `currency_code`를 VARCHAR로 직접 저장.
 
@@ -142,6 +143,7 @@
 | `bank_id` | BIGINT | FK → banks.id, NOT NULL | 스키마 내부 참조 |
 | `account_number` | VARCHAR(100) | NOT NULL | 계좌번호 (암호화 권장) |
 | `mock_account_token` | VARCHAR(36) | NULL | **충전용 토큰.** 계좌 인증 시 Mock 은행(또는 실서비스 PG)이 발급한 토큰. 충전(출금) 호출 시 이 값으로 계좌를 지칭한다. 실서비스에서는 PG 빌링키에 해당 |
+| `holder_name` | VARCHAR(100) | NULL | **외부 계좌 예금주명.** 계좌 등록 시 verify 응답에서 받아 저장. REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot 복사. 송금 확인증 receiver_name 출처. 컬럼 추가 전 등록된 기존 계좌는 null. |
 | `is_virtual` | BOOLEAN | NOT NULL, DEFAULT FALSE | TRUE면 가상계좌(Beaver Bank 발급) |
 | `is_primary` | BOOLEAN | NOT NULL, DEFAULT FALSE | 주 계좌 여부 |
 | `is_active` | BOOLEAN | NOT NULL, DEFAULT TRUE | |
@@ -221,6 +223,38 @@
 > **soft delete 없음**: 흔적이 사라지면 reconcile 입력이 사라지므로 영구 보존.
 > **transaction_audit_logs와의 분리**: audit log는 `transaction_id` NOT NULL이라 본 `transactions` INSERT 전엔 행을 만들 수 없고, "거래 1:1 흔적" 의미를 흐린다 → 별도 테이블로 분리해 충전·1단계 INTERNAL_TRANSFER엔 영향 없게.
 > **현 사이클(2단계 c1) 범위**: 테이블/엔티티/Repository/Writer 인프라만 도입. TransferServiceImpl 통합은 c2에서. reconcile 배치는 미구현 — 향후 운영 도입 시 본 테이블을 입력으로 사용한다.
+
+### `scheduled_transfers`
+> 정기 송금 설정. 매주/매월 자동 실행되는 송금의 메타. 실행 자체는 별도 스케줄러(KST 매일 새벽 1시)가 `status=ACTIVE` & `next_run_date <= today` 행을 가져와 `TransferService.execute`를 호출하고 `next_run_date`를 갱신한다.
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| `id` | BIGINT | PK, AI | |
+| `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | 대외 UUID |
+| `user_public_id` | VARCHAR(36) | NOT NULL | 송신자 회원 논리 참조 |
+| `transfer_type` | VARCHAR(30) | NOT NULL | `INTERNAL_TRANSFER` / `REMITTANCE` |
+| `receiver_public_id` | VARCHAR(36) | NULL | INTERNAL_TRANSFER일 때 수신자 회원. REMITTANCE면 null |
+| `bank_account_id` | BIGINT | NULL | REMITTANCE일 때 수신 계좌 내부 id (FK는 객체 매핑 안 함, Transaction.bankAccountId 패턴 동일). INTERNAL이면 null |
+| `receiver_name` | VARCHAR(100) | NULL | **설정 시점 snapshot** — INTERNAL은 MemberClient.name (fail-open), REMITTANCE는 bankAccount.holderName. 실행 회차마다 transactions.receiver_name으로 복사 |
+| `amount` | DECIMAL(18,4) | NOT NULL | 회차당 송금액 |
+| `currency_code` | VARCHAR(10) | NOT NULL | 출금 통화 |
+| `receive_currency_code` | VARCHAR(10) | NOT NULL | 수취 통화 (1·2단계 same-currency 강제) |
+| `frequency` | VARCHAR(20) | NOT NULL | `WEEKLY` / `MONTHLY` |
+| `schedule_day` | INT | NOT NULL | 실행 기준일 (MONTHLY=1~31, WEEKLY=1~7 ISO 요일) |
+| `next_run_date` | DATE | NOT NULL | 다음 실행 예정일 (KST 기준 LocalDate) |
+| `last_run_at` | DATETIME | NULL | 마지막 실행 시각. 최초 실행 전 null |
+| `status` | VARCHAR(20) | NOT NULL | `ACTIVE` / `PAUSED` / `CANCELLED` |
+| `memo` | VARCHAR(255) | NULL | 사용자 메모 |
+| `created_at` | DATETIME | NOT NULL | |
+| `updated_at` | DATETIME | NOT NULL | |
+
+> **인덱스**:
+> - `idx_scheduled_transfers_user (user_public_id)` — 사용자 내역 조회
+> - `idx_scheduled_transfers_status_next (status, next_run_date)` — 스케줄러가 ACTIVE & 도래 행 조회용 복합 인덱스
+>
+> **중복 허용**: 같은 사용자가 같은 (bank_account, frequency, schedule_day) 조합으로 여러 정기 송금 설정을 둘 수 있다 (의도된 다중 설정).
+>
+> **현 사이클 범위**: 설정 API(`POST /scheduled`)만. 내역 조회·취소·재개는 다음 사이클, 자동 실행 스케줄러는 그 다음.
 
 ---
 

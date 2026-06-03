@@ -28,19 +28,19 @@ public class MockMemberClient implements MemberClient {
     private static final Map<String, MemberInfo> FIXTURES = Map.of(
             "11111111-1111-1111-1111-111111111111",
                     new MemberInfo("11111111-1111-1111-1111-111111111111", "linh@example.com",
-                            "Linh",  "VN", true),
+                            "Nguyen Thi Linh", "Linh", "VN", true),
             "22222222-2222-2222-2222-222222222222",
                     new MemberInfo("22222222-2222-2222-2222-222222222222", "maria@example.com",
-                            "Maria", "PH", true),
+                            "Maria Santos", "Maria", "PH", true),
             "33333333-3333-3333-3333-333333333333",
                     new MemberInfo("33333333-3333-3333-3333-333333333333", "hieu@example.com",
-                            "Hieu",  "VN", false),
+                            "Tran Van Hieu", "Hieu", "VN", false),
             "44444444-4444-4444-4444-444444444444",
                     new MemberInfo("44444444-4444-4444-4444-444444444444", "john@example.com",
-                            "John",  "KR", true),
+                            "John Doe", "John", "KR", true),
             "55555555-5555-5555-5555-555555555555",
                     new MemberInfo("55555555-5555-5555-5555-555555555555", "sun@example.com",
-                            "Sun",   "PH", false));
+                            "Park Sun", "Sun", "PH", false));
 
     @Override
     public MemberInfo getMember(String userPublicId) {
@@ -49,7 +49,7 @@ public class MockMemberClient implements MemberClient {
             return found;
         }
         // fallback: 없는 회원도 안전하게 표시 가능한 형태로 반환. user_public_id는 그대로 echo.
-        return new MemberInfo(userPublicId, null, "Unknown", "UNK", false);
+        return new MemberInfo(userPublicId, null, "Unknown", "Unknown", "UNK", false);
     }
 
     @Override
