@@ -116,6 +116,7 @@
 | `id` | BIGINT | PK, AI | |
 | `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | 대외 UUID |
 | `user_public_id` | VARCHAR(36) | UNIQUE, NOT NULL | **회원 논리 참조 (물리 FK 없음)** |
+| `transfer_pin_hash` | VARCHAR(72) | NULL | 송금 PIN(숫자 6자리) BCrypt 해시. null = 미설정 |
 | `created_at` | DATETIME | NOT NULL | |
 | `updated_at` | DATETIME | NOT NULL | |
 
@@ -379,6 +380,8 @@
 | 멱등성 키 (충전, 요청자·계좌 스코프) | `idempotency:charge:{key}:{userPublicId}:{accountPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 계좌)로 스코프 → 교차 사용자/계좌는 캐시 미스 → DB(rebuildFromPrior)가 ACCOUNT4001로 차단 | 24시간 |
 | 계좌 인증(verify) rate-limit (IP 단위) | `ratelimit:account-verify:{clientIp}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 ACCOUNT4005(429), Redis 장애 시 fail-open | 윈도(기본 60초) |
 | 송금 rate-limit (user 단위) | `ratelimit:transfer:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 TRANSFER4006(429), Redis 장애 시 fail-open | 윈도(기본 60초, 30회) |
+| 송금 PIN 실패 카운터 (user 단위) | `pin:fail:{userPublicId}` | `INCR`(첫 실패 시 `EXPIRE 600`). 5회 도달 시 잠금 키 설정 후 카운트 삭제 | 10분(윈도) |
+| 송금 PIN 잠금 (user 단위) | `pin:lock:{userPublicId}` | `SET locked EX 600`(5회 연속 실패 시). 존재하면 PIN 검증 TRANSFER4008(429) | 10분 |
 | 토큰 블랙리스트 | `blacklist:{token}` | `SET ... 1 EX <남은만료>` | 토큰 만료까지 |
 | 로그인 실패 카운터 | `login:fail:user:{userPublicId}` | `INCR` + `EXPIRE 300` | 5분 |
 | 게시글 조회수 | `view:post:{postPublicId}` | `INCR` (배치로 DB 동기화) | — |
