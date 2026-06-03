@@ -40,10 +40,27 @@ public class Wallet extends BaseEntity {
     @Column(name = "status", length = 20, nullable = false)
     private WalletStatus status;
 
+    /**
+     * 송금 PIN(6자리)의 BCrypt 해시. 설정 전엔 null(=PIN 미설정).
+     * 평문 PIN은 저장하지 않는다 — 검증은 {@code PasswordEncoder.matches}로 한다.
+     */
+    @Column(name = "transfer_pin_hash", length = 72)
+    private String transferPinHash;
+
     @Builder
     private Wallet(String publicId, String userPublicId, WalletStatus status) {
         this.publicId = publicId;
         this.userPublicId = userPublicId;
         this.status = status != null ? status : WalletStatus.ACTIVE;
+    }
+
+    /** 송금 PIN이 설정돼 있는지. */
+    public boolean hasTransferPin() {
+        return transferPinHash != null;
+    }
+
+    /** 송금 PIN 해시를 설정/변경한다(@Setter 대신 의도를 드러내는 도메인 메서드). */
+    public void changeTransferPin(String transferPinHash) {
+        this.transferPinHash = transferPinHash;
     }
 }
