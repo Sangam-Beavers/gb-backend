@@ -64,7 +64,8 @@ class QnaControllerTest {
     @Test
     @DisplayName("GET 200 (permitAll): 토큰 없이도 조회 가능 — 이 도메인 유일의 공개 엔드포인트, service 도달")
     void getQnaPosts_비로그인_200_permitAll() throws Exception {
-        given(qnaService.getQnaPosts(any(), anyInt()))
+        // size 미입력 → 컨트롤러 기본값 5가 서비스로 전달되는지 eq(5)로 못 박는다(기본값 변경 시 회귀 감지).
+        given(qnaService.getQnaPosts(any(), eq(5)))
                 .willReturn(QnaListResponse.of(List.of(
                         stub("p1", "E-9 비자로 근무지 변경이 가능한가요?", 7, "2026-05-20T09:00:00Z"))));
 
@@ -74,7 +75,7 @@ class QnaControllerTest {
                 .andExpect(jsonPath("$.data.posts").isArray())
                 .andExpect(jsonPath("$.data.posts[0].public_id").value("p1"));
 
-        verify(qnaService).getQnaPosts(any(), anyInt());
+        verify(qnaService).getQnaPosts(any(), eq(5));
     }
 
     @Test
@@ -131,7 +132,7 @@ class QnaControllerTest {
     @Test
     @DisplayName("GET 400: 잘못된 카테고리(enum에 없음) → service가 COMMON4001 던지면 400으로 변환")
     void getQnaPosts_잘못된카테고리_400() throws Exception {
-        given(qnaService.getQnaPosts(any(), anyInt()))
+        given(qnaService.getQnaPosts(any(), eq(5)))
                 .willThrow(new BusinessException(CommonErrorCode.INVALID_REQUEST));
 
         mockMvc.perform(get("/api/v1/community/qna").param("category", "INVALID_CAT"))
@@ -141,7 +142,8 @@ class QnaControllerTest {
 
         // "INVALID_CAT"(11자)는 @Size(30) 가드를 통과해 실제 서비스(enum 파싱)까지 도달함을 못 박는다
         // — 컨트롤러 검증 단계 거부와 구분(둘 다 COMMON4001이라 상태/코드만으론 구분 불가).
-        verify(qnaService).getQnaPosts(eq("INVALID_CAT"), anyInt());
+        // size 미입력이므로 기본값 5도 함께 eq(5)로 검증한다.
+        verify(qnaService).getQnaPosts(eq("INVALID_CAT"), eq(5));
     }
 
     // ----- helpers -----
