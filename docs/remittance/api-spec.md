@@ -103,7 +103,34 @@
 ## 3. 주요 통화 환율 / 거래내역
 
 - 환율 조회: `GET /api/v1/wallets/exchange-rates` → 통화별 환율 목록(+표시용 등락률 `change_rate`는 number 허용). 환율 값 자체는 string.
-- 거래내역: `GET /api/v1/wallets/me/transactions?page=&size=` → 페이지네이션 (배열 키 `transactions`).
+- 거래내역: `GET /api/v1/wallets/me/transactions?page=&size=` · Auth ✅ → 본인 전 유형(CHARGE/INTERNAL_TRANSFER/REMITTANCE/EXCHANGE) 거래를 `created_at` DESC 페이지 조회. 거래가 없으면 200 + 빈 배열.
+
+**Response 200** — `data` (페이지 메타 + `transactions` 배열)
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `transactions` | array | N | 거래 항목 배열(최근순). 비어 있으면 `[]` |
+| `page` | number | N | 현재 페이지(0부터) |
+| `size` | number | N | 페이지당 건수 |
+| `total_elements` | number | N | 전체 건수 |
+| `total_pages` | number | N | 전체 페이지 수 |
+
+**`transactions[]` 항목** (현재 구현 `TransactionHistoryItemResponse` 기준)
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `public_id` | string | N | 거래 식별자(UUID) |
+| `type` | string | N | CHARGE / INTERNAL_TRANSFER / REMITTANCE / EXCHANGE |
+| `status` | string | N | PENDING / PROCESSING / COMPLETED / FAILED / CANCELLED |
+| `amount` | string | N | 거래(출금) 금액 (string, 소수 4자리) |
+| `currency_code` | string | N | 출금 통화 코드 |
+| `fee` | string | N | 수수료 (string, 소수 4자리, 무료면 `0.0000`) |
+| `receive_amount` | string | Y | 수령액 (환전·송금만) |
+| `receive_currency_code` | string | Y | 수령 통화 코드 (환전·송금만) |
+| `receiver_name` | string | Y | 수취인 이름 (송금만) |
+| `created_at` | string | N | 거래 시각 (ISO 8601 UTC Z) |
+
+**Error**: 400 COMMON4001 (`page<0` 또는 `size` 1~100 범위 위반) / 401 AUTH4011
+
+> ⚠️ `transactions[]` 항목 필드는 **현재 구현 DTO 기준으로 정합**한 것이다(코드가 명세를 앞서 확정한 상태를 명문화). 팀 거래내역 와이어프레임 확정 시 유형별 노출 필드·마스킹이 조정될 수 있다.
 
 ---
 
@@ -701,8 +728,10 @@ wallet:
 - 계좌 등록 최종 완료: `POST /api/v1/accounts` → 201, `bank_accounts` INSERT
     - **Body 필수 필드**: `bank_code`, `account_number`, `account_token`(verify 응답), **`holder_name`(`GET /accounts/holder` 응답의 `account_holder_name`을 그대로 전달, 최대 100자)**.
     - holder_name은 REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot되어 송금 확인증의 `receiver_name` 출처가 된다(외부 신뢰 source, 사용자 임의 입력 금지).
-- 주 계좌 변경: `PATCH /api/v1/accounts/{id}/primary`
-- 계좌 삭제: `DELETE /api/v1/accounts/{id}`
+- 주 계좌 변경: `PATCH /api/v1/accounts/{id}/primary` → 200, 변경된 `AccountResponse`. 이미 주 계좌면 부수효과 없이 **멱등 200**.
+- 계좌 삭제: `DELETE /api/v1/accounts/{id}` → 200, `data:null` (soft-delete, `is_active=false`).
+    - **자동 승격 정책**: 주 계좌를 삭제하면 남은 활성 계좌 중 **가장 최근 등록 1건**이 자동으로 주 계좌로 승격된다(마지막 1개를 삭제하면 주 계좌 없는 상태 허용).
+- 위 변경/삭제는 "사용자당 주 계좌 1개" 불변식을 user 단위 분산락으로 직렬화한다 — 락 획득 실패 시 503 `COMMON5031`.
 
 **계좌 에러 코드**: ACCOUNT4001(없음) / ACCOUNT4002(인증 실패) / ACCOUNT4004(이미 등록, 409) / ACCOUNT4005(인증 요청 초과, 429) / ACCOUNT4006(미인증 계좌, 403)
 
