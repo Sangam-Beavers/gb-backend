@@ -4,10 +4,12 @@ import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.member.domain.member.dto.request.PasswordResetEmailRequest;
 import com.gb.member.domain.member.dto.request.PasswordResetRequest;
+import com.gb.member.domain.member.dto.request.ProfileUpdateRequest;
 import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.request.SocialProfileRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.LanguageResponse;
+import com.gb.member.domain.member.dto.response.ProfileResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.dto.response.SocialProfileResponse;
 import com.gb.member.domain.member.entity.Member;
@@ -191,6 +193,27 @@ public class MemberServiceImpl implements MemberService {
         //   완전 원자적이지 않다(IdP만 비활성·로컬 활성). 완전 해소는 PENDING_WITHDRAWAL 상태 +
         //   outbox/재시도 워커(saga)가 필요하나 인프라 비용이 커 v1 범위 밖으로 보류한다.
         idpUserClient.deactivateUser(member.getAuthProviderId());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ProfileResponse getMyProfile(String userPublicId) {
+        return ProfileResponse.from(getActiveMemberOrThrow(userPublicId));
+    }
+
+    @Override
+    @Transactional
+    public ProfileResponse updateMyProfile(String userPublicId, ProfileUpdateRequest request) {
+        Member member = getActiveMemberOrThrow(userPublicId);
+
+        // 닉네임을 "다른 값"으로 바꿀 때만 중복 확인(자기 자신의 현재 닉네임은 제외).
+        if (!member.getNickname().equals(request.getNickname())
+                && memberRepository.existsByNickname(request.getNickname())) {
+            throw new BusinessException(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
+        }
+
+        member.updateProfile(request.getNickname(), request.getLanguage(), request.getBio()); // dirty checking
+        return ProfileResponse.from(member);
     }
 
     /** 탈퇴하지 않은(활성) 회원을 publicId로 조회한다. 없으면 MEMBER4001. */

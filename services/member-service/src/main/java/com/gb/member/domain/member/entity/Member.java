@@ -46,6 +46,10 @@ public class Member extends BaseEntity {
     @Column(nullable = false)
     private String language;    // 주 사용 언어
 
+    // 자기소개(한 줄 소개). 마이페이지 프로필 수정 화면에서 입력. 선택값(미입력 시 null).
+    @Column(name = "bio", length = 200)
+    private String bio;
+
     // 탈퇴(soft delete) 시각. null=활성, 값이 있으면 탈퇴한 회원.
     // createdAt/updatedAt은 BaseEntity(JPA Auditing)가 채운다(가입 시각 = createdAt).
     @Column(name = "deleted_at")
@@ -77,6 +81,16 @@ public class Member extends BaseEntity {
     /** 주 사용 언어 변경. updatedAt은 Auditing(dirty checking)으로 자동 갱신된다. */
     public void changeLanguage(String language) {
         this.language = language;
+    }
+
+    /**
+     * 마이페이지 프로필 수정: 닉네임·언어·자기소개를 한 번에 변경한다.
+     * (국적·이미지·이메일은 이 화면에서 바꾸지 않는다 — 이미지는 별도 API, 그 외는 불변.)
+     */
+    public void updateProfile(String nickname, String language, String bio) {
+        this.nickname = nickname;
+        this.language = language;
+        this.bio = bio;
     }
 
     /** 탈퇴(soft delete): deleted_at만 세팅하고 실제 row는 보존한다. (community softDelete 패턴) */

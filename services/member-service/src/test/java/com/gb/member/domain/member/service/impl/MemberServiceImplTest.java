@@ -15,10 +15,12 @@ import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.member.domain.member.dto.request.PasswordResetEmailRequest;
 import com.gb.member.domain.member.dto.request.PasswordResetRequest;
+import com.gb.member.domain.member.dto.request.ProfileUpdateRequest;
 import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.request.SocialProfileRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.LanguageResponse;
+import com.gb.member.domain.member.dto.response.ProfileResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.dto.response.SocialProfileResponse;
 import com.gb.member.domain.member.entity.Member;
@@ -423,14 +425,117 @@ class MemberServiceImplTest {
 
     /** publicId="pub-1", authProviderId="idp-sub-uuid-1" 고정. 언어만 바꿔가며 쓴다. */
     private Member memberWithLanguage(String language) {
+        return memberWith("gildong", language);
+    }
+
+    /** publicId="pub-1" 고정. 닉네임/언어를 바꿔가며 쓴다(프로필 테스트용). */
+    private Member memberWith(String nickname, String language) {
         return Member.builder()
                 .publicId("pub-1")
                 .email("a@example.com")
                 .name("홍길동")
-                .nickname("gildong")
+                .nickname(nickname)
                 .nationality("VN")
                 .language(language)
                 .authProviderId("idp-sub-uuid-1")
                 .build();
+    }
+
+    private ProfileUpdateRequest profileUpdateRequest(String nickname, String language, String bio) {
+        ProfileUpdateRequest request = new ProfileUpdateRequest();
+        ReflectionTestUtils.setField(request, "nickname", nickname);
+        ReflectionTestUtils.setField(request, "language", language);
+        ReflectionTestUtils.setField(request, "bio", bio);
+        return request;
+    }
+
+    // ───────────────────────── 내 프로필 조회/수정 ─────────────────────────
+
+    @Test
+    @DisplayName("getMyProfile: 활성 회원 프로필 반환. 미구현 도메인 필드는 기본값(미인증/GREEN/null)")
+    void getMyProfile_성공() {
+        Member member = memberWith("global_neighbor", "ko");
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
+
+        ProfileResponse response = memberService.getMyProfile("pub-1");
+
+        assertThat(response.getNickname()).isEqualTo("global_neighbor");
+        assertThat(response.getNationality()).isEqualTo("VN");
+        assertThat(response.getLanguage()).isEqualTo("ko");
+        // 아직 안 만든 도메인 필드는 기본값으로 내려간다.
+        assertThat(response.getIsVerified()).isFalse();
+        assertThat(response.getTemperatureGrade()).isEqualTo("GREEN");
+        assertThat(response.getProfileImageUrl()).isNull();
+        verifyNoInteractions(idpUserClient);
+    }
+
+    @Test
+    @DisplayName("getMyProfile: 없는(탈퇴 포함) 회원이면 MEMBER4001")
+    void getMyProfile_없는회원_MEMBER4001() {
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("nope")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> memberService.getMyProfile("nope"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("updateMyProfile: 닉네임을 다른 값으로 바꾸면 중복확인 후 엔티티가 갱신된다(dirty checking)")
+    void updateMyProfile_성공_닉네임변경() {
+        Member member = memberWith("old_nick", "vi");
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
+        when(memberRepository.existsByNickname("new_nick")).thenReturn(false);
+
+        ProfileResponse response = memberService.updateMyProfile(
+                "pub-1", profileUpdateRequest("new_nick", "ko", "안녕하세요."));
+
+        assertThat(response.getNickname()).isEqualTo("new_nick");
+        assertThat(member.getNickname()).isEqualTo("new_nick");
+        assertThat(member.getLanguage()).isEqualTo("ko");
+        assertThat(member.getBio()).isEqualTo("안녕하세요.");
+    }
+
+    @Test
+    @DisplayName("updateMyProfile: 닉네임이 다른 회원과 중복이면 MEMBER4003")
+    void updateMyProfile_닉네임중복_MEMBER4003() {
+        Member member = memberWith("old_nick", "vi");
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
+        when(memberRepository.existsByNickname("taken")).thenReturn(true);
+
+        assertThatThrownBy(() -> memberService.updateMyProfile(
+                "pub-1", profileUpdateRequest("taken", "ko", null)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
+
+        // 거절됐으니 엔티티는 그대로.
+        assertThat(member.getNickname()).isEqualTo("old_nick");
+    }
+
+    @Test
+    @DisplayName("updateMyProfile: 닉네임을 그대로 두면 중복확인을 하지 않고 언어/자기소개만 갱신한다")
+    void updateMyProfile_닉네임동일_중복확인안함() {
+        Member member = memberWith("same_nick", "vi");
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
+
+        memberService.updateMyProfile("pub-1", profileUpdateRequest("same_nick", "ko", "수정함"));
+
+        assertThat(member.getLanguage()).isEqualTo("ko");
+        assertThat(member.getBio()).isEqualTo("수정함");
+        // 닉네임이 같으면 중복확인 쿼리를 호출하지 않는다.
+        verify(memberRepository, never()).existsByNickname(anyString());
+    }
+
+    @Test
+    @DisplayName("updateMyProfile: 없는(탈퇴 포함) 회원이면 MEMBER4001")
+    void updateMyProfile_없는회원_MEMBER4001() {
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("nope")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> memberService.updateMyProfile(
+                "nope", profileUpdateRequest("any", "ko", null)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
     }
 }
