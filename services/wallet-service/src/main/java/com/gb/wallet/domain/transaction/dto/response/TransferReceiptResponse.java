@@ -43,8 +43,9 @@ public record TransferReceiptResponse(
                 example = "Linh")
         String senderName,
 
-        @Schema(description = "수취인명. INTERNAL은 수신자 닉네임, REMITTANCE는 등록 시 verify 응답의 예금주명. "
-                + "외부 장애·구 계좌 등으로 null 가능", example = "NGUYEN VAN A", nullable = true)
+        @Schema(description = "수취인명. INTERNAL은 수신자 닉네임, REMITTANCE는 등록 시 저장된 예금주명"
+                + "(holder_name, GET /accounts/holder 응답 출처). 외부 장애·구 계좌 등으로 null 가능",
+                example = "NGUYEN VAN A", nullable = true)
         String receiverName,
 
         @Schema(description = "수취 은행명. REMITTANCE만 값 있음, INTERNAL은 null",

@@ -39,11 +39,14 @@ public class RegisterAccountRequest {
     private String accountToken;
 
     /**
-     * 예금주명. {@code POST /accounts/verify} 응답({@code account_holder_name}) 또는 holder 조회 응답에서
-     * 받은 값을 그대로 전달한다 — 사용자 직접 입력이 아닌 외부 은행 검증 통과 값. 송금 확인증
+     * 예금주명. {@code GET /accounts/holder}(예금주 실명 조회) 응답의 {@code account_holder_name}을
+     * 그대로 전달한다 — 사용자 직접 입력이 아닌 외부 은행 검증 통과 값. 송금 확인증
      * ({@code Transaction.receiverName} snapshot)의 출처가 된다.
+     *
+     * <p>{@code POST /accounts/verify} 응답이 아님에 주의 — verify는 {@code account_token}만 반환한다
+     * (api-spec.md §13 은행 연동·{@code VerifyAccountResponse} 정본).
      */
-    @Schema(description = "예금주명. verify/holder 조회 응답값을 그대로 전달",
+    @Schema(description = "예금주명. GET /accounts/holder 응답의 account_holder_name을 그대로 전달",
             example = "NGUYEN VAN A", maxLength = 100)
     @NotBlank
     @Size(max = 100)
