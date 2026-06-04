@@ -925,6 +925,14 @@ public class TransferServiceImpl implements TransferService {
         if (payoutResult == null || !"COMPLETED".equals(payoutResult.status())) {
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
+        // WTX-09 — 은행이 처리한 금액·통화가 요청과 일치하는지 대조한다(status만 믿지 않음). 불일치는
+        //   부분처리/통화오류 등 정합성 깨짐이라 잔액 차감 없이 일시 장애(503)로 보류한다(reconcile 대상, 충전 대칭).
+        if (payoutResult.amount() == null || payoutResult.amount().compareTo(amount) != 0
+                || !currency.name().equals(payoutResult.currencyCode())) {
+            log.error("송금 payout 응답 금액/통화 불일치 — 요청 {}{} vs 응답 {}{}. key={}",
+                    amount, currency.name(), payoutResult.amount(), payoutResult.currencyCode(), idempotencyKey);
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
 
         // (8) 잔액 차감 — dirty checking으로 UPDATE.
         BigDecimal senderBefore = senderBalance.getBalance();

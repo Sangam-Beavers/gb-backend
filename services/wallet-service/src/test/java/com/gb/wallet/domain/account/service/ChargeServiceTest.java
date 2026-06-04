@@ -179,6 +179,51 @@ class ChargeServiceTest {
     }
 
     @Test
+    @DisplayName("WTX-09: 은행 응답 금액이 요청과 불일치하면 COMMON5031, 잔액/거래 미저장(부분처리 차단)")
+    void doCharge_은행응답_금액불일치_COMMON5031() {
+        BigDecimal amount = new BigDecimal("100000");
+        Wallet wallet = wallet(USER);
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.empty());
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(ACCT, USER))
+                .willReturn(Optional.of(account(TOKEN)));
+        given(walletRepository.findByUserPublicId(USER)).willReturn(Optional.of(wallet));
+        // status는 COMPLETED지만 은행이 처리한 금액이 요청(100000)과 다름(99000) → 정합성 깨짐.
+        given(bankClient.withdraw(TOKEN, amount, "KRW", KEY))
+                .willReturn(new WithdrawalResult("t", "COMPLETED", new BigDecimal("99000"), "KRW", BigDecimal.ZERO));
+
+        assertThatThrownBy(() -> service.doCharge(USER, ACCT, KEY, request(amount), IP))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
+
+        // 잔액 반영·거래/감사 저장 없음(잘못된 금액을 충전으로 확정하지 않는다).
+        verify(walletBalanceRepository, never()).findForUpdateByWalletAndCurrency(any(), any());
+        verify(transactionRepository, never()).save(any());
+        verifyNoInteractions(auditLogRepository);
+    }
+
+    @Test
+    @DisplayName("WTX-09: 은행 응답 통화가 요청과 불일치(USD)하면 COMMON5031, 거래 미저장")
+    void doCharge_은행응답_통화불일치_COMMON5031() {
+        BigDecimal amount = new BigDecimal("100000");
+        Wallet wallet = wallet(USER);
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.empty());
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(ACCT, USER))
+                .willReturn(Optional.of(account(TOKEN)));
+        given(walletRepository.findByUserPublicId(USER)).willReturn(Optional.of(wallet));
+        given(bankClient.withdraw(TOKEN, amount, "KRW", KEY))
+                .willReturn(new WithdrawalResult("t", "COMPLETED", amount, "USD", BigDecimal.ZERO));
+
+        assertThatThrownBy(() -> service.doCharge(USER, ACCT, KEY, request(amount), IP))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
+
+        verify(transactionRepository, never()).save(any());
+        verifyNoInteractions(auditLogRepository);
+    }
+
+    @Test
     @DisplayName("정상 충전: 기존 잔액 행이 있으면 그 행을 증액(신규 save 없음)")
     void doCharge_정상_기존잔액행_증액() {
         BigDecimal amount = new BigDecimal("300000");

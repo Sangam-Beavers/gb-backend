@@ -197,6 +197,14 @@ public class ChargeServiceImpl implements ChargeService {
         if (mockResult == null || !COMPLETED_STATUS.equals(mockResult.status())) {
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
+        // (6-2) WTX-09 — 은행이 처리한 금액·통화가 요청과 일치하는지 대조한다(status만 믿지 않음). 불일치는
+        //       부분처리/통화오류 등 정합성 깨짐이라 잔액에 반영하지 않고 일시 장애(503)로 보류한다(reconcile 대상).
+        if (mockResult.amount() == null || mockResult.amount().compareTo(amount) != 0
+                || !CHARGE_CURRENCY.name().equals(mockResult.currencyCode())) {
+            log.error("충전 은행 응답 금액/통화 불일치 — 요청 {}{} vs 응답 {}{}. key={}",
+                    amount, CHARGE_CURRENCY.name(), mockResult.amount(), mockResult.currencyCode(), idempotencyKey);
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
 
         // (7) 잔액 행 0원 보장(REQUIRES_NEW)을 FOR UPDATE보다 "먼저" 한다.
         //     존재하지 않는 행에 FOR UPDATE를 걸면 MySQL(REPEATABLE READ)이 그 (wallet_id, currency) 자리에

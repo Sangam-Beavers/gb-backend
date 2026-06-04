@@ -676,6 +676,39 @@ class TransferServiceImplExecuteTest {
     }
 
     @Test
+    @DisplayName("WTX-09: payout status는 COMPLETED지만 응답 금액이 요청과 불일치 → COMMON5031, Writer 호출·Transaction/audit 미저장")
+    void execute_REMITTANCE_payout_금액불일치_COMMON5031() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        BankAccount account = mockBankAccount(MOCK_TOKEN);
+
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER)).willReturn(Optional.of(sender));
+        given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACCOUNT_PUB_ID, SENDER_USER))
+                .willReturn(Optional.of(account));
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(sender, CurrencyType.KRW))
+                .willReturn(Optional.of(senderBalance));
+        // status는 COMPLETED지만 은행이 처리한 금액이 요청(10000)과 다름(9999) → 정합성 깨짐으로 보류.
+        given(bankClient.payout(any(), any(), any(), any(), any()))
+                .willReturn(new PayoutResult(
+                        "mock-payout-x", "COMPLETED", new BigDecimal("9999.0000"), "KRW",
+                        new BigDecimal("0.0000")));
+
+        assertThatThrownBy(() -> service.execute(
+                SENDER_USER, KEY, remittanceRequest("10000.0000", BANK_ACCOUNT_PUB_ID)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
+
+        verify(remittanceAttemptWriter).record(any(), any(), any(), any(), any()); // 흔적은 외부 호출 전 기록됨
+        verify(transactionRepository, never()).save(any());                         // 잘못된 금액을 확정하지 않음
+        verify(auditLogRepository, never()).save(any());
+        assertThat(senderBalance.getBalance()).isEqualByComparingTo("1000000");      // 잔액 차감 없음
+    }
+
+    @Test
     @DisplayName("REMITTANCE 잔액 부족(amount+fee > balance) → WALLET4002: 외부 호출 전 차단 — Writer/BankClient 미호출")
     void execute_REMITTANCE_잔액부족_WALLET4002_attempt미호출() {
         Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
