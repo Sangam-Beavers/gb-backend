@@ -135,13 +135,12 @@ class LikeServiceTest {
     // ----- unlike -----
 
     @Test
-    @DisplayName("취소 성공: like 삭제 + like_count -1, 응답은 재조회한 실제 저장값")
+    @DisplayName("취소 성공: 원자 삭제 영향행=1 → like_count -1, 응답은 재조회한 실제 저장값")
     void unlike_정상() {
         Post post = post(USER, 3);
-        Like like = Like.ofPost(USER, POST_ID);
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
-        given(likeRepository.findByUserPublicIdAndTargetTypeAndTargetId(
-                USER, LikeTargetType.POST, POST_ID)).willReturn(Optional.of(like));
+        given(likeRepository.deleteByUserPublicIdAndTargetTypeAndTargetId(
+                USER, LikeTargetType.POST, POST_ID)).willReturn(1); // 내가 실제로 지움
         // 로드 시점 likeCount=3이라 in-memory 보정은 2지만, 동시 요청으로 DB가 4인 상황을 가정.
         given(postRepository.findLikeCountById(POST_ID)).willReturn(Optional.of(4));
 
@@ -149,24 +148,40 @@ class LikeServiceTest {
 
         assertThat(res.getLikeCount()).isEqualTo(4); // in-memory -1(=2)이 아니라 재조회한 실제 저장값
         assertThat(res.isLiked()).isFalse();
-        verify(likeRepository).delete(like);
         verify(postRepository).decrementLikeCount(POST_ID);
     }
 
     @Test
-    @DisplayName("취소 멱등: 안 누른 글 취소 → no-op 200, 삭제·감소 호출 없음·like_count 유지")
+    @DisplayName("취소 멱등: 안 누른 글 취소 → 영향행=0 → no-op 200, 감소 호출 없음·like_count 유지")
     void unlike_미좋아요_noop() {
         Post post = post(USER, 3);
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
-        given(likeRepository.findByUserPublicIdAndTargetTypeAndTargetId(
-                USER, LikeTargetType.POST, POST_ID)).willReturn(Optional.empty());
+        given(likeRepository.deleteByUserPublicIdAndTargetTypeAndTargetId(
+                USER, LikeTargetType.POST, POST_ID)).willReturn(0); // 지울 행 없음
 
         PostLikeResponse res = service.unlike(USER, PID);
 
         assertThat(res.getLikeCount()).isEqualTo(3); // 변화 없음
         assertThat(res.isLiked()).isFalse();
-        verify(likeRepository, never()).delete(any());
         verify(postRepository, never()).decrementLikeCount(any());
+    }
+
+    @Test
+    @DisplayName("COM-02 회귀: 동시 중복 취소에서 진 쪽(영향행=0)은 decrementLikeCount 호출 안 함(과차감 방지)")
+    void unlike_동시중복_진쪽_미차감() {
+        Post post = post(USER, 3);
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        // 같은 (user, POST, post)를 두 요청이 동시 취소 → 행 락으로 직렬화돼 한쪽만 1, 다른 쪽은 0.
+        // 0을 받은 쪽은 감소시키면 안 된다(둘 다 감소하면 단일 좋아요인데 2 차감).
+        given(likeRepository.deleteByUserPublicIdAndTargetTypeAndTargetId(
+                USER, LikeTargetType.POST, POST_ID)).willReturn(0);
+
+        PostLikeResponse res = service.unlike(USER, PID);
+
+        assertThat(res.getLikeCount()).isEqualTo(3); // 진 쪽은 like_count 변화 없음
+        assertThat(res.isLiked()).isFalse();
+        verify(postRepository, never()).decrementLikeCount(any());
+        verify(postRepository, never()).findLikeCountById(any()); // 감소 안 했으니 재조회도 없음
     }
 
     @Test
@@ -179,7 +194,7 @@ class LikeServiceTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommunityErrorCode.POST_NOT_FOUND);
 
-        verify(likeRepository, never()).delete(any());
+        verify(likeRepository, never()).deleteByUserPublicIdAndTargetTypeAndTargetId(any(), any(), any());
         verify(postRepository, never()).decrementLikeCount(any());
     }
 
