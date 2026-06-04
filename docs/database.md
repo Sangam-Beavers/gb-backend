@@ -42,12 +42,13 @@
 | 7 | wallet | `transactions` | 모든 금융 거래 마스터 |
 | 8 | wallet | `transaction_audit_logs` | 거래 감사 로그 + 상태 이력 (append-only) |
 | 9 | wallet | `remittance_attempts` | REMITTANCE 외부 호출 시도 흔적 (운영 reconcile 입력, append-only) |
-| 10 | wallet | `scheduled_transfers` | 정기 송금 설정 (매주/매월 자동 실행 대상) |
-| 11 | document | `document_submissions` | 문서 업로드 ~ 분석 전 메타 |
-| 12 | document | `document_results` | 분석 완료 결과 메타 **+ 분석 내용** |
-| 13 | community | `posts` | 게시글 + 번역 캐시 |
-| 14 | community | `comments` | 댓글 + 대댓글 |
-| 15 | community | `likes` | 게시글/댓글 좋아요 통합 |
+| 10 | wallet | `charge_attempts` | CHARGE 외부 호출 시도 흔적 (운영 reconcile 입력, append-only) |
+| 11 | wallet | `scheduled_transfers` | 정기 송금 설정 (매주/매월 자동 실행 대상) |
+| 12 | document | `document_submissions` | 문서 업로드 ~ 분석 전 메타 |
+| 13 | document | `document_results` | 분석 완료 결과 메타 **+ 분석 내용** |
+| 14 | community | `posts` | 게시글 + 번역 캐시 |
+| 15 | community | `comments` | 댓글 + 대댓글 |
+| 16 | community | `likes` | 게시글/댓글 좋아요 통합 |
 
 > **통화 마스터 테이블 없음** — 지원 통화 4개(KRW/USD/PHP/VND) 고정. `currency_code`를 VARCHAR로 직접 저장.
 
@@ -227,6 +228,24 @@
 > **soft delete 없음**: 흔적이 사라지면 reconcile 입력이 사라지므로 영구 보존.
 > **transaction_audit_logs와의 분리**: audit log는 `transaction_id` NOT NULL이라 본 `transactions` INSERT 전엔 행을 만들 수 없고, "거래 1:1 흔적" 의미를 흐린다 → 별도 테이블로 분리해 충전·1단계 INTERNAL_TRANSFER엔 영향 없게.
 > **현 사이클(2단계 c1) 범위**: 테이블/엔티티/Repository/Writer 인프라만 도입. TransferServiceImpl 통합은 c2에서. reconcile 배치는 미구현 — 향후 운영 도입 시 본 테이블을 입력으로 사용한다.
+
+### `charge_attempts`
+> CHARGE 외부 호출 시도 흔적. **append-only (INSERT만).** `remittance_attempts`와 **동일 구조**이며, 충전(`withdrawal`)을 위한 별도 테이블이다(WACC-01).
+> 외부 Mock 은행 `withdrawal` 호출 *직전* `REQUIRES_NEW`로 별도 커밋한다 — 메인 트랜잭션이 rollback돼도 흔적은 살아남아 timeout-but-success(또는 외부 성공 후 비재시도성 로컬 실패) 시 운영 reconcile 입력 자료가 된다.
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| `id` | BIGINT | PK, AI | |
+| `idempotency_key` | VARCHAR(100) | UNIQUE, NOT NULL | 시도 1회당 1행. 같은 키 재시도/동시 race는 UNIQUE로 1행 유지 |
+| `user_public_id` | VARCHAR(36) | NOT NULL | **회원 논리 참조 (물리 FK 없음)**. reconcile 시 사용자별 조회용 인덱스 보유 |
+| `bank_account_id` | BIGINT | NOT NULL | 출금(차감)을 시도한 외부 계좌 id (`transactions.bank_account_id`와 동일 raw 컬럼 패턴) |
+| `amount` | DECIMAL(18,4) | NOT NULL | 시도 출금액(외부 계좌에서 빼려는 충전 금액). "이만큼 출금 시도함" 의미 |
+| `currency_code` | VARCHAR(10) | NOT NULL | KRW(충전은 KRW 고정). FK 없이 직접 저장 |
+| `attempted_at` | DATETIME | NOT NULL | 외부 호출 직전 기록 시각 |
+
+> **왜 remittance_attempts와 분리하나(WACC-01)**: 충전은 외부계좌 `withdrawal`(차감), 송금은 `payout`(증액)으로 외부 계좌 기준 돈 방향이 정반대다. 고아 흔적(외부 성공인데 메인 tx 롤백) 발생 시 reconcile 교정 방향도 정반대(충전=환불, 송금=클로백)이므로 유형을 섞지 않고 별도 테이블로 둔다.
+> **공통 컬럼/`soft delete` 미적용**: `remittance_attempts`와 동일(append-only — `updated_at` 무의미, `created_at`은 `attempted_at`과 의미 중복, `BaseEntity` 미상속, 흔적 영구 보존).
+> **마이그레이션**: dev는 `ddl-auto=update`가 엔티티에서 신규 테이블을 자동 생성한다. stage/prod 등 수동 스키마 환경은 위 DDL 표를 기준으로 생성한다.
 
 ### `scheduled_transfers`
 > 정기 송금 설정. 매주/매월 자동 실행되는 송금의 메타. 실행 자체는 별도 스케줄러(KST 매일 새벽 1시)가 `status=ACTIVE` & `next_run_date <= today` 행을 가져와 `TransferService.execute`를 호출하고 `next_run_date`를 갱신한다.

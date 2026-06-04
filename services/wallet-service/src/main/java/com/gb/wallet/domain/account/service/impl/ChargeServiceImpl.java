@@ -8,6 +8,7 @@ import com.gb.wallet.domain.account.dto.request.ChargeRequest;
 import com.gb.wallet.domain.account.dto.response.ChargeResponse;
 import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
+import com.gb.wallet.domain.account.service.ChargeAttemptWriter;
 import com.gb.wallet.domain.account.service.ChargeService;
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import com.gb.wallet.domain.transaction.entity.TransactionAuditLog;
@@ -63,6 +64,7 @@ public class ChargeServiceImpl implements ChargeService {
     private final TransactionRepository transactionRepository;
     private final TransactionAuditLogRepository auditLogRepository;
     private final BankClient bankClient;
+    private final ChargeAttemptWriter chargeAttemptWriter;
     private final ChargeProperties chargeProperties;
     private final IdempotencyCacheHelper idempotencyCacheHelper;
     private final ObjectMapper objectMapper;
@@ -180,6 +182,11 @@ public class ChargeServiceImpl implements ChargeService {
         // (5) 지갑 조회 — 없으면 WALLET4001.
         Wallet wallet = walletRepository.findByUserPublicId(userPublicId)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+
+        // (6.5) 외부 호출 *직전* 시도 흔적을 REQUIRES_NEW로 별도 커밋(WACC-01) — withdraw가 외부 성공 후
+        //       메인 tx가 (비재시도성) 롤백/타임아웃돼도 흔적은 남아 운영 reconcile 입력이 된다(송금 payout의
+        //       RemittanceAttemptWriter와 대칭). 같은 idempotency_key 재시도/race는 Writer 내부 UNIQUE 흡수로 1행 유지.
+        chargeAttemptWriter.record(idempotencyKey, userPublicId, account.getId(), amount, CHARGE_CURRENCY);
 
         // (6) Mock 은행 출금. 실패는 BankErrorMapper가 BusinessException으로 변환해 던지므로 그대로 전파한다.
         //     idempotencyKey를 그대로 forward — Mock도 같은 키로 첫 응답을 재반환한다.

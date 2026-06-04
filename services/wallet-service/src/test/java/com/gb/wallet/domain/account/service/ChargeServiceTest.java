@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -18,6 +19,7 @@ import com.gb.wallet.domain.account.dto.request.ChargeRequest;
 import com.gb.wallet.domain.account.dto.response.ChargeResponse;
 import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
+import com.gb.wallet.domain.account.service.ChargeAttemptWriter;
 import com.gb.wallet.domain.account.service.impl.ChargeServiceImpl;
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import com.gb.wallet.domain.transaction.entity.TransactionAuditLog;
@@ -46,6 +48,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -70,6 +73,7 @@ class ChargeServiceTest {
     @Mock private TransactionRepository transactionRepository;
     @Mock private TransactionAuditLogRepository auditLogRepository;
     @Mock private BankClient bankClient;
+    @Mock private ChargeAttemptWriter chargeAttemptWriter;
     @Mock private IdempotencyCacheHelper idempotencyCacheHelper;
     @Mock private ObjectMapper objectMapper;
     @Mock private ChargeService self;
@@ -167,6 +171,11 @@ class ChargeServiceTest {
         assertThat(response.getWalletBalance()).isEqualTo("500000.0000");
         assertThat(response.getStatus()).isEqualTo("COMPLETED");
         assertThat(response.getCreatedAt()).isEqualTo("2026-05-30T04:15:30Z");
+
+        // WACC-01 회귀: 외부 withdraw 직전에 시도 흔적을 기록한다(record가 withdraw보다 *먼저*).
+        InOrder order = inOrder(chargeAttemptWriter, bankClient);
+        order.verify(chargeAttemptWriter).record(KEY, USER, 1L, amount, CurrencyType.KRW);
+        order.verify(bankClient).withdraw(TOKEN, amount, "KRW", KEY);
     }
 
     @Test
