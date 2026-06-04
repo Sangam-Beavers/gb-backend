@@ -83,11 +83,15 @@ public interface TransferService {
      * transaction INSERT → audit_log × 2(SEND/RECEIVE). <b>self-proxy 전용</b> — {@link #execute}가
      * {@code @Lazy} self 프록시를 통해 호출해야 {@code @Transactional}이 적용된다(자기 호출은 AOP 우회).
      * 다른 컴포넌트에서 직접 호출하지 말 것.
+     *
+     * @param receiverNameSnapshot INTERNAL_TRANSFER 수신자 본명 snapshot. <b>락/FOR UPDATE 진입 *전*에 외부
+     *        {@code MemberClient}로 미리 조회한 값</b>을 받는다(wallet-transfer-2 — 락 보유 중 외부 HTTP 회피).
+     *        REMITTANCE는 {@code null}(외부 계좌라 {@code bank_account.holder_name}을 tx 내에서 사용).
      */
     TransferExecuteResponse executeInTransaction(
             Long senderWalletId, Long receiverWalletId,
             CurrencyType currency, TransactionType transferType,
-            String idempotencyKey, TransferExecuteRequest request);
+            String idempotencyKey, TransferExecuteRequest request, String receiverNameSnapshot);
 
     /**
      * 멱등성 race로 idempotency_key UNIQUE 위반이 난 뒤, 먼저 커밋된 첫 거래의 결과를 별도 readOnly

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -40,6 +41,7 @@ import com.gb.wallet.global.exception.code.ExchangeErrorCode;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import com.gb.wallet.global.redis.IdempotencyCacheHelper;
+import org.springframework.transaction.UnexpectedRollbackException;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -118,6 +120,26 @@ class ExchangeServiceImplTest {
                 .isEqualByComparingTo(new BigDecimal("72.1014"));
         // 견적이 Redis에 저장돼야 한다.
         verify(quoteRedisRepository).save(any(QuoteData.class));
+    }
+
+    @Test
+    @DisplayName("wallet-exchange-3: 극소액 환전(수령액 0.0000 반올림)이면 EXCHANGE4003(422), Redis 저장 0 — 실행 시 500 사전 차단")
+    void createQuote_극소액_EXCHANGE4003() {
+        QuoteRequest request = new QuoteRequest();
+        ReflectionTestUtils.setField(request, "exchangeType", "EXCHANGE");
+        ReflectionTestUtils.setField(request, "fromCurrencyCode", "KRW");
+        ReflectionTestUtils.setField(request, "toCurrencyCode", "USD");
+        ReflectionTestUtils.setField(request, "amount", "0.0001"); // (0.0001-0)/1380 → setScale(4,HALF_UP)=0.0000
+        when(exchangeRateClient.getRateToKrw(CurrencyType.KRW)).thenReturn(new BigDecimal("1"));
+        when(exchangeRateClient.getRateToKrw(CurrencyType.USD)).thenReturn(new BigDecimal("1380"));
+
+        assertThatThrownBy(() -> exchangeService.createQuote(USER, request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(ExchangeErrorCode.AMOUNT_TOO_SMALL);
+
+        // 잘못된 0 견적이 Redis에 저장되지 않는다 — 실행 시 addBalance(0)→IllegalArgument→COMMON5000(500)을 사전 차단.
+        verify(quoteRedisRepository, never()).save(any());
     }
 
     @Test
@@ -273,6 +295,38 @@ class ExchangeServiceImplTest {
         assertThat(fromBalance.getBalance()).isEqualByComparingTo(new BigDecimal("400000")); // 500000-100000
         assertThat(toBalance.getBalance()).isEqualByComparingTo(new BigDecimal("72.1014"));   // 0+72.1014
         assertThat(response.getStatus()).isEqualTo("COMPLETED");
+        verify(transactionRepository).save(any(Transaction.class));
+    }
+
+    @Test
+    @DisplayName("charge-2: ensureBalanceRow가 UnexpectedRollbackException(동시 race)여도 흡수하고 환전 완료")
+    void executeInTransaction_ensure_UnexpectedRollback_흡수() {
+        QuoteData quote = new QuoteData("quote-1", USER, ExchangeType.EXCHANGE,
+                CurrencyType.KRW, CurrencyType.USD, new BigDecimal("100000"),
+                new BigDecimal("1380"), new BigDecimal("500"), CurrencyType.KRW,
+                new BigDecimal("72.1014"), CurrencyType.USD);
+
+        Wallet wallet = Wallet.builder().publicId("w-1").userPublicId(USER).status(WalletStatus.ACTIVE).build();
+        when(walletRepository.findByUserPublicId(USER)).thenReturn(Optional.of(wallet));
+        WalletBalance fromBalance = WalletBalance.builder()
+                .wallet(wallet).currencyCode(CurrencyType.KRW).balance(new BigDecimal("500000")).build();
+        WalletBalance toBalance = WalletBalance.builder()
+                .wallet(wallet).currencyCode(CurrencyType.USD).balance(BigDecimal.ZERO).build();
+        // 동시 같은 (wallet,currency) race로 REQUIRES_NEW가 rollback-only → 커밋 시 UnexpectedRollbackException(행은 이미 존재).
+        doThrow(new UnexpectedRollbackException("rollback-only"))
+                .when(walletBalanceWriter).ensureBalanceRow(eq(wallet), any(CurrencyType.class));
+        when(walletBalanceRepository.findForUpdateByWalletAndCurrency(eq(wallet), any(CurrencyType.class)))
+                .thenAnswer(inv -> {
+                    CurrencyType c = inv.getArgument(1);
+                    return Optional.of(c == CurrencyType.KRW ? fromBalance : toBalance);
+                });
+        when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ExchangeResponse response = exchangeService.executeInTransaction(USER, "idem-1", quote);
+
+        // 흡수돼 환전은 정상 완료(generic 500 아님) — to 행은 경쟁 INSERT로 이미 존재해 FOR UPDATE가 잠근다.
+        assertThat(response.getStatus()).isEqualTo("COMPLETED");
+        assertThat(toBalance.getBalance()).isEqualByComparingTo(new BigDecimal("72.1014"));
         verify(transactionRepository).save(any(Transaction.class));
     }
 

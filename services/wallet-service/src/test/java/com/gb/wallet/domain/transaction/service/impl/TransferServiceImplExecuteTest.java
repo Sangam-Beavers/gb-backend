@@ -35,6 +35,7 @@ import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.domain.wallet.service.WalletBalanceWriter;
 import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.MemberClient;
+import com.gb.wallet.global.client.MemberInfo;
 import com.gb.wallet.global.client.dto.PayoutResult;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
@@ -68,6 +69,7 @@ import org.redisson.api.RLock;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.UnexpectedRollbackException;
 
 /**
  * {@link TransferServiceImpl#execute} 단위 테스트(Mockito). DB·Spring 컨텍스트 없이
@@ -180,6 +182,124 @@ class TransferServiceImplExecuteTest {
 
         // TX-PIN: 사용자 직접 호출은 자금 이동 전에 PIN 게이트를 통과해야 한다(마커 원자 소비).
         verify(transferPinGate).requireVerified(SENDER_USER);
+    }
+
+    @Test
+    @DisplayName("wallet-transfer-2: 수신자 본명 조회(MemberClient)는 분산락·FOR UPDATE보다 *먼저* — 락 보유 중 외부 HTTP 제거")
+    void execute_INTERNAL_receiverName조회_락보다_먼저() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        WalletBalance receiverBalance = balance(receiver, BigDecimal.ZERO);
+        RLock lock = lock();
+
+        stubCacheMiss();
+        stubDbMiss();
+        stubWalletLookups(sender, receiver);
+        stubLockAcquired(lock);
+        stubBalanceLocks(sender, receiver, senderBalance, receiverBalance);
+        stubTransactionSaveAndAuditLog();
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+        given(memberClient.getMember(RECEIVER_USER))
+                .willReturn(new MemberInfo(RECEIVER_USER, "r@example.com", "수취인본명", "닉", "VN", true));
+
+        service.execute(SENDER_USER, KEY, request("10000.0000"));
+
+        // 핵심: getMember(외부 HTTP)가 분산락 획득보다 *먼저* 호출된다 — 락은 그 뒤에 잡히고 FOR UPDATE는
+        //   다시 그 안에서 일어나므로, 외부 HTTP가 락/FOR UPDATE 보유 구간 밖이라는 것이 증명된다(wallet-transfer-2).
+        InOrder inOrder = Mockito.inOrder(memberClient, distributedLockHelper);
+        inOrder.verify(memberClient).getMember(RECEIVER_USER);
+        inOrder.verify(distributedLockHelper).tryLockTwoWallets(SENDER_WALLET_ID, RECEIVER_WALLET_ID);
+        // 조회한 본명이 Transaction에 snapshot됐는지 확인(락 밖 조회값이 그대로 전달됨).
+        ArgumentCaptor<Transaction> txCaptor = ArgumentCaptor.forClass(Transaction.class);
+        verify(transactionRepository).save(txCaptor.capture());
+        assertThat(txCaptor.getValue().getReceiverName()).isEqualTo("수취인본명");
+    }
+
+    @Test
+    @DisplayName("wallet-transfer-2: MemberClient 장애여도 fail-open — receiverName=null로 송금 정상 완료")
+    void execute_INTERNAL_memberClient장애_failOpen() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        WalletBalance receiverBalance = balance(receiver, BigDecimal.ZERO);
+
+        stubCacheMiss();
+        stubDbMiss();
+        stubWalletLookups(sender, receiver);
+        stubLockAcquired(lock());
+        stubBalanceLocks(sender, receiver, senderBalance, receiverBalance);
+        stubTransactionSaveAndAuditLog();
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+        given(memberClient.getMember(RECEIVER_USER)).willThrow(new RuntimeException("member-service down"));
+
+        TransferExecuteResponse response = service.execute(SENDER_USER, KEY, request("10000.0000"));
+
+        assertThat(response.status()).isEqualTo("COMPLETED"); // 외부 장애가 송금을 막지 않는다
+        ArgumentCaptor<Transaction> txCaptor = ArgumentCaptor.forClass(Transaction.class);
+        verify(transactionRepository).save(txCaptor.capture());
+        assertThat(txCaptor.getValue().getReceiverName()).isNull(); // fail-open → null snapshot
+    }
+
+    @Test
+    @DisplayName("charge-2: INTERNAL 수신자 ensureBalanceRow가 UnexpectedRollbackException(동시 race)여도 흡수하고 송금 완료")
+    void execute_INTERNAL_ensure_UnexpectedRollback_흡수() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        WalletBalance receiverBalance = balance(receiver, BigDecimal.ZERO);
+
+        stubCacheMiss();
+        stubDbMiss();
+        stubWalletLookups(sender, receiver);
+        stubLockAcquired(lock());
+        stubBalanceLocks(sender, receiver, senderBalance, receiverBalance);
+        stubTransactionSaveAndAuditLog();
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+        // 동시 같은 (wallet,currency) race로 REQUIRES_NEW가 rollback-only → 커밋 시 UnexpectedRollbackException(행은 이미 존재).
+        willThrow(new UnexpectedRollbackException("rollback-only"))
+                .given(walletBalanceWriter).ensureBalanceRow(receiver, CurrencyType.KRW);
+
+        TransferExecuteResponse response = service.execute(SENDER_USER, KEY, request("10000.0000"));
+
+        // 흡수돼 송금은 정상 완료(generic 500 아님) — 0원 행은 경쟁 INSERT로 이미 존재해 FOR UPDATE가 잠근다.
+        assertThat(response.status()).isEqualTo("COMPLETED");
+        assertThat(senderBalance.getBalance()).isEqualByComparingTo("990000");
+        assertThat(receiverBalance.getBalance()).isEqualByComparingTo("10000");
+        verify(transactionRepository).save(any(Transaction.class));
+    }
+
+    @Test
+    @DisplayName("charge-2: REMITTANCE remittanceAttemptWriter.record가 UnexpectedRollbackException여도 흡수하고 payout 진행")
+    void execute_REMITTANCE_record_UnexpectedRollback_흡수() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        BankAccount account = mockBankAccount(MOCK_TOKEN);
+
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER)).willReturn(Optional.of(sender));
+        given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACCOUNT_PUB_ID, SENDER_USER))
+                .willReturn(Optional.of(account));
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(sender, CurrencyType.KRW))
+                .willReturn(Optional.of(senderBalance));
+        // 동시 같은 키 race로 REQUIRES_NEW가 rollback-only → 커밋 시 UnexpectedRollbackException(흔적은 이미 존재).
+        willThrow(new UnexpectedRollbackException("rollback-only"))
+                .given(remittanceAttemptWriter).record(any(), any(), any(), any(), any());
+        given(bankClient.payout(eq(BANK_CODE), eq(BANK_ACCOUNT_NUMBER), any(), any(), eq(KEY)))
+                .willReturn(new PayoutResult("mock-payout-1", "COMPLETED", new BigDecimal("10000.0000"), "KRW",
+                        new BigDecimal("500000.0000")));
+        stubTransactionSaveAndAuditLog();
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+
+        TransferExecuteResponse response = service.execute(
+                SENDER_USER, KEY, remittanceRequest("10000.0000", BANK_ACCOUNT_PUB_ID));
+
+        // 흔적 race 예외가 흡수돼 외부 payout까지 진행하고 송금이 완료된다.
+        assertThat(response.status()).isEqualTo("COMPLETED");
+        verify(bankClient).payout(eq(BANK_CODE), eq(BANK_ACCOUNT_NUMBER), any(), any(), eq(KEY));
+        verify(transactionRepository).save(any(Transaction.class));
     }
 
     @Test

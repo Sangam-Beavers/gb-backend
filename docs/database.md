@@ -146,7 +146,7 @@
 | `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | 대외 UUID |
 | `user_public_id` | VARCHAR(36) | NOT NULL | **회원 논리 참조** |
 | `bank_id` | BIGINT | FK → banks.id, NOT NULL | 스키마 내부 참조 |
-| `account_number` | VARCHAR(100) | NOT NULL | 계좌번호 (암호화 권장) |
+| `account_number` | VARCHAR(100) | NOT NULL | **AES-256 암호화 저장 예정** (현재 데모 평문 저장 + 응답 마스킹(`AccountNumberMasker`), 공용 D-3 암복호 유틸 도입 후 교체 — 서비스 `// TODO(D-3)`. 단 WACC-06 부분 유니크/dedup이 `account_number` 평문 동등성에 의존하므로, 암호화 시 결정적 암호 또는 별도 HMAC blind-index 컬럼 필요 — `document_number`와 함께 sequencing) |
 | `mock_account_token` | VARCHAR(36) | NULL | **충전용 토큰.** 계좌 인증 시 Mock 은행(또는 실서비스 PG)이 발급한 토큰. 충전(출금) 호출 시 이 값으로 계좌를 지칭한다. 실서비스에서는 PG 빌링키에 해당 |
 | `holder_name` | VARCHAR(100) | NULL | **외부 계좌 예금주명.** 계좌 등록 시 은행 `inquiry` 권위 값으로 저장한다(WACC-05 — 클라이언트 입력 불신, 송금 확인증 receiver_name 위조 방지). REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot 복사. 컬럼 추가 전 등록된 기존 계좌는 null. |
 | `is_virtual` | BOOLEAN | NOT NULL, DEFAULT FALSE | TRUE면 가상계좌(Beaver Bank 발급) |

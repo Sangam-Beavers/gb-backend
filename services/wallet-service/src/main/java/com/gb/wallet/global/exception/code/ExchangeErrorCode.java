@@ -17,7 +17,10 @@ import org.springframework.http.HttpStatus;
 public enum ExchangeErrorCode implements ErrorCode {
 
     EXCHANGE_NOT_FOUND(HttpStatus.NOT_FOUND, "EXCHANGE4001", "존재하지 않는 환전 내역입니다."),
-    QUOTE_EXPIRED(HttpStatus.BAD_REQUEST, "EXCHANGE4002", "환율 견적이 만료되었습니다.");
+    QUOTE_EXPIRED(HttpStatus.BAD_REQUEST, "EXCHANGE4002", "환율 견적이 만료되었습니다."),
+    // wallet-exchange-3 — 신청액이 너무 작아 수령액이 0으로 반올림되는 경우. 요청 형식은 정상이나 결과가
+    // 처리 불가한 비즈니스 상태라 422(WALLET4002/4003과 동일 사상). 견적 생성 시 fail-fast로 차단.
+    AMOUNT_TOO_SMALL(HttpStatus.UNPROCESSABLE_ENTITY, "EXCHANGE4003", "환전 금액이 너무 작습니다. (수령액이 0)");
 
     private final HttpStatus httpStatus;
     private final String code;

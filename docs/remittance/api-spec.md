@@ -291,16 +291,16 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 
 > 두 단계 락은 의도적 중복이다. Redis는 다중 인스턴스 환경 분산 보호, DB는 같은 인스턴스 내 직렬화. 둘 다 동일 순서로 획득해야 안전.
 
-### 6-3. Rate-limit (user 단위, 진입 최상단)
+### 6-3. Rate-limit (user 단위, 멱등 dedup 직후)
 
-`execute()` 진입 직후(캐시·DB·락 진입 전) **user 단위 고정 윈도** rate-limit으로 폭주를 차단한다. 같은 사용자가 연속 송금 시 외부 자금 이동의 부담을 제한하는 보안 보조 장치.
+`execute()`에서 **멱등성 Layer 1(캐시)·Layer 2(DB) dedup 통과 직후**(락·자금이동 진입 전) **user 단위 고정 윈도** rate-limit으로 폭주를 차단한다. 같은 사용자가 연속 송금 시 외부 자금 이동의 부담을 제한하는 보안 보조 장치. **멱등 재요청(Layer1/2 hit)은 신규 처리가 아니므로 rate-limit 토큰을 소비하지 않도록 dedup *뒤*에 둔다(WTX-04) — 정당한 재시도가 토큰 고갈로 TRANSFER4006되는 것을 막는다.**
 
 - 키: `ratelimit:transfer:{user_public_id}`
 - 정책: `wallet.transfer.rate-limit.{window-seconds, limit}` (기본 60초 / 30회)
 - 초과 시: `TRANSFER4006` (429)
 - Redis 장애 시: **fail-open**(통과) — 가용성 우선, 분산 락의 fail-closed(503)와 성격이 다름
 
-> 계좌 인증(`/accounts/verify`)은 IP 단위 rate-limit인데, 송금은 인증된 사용자가 호출하므로 user 단위가 더 적합하다(같은 사용자의 폭주 차단).
+> 계좌 인증(`/accounts/verify`)·예금주 조회·PIN 검증 등 본 서비스의 per-user rate-limit은 모두 위조불가 `user_public_id`로 키잉한다(위조 가능한 IP/XFF 대신 — WACC-02). 송금도 인증된 사용자가 호출하므로 user 단위.
 
 
 ### 6-4. Audit Log
@@ -571,8 +571,8 @@ API 엔드포인트는 아니지만(시스템 자동 동작) 정기 송금 도�
 | 분산 락 | Redisson `lock:scheduler:scheduled-transfer` (k8s multi-replica 환경에서 단일 인스턴스 실행 보장) |
 | 대상 조회 | `status=ACTIVE AND next_run_date <= today_kst` (인덱스 `idx_scheduled_transfers_status_next` 활용) |
 | 실행 단위 | 각 회차를 별도 트랜잭션(`REQUIRES_NEW`)으로 처리 — 한 회차 실패가 다른 회차 차단하지 않음 |
-| 송금 호출 | `TransferService.execute(userPublicId, idempotencyKey, request)` 그대로 재사용 (멱등성·재시도·rate-limit·remittance_attempts 일괄) |
-| 멱등성 키 | `scheduled:{public_id}:{today}` — 같은 날 두 번 트리거돼도 Layer 1/2/3 멱등으로 송금 1회만 |
+| 송금 호출 | `TransferService.executePreAuthorized(userPublicId, idempotencyKey, request)` (멱등성·재시도·rate-limit·remittance_attempts 일괄). **PIN 게이트 면제(TX-PIN) — 정기송금은 설정 시 1회 인가한 standing order라 회차는 사전 인가 경로(executePreAuthorized) 사용** |
+| 멱등성 키 | `scheduled:{public_id}:{next_run_date}` — 회차의 예약일(`next_run_date`)을 키에 포함해 회차마다 유니크. `today`가 아닌 `next_run_date`를 쓰는 이유: 자금 이동은 별도 tx(`execute`는 `NOT_SUPPORTED`)에서 커밋되고 후속 `markExecuted`가 실패/롤백되면 `next_run_date`가 그대로 남는데, `today` 키였다면 다음 트리거에서 날짜가 달라 멱등이 깨져 이중 송금 위험. `next_run_date` 키는 회차 고정값이라 Layer 1/2/3 멱등으로 1회만 |
 | 성공 후 처리 | `markExecuted(now, nextRunDate)` — `last_run_at` 기록 + `next_run_date` 다음 주기로 갱신 |
 | 실패 처리 | 로그만 + status 유지(ACTIVE). 다음 트리거에서 자동 재시도 (resume API 없는 현재 단계에서 PAUSED 자동 전환은 데드락 위험) |
 | 누락 회차 | 가장 최근 1회만 실행 — `next_run_date <= today` 조건이 한 번만 만족하고 markExecuted 후 다음 주기로 점프하므로 자연스럽게 이중 실행 방지 |
@@ -682,7 +682,7 @@ wallet:
 | `receive_currency_code` | string | N | 수령 통화 |
 | `expires_at` | string | N | 견적 만료 시각 (ISO 8601 UTC Z) |
 
-**Error**: 400 TRANSFER4002 (미지원 통화) / 400 COMMON4001 (요청 값 오류) / 401 AUTH4011
+**Error**: 400 TRANSFER4002 (미지원 통화) / 400 COMMON4001 (요청 값 오류) / 401 AUTH4011 / **422 EXCHANGE4003 (환전 금액이 너무 작아 수령액이 0으로 반올림 — 견적 생성 시 fail-fast, wallet-exchange-3)**
 > 견적은 잔액을 차감하지 않으므로 WALLET4002(잔액 부족)는 발생하지 않는다 — 잔액 검증은 실행(§9)에서만 한다.
 
 ---
@@ -711,8 +711,9 @@ wallet:
 **Error**
 | HTTP | code | message |
 | --- | --- | --- |
-| 400 | EXCHANGE4002 | 환율 견적이 만료되었습니다. |
+| 400 | EXCHANGE4002 | 환율 견적이 만료되었습니다. (또는 비재시도 거부로 견적이 소비된 뒤 재요청 — 재견적 필요) |
 | 401 | AUTH4011 | 인증이 필요합니다. |
+| 403 | COMMON4031 | 접근 권한이 없습니다. (타인이 발급한 견적(quote_public_id)으로 환전 실행 시도 — 견적 소유자 불일치, 견적 탈취/소비 DoS 차단) |
 | 404 | EXCHANGE4001 | 존재하지 않는 환전 내역입니다. |
 | 422 | WALLET4002 | 지갑 잔액이 부족합니다. |
 | 422 | WALLET4003 | 비활성 지갑입니다. (지갑 status≠ACTIVE — SUSPENDED/CLOSED. 잔액 변경 전 차단 — 충전/송금과 대칭) |

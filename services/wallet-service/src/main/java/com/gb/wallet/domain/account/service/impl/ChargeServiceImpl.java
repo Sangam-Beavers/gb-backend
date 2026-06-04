@@ -25,6 +25,7 @@ import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.common.enums.WalletStatus;
+import com.gb.wallet.global.common.util.BestEffortRequiresNew;
 import com.gb.wallet.global.config.ChargeProperties;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
@@ -192,7 +193,10 @@ public class ChargeServiceImpl implements ChargeService {
         // (6.5) 외부 호출 *직전* 시도 흔적을 REQUIRES_NEW로 별도 커밋(WACC-01) — withdraw가 외부 성공 후
         //       메인 tx가 (비재시도성) 롤백/타임아웃돼도 흔적은 남아 운영 reconcile 입력이 된다(송금 payout의
         //       RemittanceAttemptWriter와 대칭). 같은 idempotency_key 재시도/race는 Writer 내부 UNIQUE 흡수로 1행 유지.
-        chargeAttemptWriter.record(idempotencyKey, userPublicId, account.getId(), amount, CHARGE_CURRENCY);
+        // 동시 같은 키 race로 REQUIRES_NEW가 rollback-only가 되면 UnexpectedRollbackException이 전파되는데,
+        // 흔적은 이미 존재하므로 흡수하고 진행한다(charge-2 — 정상 충전이 generic 500으로 깨지지 않게).
+        BestEffortRequiresNew.run(() ->
+                chargeAttemptWriter.record(idempotencyKey, userPublicId, account.getId(), amount, CHARGE_CURRENCY));
 
         // (6) Mock 은행 출금. 실패는 BankErrorMapper가 BusinessException으로 변환해 던지므로 그대로 전파한다.
         //     idempotencyKey를 그대로 forward — Mock도 같은 키로 첫 응답을 재반환한다.
@@ -231,7 +235,7 @@ public class ChargeServiceImpl implements ChargeService {
         //     테스트에서 안 드러남). 그래서 행을 먼저 독립 커밋(REQUIRES_NEW)해 만들어 두고 — 동시 첫 충전의
         //     uk_wallet_balances_wallet_currency 위반은 WalletBalanceWriter가 흡수 — 항상 존재하는 행을
         //     FOR UPDATE로 record lock한다. 환전(ExchangeServiceImpl)도 동일하게 ensure→FOR UPDATE 순서다.
-        walletBalanceWriter.ensureBalanceRow(wallet, CHARGE_CURRENCY);
+        BestEffortRequiresNew.run(() -> walletBalanceWriter.ensureBalanceRow(wallet, CHARGE_CURRENCY)); // charge-2
         WalletBalance balance = walletBalanceRepository
                 .findForUpdateByWalletAndCurrency(wallet, CHARGE_CURRENCY)
                 // 행 보장 직후라 비어 있을 수 없다 — 비면 정합성이 깨진 비정상 상태.
