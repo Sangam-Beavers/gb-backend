@@ -16,6 +16,7 @@ import com.gb.wallet.domain.account.repository.BankAccountRepository;
 import com.gb.wallet.domain.account.repository.BankRepository;
 import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.MemberClient;
+import com.gb.wallet.global.client.dto.AccountHolder;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.redis.DistributedLockHelper;
 import java.util.List;
@@ -76,6 +77,9 @@ class BankAccountRegisterIntegrationTest {
         RLock lock = mock(RLock.class);
         given(lock.isHeldByCurrentThread()).willReturn(true);
         given(distributedLockHelper.tryLock(anyString())).willReturn(lock);
+
+        // WACC-05: register는 예금주명을 은행 inquiry 권위 값으로 채운다. Mock 은행은 "홍길동"을 돌려준다.
+        given(bankClient.inquiry(anyString(), anyString())).willReturn(new AccountHolder("홍길동"));
     }
 
     @AfterEach

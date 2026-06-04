@@ -15,11 +15,13 @@ import jakarta.validation.constraints.Size;
  * {@code @Pattern}으로 박지 않는다 — Service에서 TransactionType.fromCode + ALLOWED 필터 / CurrencyType.fromCode로
  * 검증해 TRANSFER4003·TRANSFER4002·TRANSFER4005로 매핑한다(CLAUDE.md §6).
  *
- * <p>1단계(INTERNAL_TRANSFER 전용) 범위:
+ * <p>도메인별 <b>조건부 필수</b> 필드(Bean Validation으로 표현이 까다로워 Service의 resolveScopeId에서 검증):
  * <ul>
- *   <li>{@code receiverPublicId}는 INTERNAL_TRANSFER의 수신자 user_public_id. {@code @NotBlank}로 강제.
- *       REMITTANCE 추가 시 nullable로 완화 + 도메인 검증으로 이동 예정.</li>
- *   <li>{@code bankAccountPublicId}는 REMITTANCE 전용 필드 — 1단계에선 미사용이라 nullable, 검증 없음.</li>
+ *   <li>{@code receiverPublicId}는 INTERNAL_TRANSFER의 수신자 user_public_id — INTERNAL_TRANSFER일 때 필수
+ *       (없으면 COMMON4001). REMITTANCE에선 미사용(null 허용). 무조건 {@code @NotBlank}였다면 REMITTANCE가
+ *       {@code @Valid}에서 거부돼 HTTP로 도달조차 못 하므로 제거하고 도메인 검증으로 옮겼다(TX1).</li>
+ *   <li>{@code bankAccountPublicId}는 REMITTANCE의 수신 은행 계좌 public_id — REMITTANCE일 때 필수
+ *       (없으면 COMMON4001). INTERNAL_TRANSFER에선 미사용(null 허용).</li>
  * </ul>
  *
  * <p>클래스 레벨 {@link Schema#example()}: SpringDoc이 전역 Jackson SNAKE_CASE를 무시하고 Java 필드명을
@@ -64,13 +66,14 @@ public record TransferExecuteRequest(
         @Size(max = 255)
         String memo,
 
-        @Schema(description = "수신자 회원 식별자(UUID, INTERNAL_TRANSFER 필수)",
-                example = "11111111-1111-1111-1111-111111111111")
-        @NotBlank
+        // 조건부 필수(INTERNAL_TRANSFER일 때만 필수)라 무조건 @NotBlank를 두지 않는다 — 두면 REMITTANCE가
+        // @Valid에서 거부돼 HTTP 도달 불가(TX1). 존재 검증은 Service(resolveScopeId)에서 type별로 한다.
+        @Schema(description = "수신자 회원 식별자(UUID, INTERNAL_TRANSFER 시 필수)",
+                example = "11111111-1111-1111-1111-111111111111", nullable = true)
         String receiverPublicId,
 
-        @Schema(description = "수신 은행 계좌 식별자(REMITTANCE 전용, 1단계 미사용)",
-                example = "null", nullable = true)
+        @Schema(description = "수신 은행 계좌 식별자(UUID, REMITTANCE 시 필수)",
+                example = "22222222-2222-2222-2222-222222222222", nullable = true)
         String bankAccountPublicId
 ) {
 }

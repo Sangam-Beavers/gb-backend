@@ -105,4 +105,33 @@ public class DistributedLockHelper {
             return null;
         }
     }
+
+    /**
+     * <b>장기 실행(배치) 전용</b> 단일 키 분산 락 — {@code wait 3s} + <b>watchdog 자동 갱신</b>으로 획득한다(WSCH-03).
+     *
+     * <p>{@link #tryLock}과 달리 {@code leaseTime}을 주지 않는다 → Redisson watchdog이 보유 동안 lease를
+     * 주기적으로 갱신해(lockWatchdogTimeout 기본 30s, 1/3 주기 갱신) <b>critical section이 5초를 넘겨도 락이
+     * 만료되지 않는다.</b> 스케줄러 배치(정기 송금 일괄 실행)는 실행 시간이 5초를 쉽게 넘겨 고정 5s lease로는
+     * 락이 도중에 풀려 2파드가 동시에 도는데(WSCH-03), watchdog으로 이를 막는다. 노드가 {@code unlock} 없이
+     * 죽으면 watchdog 갱신이 멈춰 ~30s 뒤 자동 해제돼 다음 주기에 복구된다.
+     *
+     * <p>짧은 critical section(송금/계좌 등록)은 빠른 자동 해제가 중요해 여전히 고정 5s lease({@link #tryLock})를
+     * 쓴다 — 이 메서드는 "끝까지 들고 있어야 하는 단일 인스턴스 배치"에만 쓴다.
+     *
+     * @param lockKey 전체 락 키(예: {@code scheduler:scheduled-transfer})
+     */
+    public RLock tryLockWithWatchdog(String lockKey) {
+        RLock lock = redissonClient.getLock(lockKey);
+        try {
+            // leaseTime 미지정 오버로드 → watchdog 활성(자동 갱신).
+            boolean acquired = lock.tryLock(WAIT_TIME_SECONDS, TimeUnit.SECONDS);
+            return acquired ? lock : null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (RuntimeException e) {
+            log.warn("분산 락(watchdog) 획득 실패 — null 반환. key={}", lockKey, e);
+            return null;
+        }
+    }
 }

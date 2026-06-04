@@ -17,7 +17,6 @@ import com.gb.community.global.client.MemberInfo;
 import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -95,14 +94,15 @@ public class LikeServiceImpl implements LikeService {
     public PostLikeResponse unlike(String userPublicId, String postPublicId) {
         Post post = getActivePostOrThrow(postPublicId);
 
-        Optional<Like> existing = likeRepository.findByUserPublicIdAndTargetTypeAndTargetId(
+        // 원자 삭제: 동시 중복 취소(같은 행을 두 요청이 함께 읽고 둘 다 감소)로 인한 like_count 과차감을
+        // 막는다(COM-02). 벌크 DELETE의 영향행 수로 "실제로 지운" 1건만 골라낸다.
+        int deleted = likeRepository.deleteByUserPublicIdAndTargetTypeAndTargetId(
                 userPublicId, LikeTargetType.POST, post.getId());
-        if (existing.isEmpty()) {
-            // 안 누른 글을 취소하면 멱등하게 no-op으로 처리한다(like_count 변화 없음).
+        if (deleted == 0) {
+            // 안 누른 글(또는 동시 취소에서 진 쪽)은 멱등하게 no-op으로 처리한다(like_count 변화 없음).
             return PostLikeResponse.of(post.getPublicId(), post.getLikeCount(), false);
         }
 
-        likeRepository.delete(existing.get());
         postRepository.decrementLikeCount(post.getId()); // DB는 like_count > 0 가드(음수 방지)
         // 벌크 UPDATE 직후 재조회해 실제 저장값을 응답한다(동시 요청 표시 오차 제거). 재조회가 비면
         // (이론상 불가) 로드 시점 -1로 폴백하되 음수 방지.

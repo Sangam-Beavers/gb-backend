@@ -165,6 +165,27 @@ class LikeRepositoryTest {
                 U1, LikeTargetType.POST, pE.getId())).isEmpty(); // U1은 pE 안 누름
     }
 
+    @Test
+    @DisplayName("COM-02 원자 삭제: deleteBy가 영향행 수 반환 — 첫 호출 1(삭제), 같은 키 재호출 0(이미 없음)")
+    void 원자삭제_영향행_반환() {
+        // U1은 setUp에서 pC를 좋아요한 상태. 첫 삭제는 1행, 같은 키 재삭제(동시 취소에서 진 쪽)는 0행.
+        int first = likeRepository.deleteByUserPublicIdAndTargetTypeAndTargetId(
+                U1, LikeTargetType.POST, pC.getId());
+        int second = likeRepository.deleteByUserPublicIdAndTargetTypeAndTargetId(
+                U1, LikeTargetType.POST, pC.getId());
+
+        assertThat(first).isEqualTo(1);  // 실제로 1행 삭제 → 호출 측은 이때만 like_count 감소
+        assertThat(second).isZero();     // 이미 없음 → 0행(과차감 방지의 핵심: 진 쪽은 감소 안 함)
+
+        // 키 정밀도: pC만 지워지고 U1의 다른 좋아요(pA)·타입 분리(COMMENT)는 그대로다.
+        assertThat(likeRepository.existsByUserPublicIdAndTargetTypeAndTargetId(
+                U1, LikeTargetType.POST, pC.getId())).isFalse();
+        assertThat(likeRepository.existsByUserPublicIdAndTargetTypeAndTargetId(
+                U1, LikeTargetType.POST, pA.getId())).isTrue();
+        assertThat(likeRepository.existsByUserPublicIdAndTargetTypeAndTargetId(
+                U1, LikeTargetType.COMMENT, pA.getId())).isTrue();
+    }
+
     // ----- helpers -----
 
     /** 게시글 1건 영속화 후 native UPDATE로 like_count/deleted를 지정값으로 만든다(PostRepositoryTest 기법). */

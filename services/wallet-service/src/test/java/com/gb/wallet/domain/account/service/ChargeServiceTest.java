@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -18,6 +19,7 @@ import com.gb.wallet.domain.account.dto.request.ChargeRequest;
 import com.gb.wallet.domain.account.dto.response.ChargeResponse;
 import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
+import com.gb.wallet.domain.account.service.ChargeAttemptWriter;
 import com.gb.wallet.domain.account.service.impl.ChargeServiceImpl;
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import com.gb.wallet.domain.transaction.entity.TransactionAuditLog;
@@ -46,6 +48,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -70,6 +73,7 @@ class ChargeServiceTest {
     @Mock private TransactionRepository transactionRepository;
     @Mock private TransactionAuditLogRepository auditLogRepository;
     @Mock private BankClient bankClient;
+    @Mock private ChargeAttemptWriter chargeAttemptWriter;
     @Mock private IdempotencyCacheHelper idempotencyCacheHelper;
     @Mock private ObjectMapper objectMapper;
     @Mock private ChargeService self;
@@ -167,6 +171,76 @@ class ChargeServiceTest {
         assertThat(response.getWalletBalance()).isEqualTo("500000.0000");
         assertThat(response.getStatus()).isEqualTo("COMPLETED");
         assertThat(response.getCreatedAt()).isEqualTo("2026-05-30T04:15:30Z");
+
+        // WACC-01 회귀: 외부 withdraw 직전에 시도 흔적을 기록한다(record가 withdraw보다 *먼저*).
+        InOrder order = inOrder(chargeAttemptWriter, bankClient);
+        order.verify(chargeAttemptWriter).record(KEY, USER, 1L, amount, CurrencyType.KRW);
+        order.verify(bankClient).withdraw(TOKEN, amount, "KRW", KEY);
+    }
+
+    @Test
+    @DisplayName("WTX-09: 은행 응답 금액이 요청과 불일치하면 COMMON5031, 잔액/거래 미저장(부분처리 차단)")
+    void doCharge_은행응답_금액불일치_COMMON5031() {
+        BigDecimal amount = new BigDecimal("100000");
+        Wallet wallet = wallet(USER);
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.empty());
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(ACCT, USER))
+                .willReturn(Optional.of(account(TOKEN)));
+        given(walletRepository.findByUserPublicId(USER)).willReturn(Optional.of(wallet));
+        // status는 COMPLETED지만 은행이 처리한 금액이 요청(100000)과 다름(99000) → 정합성 깨짐.
+        given(bankClient.withdraw(TOKEN, amount, "KRW", KEY))
+                .willReturn(new WithdrawalResult("t", "COMPLETED", new BigDecimal("99000"), "KRW", BigDecimal.ZERO));
+
+        assertThatThrownBy(() -> service.doCharge(USER, ACCT, KEY, request(amount), IP))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
+
+        // 잔액 반영·거래/감사 저장 없음(잘못된 금액을 충전으로 확정하지 않는다).
+        verify(walletBalanceRepository, never()).findForUpdateByWalletAndCurrency(any(), any());
+        verify(transactionRepository, never()).save(any());
+        verifyNoInteractions(auditLogRepository);
+    }
+
+    @Test
+    @DisplayName("WTX-09: 은행 응답 통화가 요청과 불일치(USD)하면 COMMON5031, 거래 미저장")
+    void doCharge_은행응답_통화불일치_COMMON5031() {
+        BigDecimal amount = new BigDecimal("100000");
+        Wallet wallet = wallet(USER);
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.empty());
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(ACCT, USER))
+                .willReturn(Optional.of(account(TOKEN)));
+        given(walletRepository.findByUserPublicId(USER)).willReturn(Optional.of(wallet));
+        given(bankClient.withdraw(TOKEN, amount, "KRW", KEY))
+                .willReturn(new WithdrawalResult("t", "COMPLETED", amount, "USD", BigDecimal.ZERO));
+
+        assertThatThrownBy(() -> service.doCharge(USER, ACCT, KEY, request(amount), IP))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
+
+        verify(transactionRepository, never()).save(any());
+        verifyNoInteractions(auditLogRepository);
+    }
+
+    @Test
+    @DisplayName("WTX-05: 충전 지갑이 SUSPENDED면 WALLET4003, Mock 출금/시도기록 전 차단(외부 차감 방지)")
+    void doCharge_지갑_비활성_WALLET4003() {
+        BigDecimal amount = new BigDecimal("100000");
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.empty());
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(ACCT, USER))
+                .willReturn(Optional.of(account(TOKEN)));
+        given(walletRepository.findByUserPublicId(USER)).willReturn(Optional.of(suspendedWallet(USER)));
+
+        assertThatThrownBy(() -> service.doCharge(USER, ACCT, KEY, request(amount), IP))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_INACTIVE);
+
+        // 지갑 상태 차단이 외부 출금·시도기록·잔액·저장 모두보다 먼저 (외부 차감 방지).
+        verifyNoInteractions(bankClient, chargeAttemptWriter, walletBalanceWriter);
+        verify(transactionRepository, never()).save(any());
+        verifyNoInteractions(auditLogRepository);
     }
 
     @Test
@@ -642,6 +716,17 @@ class ChargeServiceTest {
                 .publicId("wallet-" + userPublicId)
                 .userPublicId(userPublicId)
                 .status(WalletStatus.ACTIVE)
+                .build();
+        ReflectionTestUtils.setField(w, "id", 7L);
+        return w;
+    }
+
+    /** WTX-05 테스트용 SUSPENDED(동결) 지갑. */
+    private Wallet suspendedWallet(String userPublicId) {
+        Wallet w = Wallet.builder()
+                .publicId("wallet-" + userPublicId)
+                .userPublicId(userPublicId)
+                .status(WalletStatus.SUSPENDED)
                 .build();
         ReflectionTestUtils.setField(w, "id", 7L);
         return w;

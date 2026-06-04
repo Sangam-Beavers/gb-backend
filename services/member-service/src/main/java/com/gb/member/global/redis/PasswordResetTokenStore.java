@@ -21,10 +21,20 @@ import org.springframework.stereotype.Repository;
 public class PasswordResetTokenStore {
 
     private static final String KEY_PREFIX = "pwreset:";
-    /** 재설정 토큰 유효 시간. 메일 받고 비번 바꾸기에 충분하면서 너무 길지 않게 30분. */
-    private static final Duration TTL = Duration.ofMinutes(30);
+    /** 재설정 토큰 유효 시간(분). 메일 받고 비번 바꾸기에 충분하면서 너무 길지 않게 30분. */
+    private static final long TTL_MINUTES = 30;
+    /** TTL은 {@link #TTL_MINUTES} 단일 출처에서 파생한다 — 메일 본문 문구와 어긋나지 않게(MEM-08). */
+    private static final Duration TTL = Duration.ofMinutes(TTL_MINUTES);
 
     private final StringRedisTemplate redisTemplate;
+
+    /**
+     * 재설정 토큰 유효 시간(분). 메일 본문의 "N분 내 유효" 문구가 TTL과 항상 일치하도록, 리터럴 대신
+     * 이 값을 단일 출처로 노출한다(MEM-08). TTL을 바꾸면 메일 문구도 자동으로 따라간다.
+     */
+    public long ttlMinutes() {
+        return TTL_MINUTES;
+    }
 
     /** 토큰→email을 TTL로 저장한다. */
     public void save(String token, String email) {

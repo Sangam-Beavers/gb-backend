@@ -83,6 +83,17 @@ public class Member extends BaseEntity {
         this.authProviderId = authProviderId;
     }
 
+    /**
+     * IdP 프로비저닝 후 부여받은 식별자(sub)를 1회 채운다(MEM-02). 이메일 가입은 "로컬 row 선점(save) →
+     * IdP provision → 그 결과(sub) 채우기" 순서로 처리해, IdP 호출 전에 이메일/닉네임 UNIQUE 경합을 먼저
+     * 걸러 <b>IdP 고아계정</b>을 막는다(provision 실패 시 트랜잭션 롤백으로 로컬 row도 사라짐). authProviderId가
+     * provision 후에야 정해지므로 save 시점엔 비어 있고(현재 컬럼 nullable — 엔티티 상단 NOT NULL TODO 참조),
+     * 같은 트랜잭션 안에서 이 메서드로 채운 뒤 커밋한다(커밋된 상태는 항상 non-null).
+     */
+    public void assignAuthProviderId(String authProviderId) {
+        this.authProviderId = authProviderId;
+    }
+
     /** 주 사용 언어 변경. updatedAt은 Auditing(dirty checking)으로 자동 갱신된다. */
     public void changeLanguage(String language) {
         this.language = language;

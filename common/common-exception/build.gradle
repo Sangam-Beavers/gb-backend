@@ -3,5 +3,13 @@ dependencies {
     // GlobalExceptionHandler가 ConstraintViolationException(@RequestParam/@PathVariable 검증 실패)를
     // 잡으려면 jakarta.validation API 클래스가 런타임/컴파일 모두 필요하다. starter-validation이 표준 묶음.
     implementation 'org.springframework.boot:spring-boot-starter-validation'
+    // GlobalExceptionHandler가 DataIntegrityViolationException(org.springframework.dao, UNIQUE 위반 등 →
+    // COMMON4091/409, MEM-02m)을 잡으려면 spring-tx(org.springframework.dao 패키지 보유)가 컴파일/런타임에
+    // 필요하다. 사용 서비스는 spring-data-jpa로 이미 보유하지만 common-exception 자체엔 없어 명시한다.
+    implementation 'org.springframework:spring-tx'
     implementation project(':common:common-response')
+
+    // Gradle 9는 JUnit Platform launcher를 테스트 런타임에 자동 제공하지 않는다. 서비스 모듈은 spring-boot
+    // 플러그인 경유로 전이되지만 common 모듈(플러그인 미적용)은 명시해야 테스트가 기동된다(common-security와 동일).
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

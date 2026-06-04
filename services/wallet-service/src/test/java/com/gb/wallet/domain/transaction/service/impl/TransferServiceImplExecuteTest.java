@@ -53,6 +53,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
@@ -259,6 +262,65 @@ class TransferServiceImplExecuteTest {
     }
 
     @Test
+    @DisplayName("WTX-05: INTERNAL 송신자 지갑 SUSPENDED → WALLET4003, 분산 락/저장 미진입")
+    void execute_INTERNAL_송신자_비활성_WALLET4003() {
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER))
+                .willReturn(Optional.of(suspendedWallet(SENDER_WALLET_ID, SENDER_USER)));
+        given(walletRepository.findByUserPublicId(RECEIVER_USER))
+                .willReturn(Optional.of(wallet(RECEIVER_WALLET_ID, RECEIVER_USER)));
+
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_INACTIVE);
+
+        verifyNoInteractions(distributedLockHelper);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("WTX-05: INTERNAL 수신자 지갑 SUSPENDED → WALLET4003(비활성 지갑 입금 차단)")
+    void execute_INTERNAL_수신자_비활성_WALLET4003() {
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER))
+                .willReturn(Optional.of(wallet(SENDER_WALLET_ID, SENDER_USER)));
+        given(walletRepository.findByUserPublicId(RECEIVER_USER))
+                .willReturn(Optional.of(suspendedWallet(RECEIVER_WALLET_ID, RECEIVER_USER)));
+
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_INACTIVE);
+
+        verifyNoInteractions(distributedLockHelper);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("WTX-05: REMITTANCE 송신자 지갑 SUSPENDED → WALLET4003, payout/Writer 미호출")
+    void execute_REMITTANCE_송신자_비활성_WALLET4003() {
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER))
+                .willReturn(Optional.of(suspendedWallet(SENDER_WALLET_ID, SENDER_USER)));
+        given(walletRepository.findById(SENDER_WALLET_ID))
+                .willReturn(Optional.of(suspendedWallet(SENDER_WALLET_ID, SENDER_USER)));
+
+        assertThatThrownBy(() -> service.execute(
+                SENDER_USER, KEY, remittanceRequest("10000.0000", BANK_ACCOUNT_PUB_ID)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_INACTIVE);
+
+        verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
+        verifyNoInteractions(bankClient);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("다른 통화 송금(currency != receive) → TRANSFER4005, wallet 조회 전 차단")
     void execute_다른통화_TRANSFER4005() {
         stubCacheMiss();
@@ -316,6 +378,23 @@ class TransferServiceImplExecuteTest {
 
         TransferExecuteRequest req = new TransferExecuteRequest(
                 "REMITTANCE", "10000.0000", "KRW", "KRW", null, RECEIVER_USER, null);
+
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+    }
+
+    @Test
+    @DisplayName("TX1: INTERNAL_TRANSFER receiver_public_id 누락 → COMMON4001 (@NotBlank 제거 후 도메인 검증으로 차단)")
+    void execute_INTERNAL_receiverPublicId_누락_COMMON4001() {
+        // TX1: DTO 무조건 @NotBlank를 제거했으므로 receiver 누락이 @Valid를 통과해 서비스에 도달한다.
+        //      resolveScopeId의 INTERNAL 분기(REMITTANCE 대칭)가 COMMON4001로 차단한다.
+        stubCacheMiss();
+        stubDbMiss();
+
+        TransferExecuteRequest req = new TransferExecuteRequest(
+                "INTERNAL_TRANSFER", "10000.0000", "KRW", "KRW", null, null, null); // receiverPublicId=null
 
         assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, req))
                 .isInstanceOf(BusinessException.class)
@@ -427,6 +506,8 @@ class TransferServiceImplExecuteTest {
         verify(transactionRepository, never()).findByIdempotencyKey(anyString());
         // replay 경로는 executeInTransaction 미진입 — ensure도 호출되면 안 된다.
         verify(walletBalanceWriter, never()).ensureBalanceRow(any(), any());
+        // WTX-04: 멱등 replay(캐시 hit)는 신규 처리가 아니므로 rate-limit 토큰을 소모하지 않는다.
+        verify(rateLimitHelper, never()).tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class));
     }
 
     @Test
@@ -452,6 +533,8 @@ class TransferServiceImplExecuteTest {
         verify(walletBalanceWriter, never()).ensureBalanceRow(any(), any());
         // 회귀 가드: replay는 어떤 분기로도 흔적을 박지 않는다.
         verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
+        // WTX-04: Layer 2 멱등 재반환도 신규 처리가 아니므로 rate-limit 토큰을 소모하지 않는다.
+        verify(rateLimitHelper, never()).tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class));
     }
 
     @Test
@@ -673,6 +756,39 @@ class TransferServiceImplExecuteTest {
     }
 
     @Test
+    @DisplayName("WTX-09: payout status는 COMPLETED지만 응답 금액이 요청과 불일치 → COMMON5031, Writer 호출·Transaction/audit 미저장")
+    void execute_REMITTANCE_payout_금액불일치_COMMON5031() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        BankAccount account = mockBankAccount(MOCK_TOKEN);
+
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER)).willReturn(Optional.of(sender));
+        given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACCOUNT_PUB_ID, SENDER_USER))
+                .willReturn(Optional.of(account));
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(sender, CurrencyType.KRW))
+                .willReturn(Optional.of(senderBalance));
+        // status는 COMPLETED지만 은행이 처리한 금액이 요청(10000)과 다름(9999) → 정합성 깨짐으로 보류.
+        given(bankClient.payout(any(), any(), any(), any(), any()))
+                .willReturn(new PayoutResult(
+                        "mock-payout-x", "COMPLETED", new BigDecimal("9999.0000"), "KRW",
+                        new BigDecimal("0.0000")));
+
+        assertThatThrownBy(() -> service.execute(
+                SENDER_USER, KEY, remittanceRequest("10000.0000", BANK_ACCOUNT_PUB_ID)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
+
+        verify(remittanceAttemptWriter).record(any(), any(), any(), any(), any()); // 흔적은 외부 호출 전 기록됨
+        verify(transactionRepository, never()).save(any());                         // 잘못된 금액을 확정하지 않음
+        verify(auditLogRepository, never()).save(any());
+        assertThat(senderBalance.getBalance()).isEqualByComparingTo("1000000");      // 잔액 차감 없음
+    }
+
+    @Test
     @DisplayName("REMITTANCE 잔액 부족(amount+fee > balance) → WALLET4002: 외부 호출 전 차단 — Writer/BankClient 미호출")
     void execute_REMITTANCE_잔액부족_WALLET4002_attempt미호출() {
         Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
@@ -750,11 +866,36 @@ class TransferServiceImplExecuteTest {
         verify(transactionRepository, never()).save(any());
     }
 
+    // ===== WTX-02: 빈 Idempotency-Key 서비스단 가드(비-HTTP 경로) =====
+
+    @ParameterizedTest(name = "[{index}] idempotencyKey=\"{0}\"")
+    @NullAndEmptySource
+    @ValueSource(strings = {"   ", "\t"})
+    @DisplayName("WTX-02: 빈/공백 Idempotency-Key → COMMON4001, rate-limit/캐시/DB/락 모두 미진입(side effect 전 fail-fast)")
+    void execute_빈_idempotencyKey_COMMON4001(String blankKey) {
+        assertThatThrownBy(() -> service.execute(SENDER_USER, blankKey, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+
+        // 모든 side effect 전에 차단 — rate-limit 토큰 소모/캐시/DB/락 진입 0.
+        // (rateLimitHelper는 @BeforeEach가 lenient 스텁해 두므로 never()로 "코드가 호출 안 함"만 검증.)
+        verify(rateLimitHelper, never()).tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class));
+        verifyNoInteractions(idempotencyCacheHelper, walletRepository,
+                walletBalanceRepository, distributedLockHelper);
+        verify(transactionRepository, never()).findByIdempotencyKey(anyString());
+        verify(transactionRepository, never()).save(any());
+    }
+
     // ===== 신규: P1 rate-limit =====
 
     @Test
-    @DisplayName("Rate-limit 초과(tryAcquire=false) → TRANSFER4006, 캐시/DB/락 모두 미진입")
+    @DisplayName("Rate-limit 초과(tryAcquire=false) → TRANSFER4006, 실제 자금이동(지갑/락/저장) 미진입(WTX-04: dedup 뒤에서 차단)")
     void execute_rateLimit_초과_TRANSFER4006() {
+        // WTX-04: rate-limit은 이제 Layer1(캐시)·Layer2(DB) dedup *뒤*에 위치한다. 신규 키라 캐시/DB는 miss로
+        // 거친 뒤 rate-limit에서 막힌다(둘 다 stub 필요).
+        stubCacheMiss();
+        stubDbMiss();
         // 기본 @BeforeEach가 true로 설정한 stub을 false로 덮어쓴다(이 케이스 한정).
         given(rateLimitHelper.tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class)))
                 .willReturn(false);
@@ -764,10 +905,8 @@ class TransferServiceImplExecuteTest {
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(TransferErrorCode.RATE_LIMIT_EXCEEDED);
 
-        // 진입 최상단에서 차단 — 캐시/DB/락/저장 모두 미진입.
-        verifyNoInteractions(idempotencyCacheHelper, walletRepository,
-                walletBalanceRepository, distributedLockHelper);
-        verify(transactionRepository, never()).findByIdempotencyKey(anyString());
+        // dedup(캐시/DB)은 거치되, 실제 자금 이동(지갑/락/저장)은 미진입.
+        verifyNoInteractions(walletRepository, walletBalanceRepository, distributedLockHelper);
         verify(transactionRepository, never()).save(any());
     }
 
@@ -909,6 +1048,17 @@ class TransferServiceImplExecuteTest {
                 .publicId("wallet-pub-" + id)
                 .userPublicId(userPublicId)
                 .status(WalletStatus.ACTIVE)
+                .build();
+        ReflectionTestUtils.setField(w, "id", id);
+        return w;
+    }
+
+    /** WTX-05 테스트용 SUSPENDED(동결) 지갑. */
+    private Wallet suspendedWallet(long id, String userPublicId) {
+        Wallet w = Wallet.builder()
+                .publicId("wallet-pub-" + id)
+                .userPublicId(userPublicId)
+                .status(WalletStatus.SUSPENDED)
                 .build();
         ReflectionTestUtils.setField(w, "id", id);
         return w;

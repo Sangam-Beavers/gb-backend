@@ -6,6 +6,7 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -29,6 +30,23 @@ public interface LikeRepository extends JpaRepository<Like, Long> {
     /** 좋아요 취소 시 삭제 대상 조회. 없으면 멱등 no-op으로 처리한다. */
     Optional<Like> findByUserPublicIdAndTargetTypeAndTargetId(
             String userPublicId, LikeTargetType targetType, Long targetId);
+
+    /**
+     * 좋아요 취소 — 원자 삭제. 단일 벌크 DELETE의 JDBC 영향행 수를 반환해, 동시 중복 취소에서도
+     * <b>실제로 행을 지운 1건만</b> like_count를 감소시키도록 호출 측에서 게이트하게 한다(COM-02).
+     *
+     * <p>파생 {@code deleteBy...}는 select-then-delete라 영향행이 <i>조회된</i> 엔티티 기준이라,
+     * 두 요청이 같은 행을 동시에 읽으면 둘 다 1을 반환해 과차감을 못 막는다. {@code @Modifying} 벌크
+     * DELETE는 행 락으로 직렬화되어 이긴 쪽 1, 진 쪽 0을 반환하므로 정확히 한 번만 감소한다
+     * ({@link com.gb.community.domain.post.repository.PostRepository#decrementLikeCount}와 동일한 원자 갱신 패턴).
+     */
+    @Modifying
+    @Query("DELETE FROM PostLike l WHERE l.userPublicId = :userPublicId "
+            + "AND l.targetType = :targetType AND l.targetId = :targetId")
+    int deleteByUserPublicIdAndTargetTypeAndTargetId(
+            @Param("userPublicId") String userPublicId,
+            @Param("targetType") LikeTargetType targetType,
+            @Param("targetId") Long targetId);
 
     /**
      * 관심글 목록 — latest(좋아요 누른 시각순). 삭제글 제외, POST 대상만.

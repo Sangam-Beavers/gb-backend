@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RLock;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
@@ -34,7 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class BankAccountServiceImpl implements BankAccountService {
 
-    /** 계좌 인증 rate-limit 카운터 키 prefix(IP 단위). database.md §7 등록. */
+    /** 계좌 인증 rate-limit 카운터 키 prefix(사용자 단위 — WACC-02). database.md §7 등록. */
     private static final String VERIFY_RATE_LIMIT_KEY_PREFIX = "ratelimit:account-verify:";
     /**
      * 계좌 변경 직렬화 분산락 키 prefix(user 단위). database.md §7 등록. 상수 이름은 register지만 실제
@@ -68,11 +69,12 @@ public class BankAccountServiceImpl implements BankAccountService {
     }
 
     @Override
-    public VerifyAccountResponse verifyAccount(VerifyAccountRequest request, String clientIp) {
-        // IP 단위 고정 윈도 rate-limit — 한 출처의 외부 은행 인증 폭주를 막는다. 초과 시 ACCOUNT4005(429).
+    public VerifyAccountResponse verifyAccount(VerifyAccountRequest request, String userPublicId) {
+        // 사용자 단위 고정 윈도 rate-limit — 한 사용자의 외부 은행 인증 폭주를 막는다. 초과 시 ACCOUNT4005(429).
+        // 위조 가능한 IP(XFF) 대신 위조불가 userPublicId로 키잉해 우회를 막는다(WACC-02).
         // Redis 장애 시 fail-open(통과) — rate-limit은 보안 보조 장치이고 verify는 저위험(외부 호출만, DB 미사용).
         boolean allowed = rateLimitHelper.tryAcquire(
-                VERIFY_RATE_LIMIT_KEY_PREFIX + clientIp,
+                VERIFY_RATE_LIMIT_KEY_PREFIX + userPublicId,
                 verifyRateLimitProperties.limit(),
                 Duration.ofSeconds(verifyRateLimitProperties.windowSeconds()));
         if (!allowed) {
@@ -91,13 +93,27 @@ public class BankAccountServiceImpl implements BankAccountService {
         // 등록을 user 단위로 직렬화(분산락) — 동시 등록 race에서 중복 계좌·다중 주계좌가 생기는 것을 차단한다.
         // 락은 트랜잭션 "밖"(NOT_SUPPORTED)에서 잡고, 실제 INSERT는 self-proxy(registerAccountLocked,
         // @Transactional)로 호출해 락이 커밋 시점까지 유지되도록 한다(TransferServiceImpl.execute와 동일 구조).
+        //
+        // F1 — 은행 코드 검증(findByCode)과 예금주명 조회(inquiry, 동기 HTTP)는 락/트랜잭션 "밖"에서 먼저 한다.
+        //   락 lease=5s(watchdog 없음) < bank read-timeout=10s 이므로, inquiry를 락 안에서 호출하면 은행 지연 시
+        //   lease 만료 창에 같은 user의 2번째 등록이 끼어 다중 주계좌가 생길 수 있다(ACC1 회귀). critical section엔
+        //   DB write만 남긴다. 부수로 잘못된 bank_code는 inquiry(은행 호출) 전에 COMMON4001로 끊긴다.
+        Bank bank = bankRepository.findByCode(request.getBankCode())
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.INVALID_REQUEST));
+
+        // WACC-05 — 예금주명은 클라이언트 입력(request.getHolderName())이 아니라 은행 권위 값(inquiry)을 쓴다.
+        //   클라가 verify는 진짜 이름으로 통과시키고 register엔 다른 이름을 보내 송금 확인증(receiver_name)을
+        //   위조하는 것을 막는다. (request.holderName 필드는 호환 위해 남기되 신뢰하지 않는다 — vestigial.)
+        String holderName = bankClient.inquiry(request.getBankCode(), request.getAccountNumber())
+                .accountHolderName();
+
         RLock lock = distributedLockHelper.tryLock(REGISTER_LOCK_KEY_PREFIX + userPublicId);
         if (lock == null) {
             // 락 획득 실패 → 503(fail-closed): "잠깐 거부"가 "조용히 중복 생성"보다 안전.
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
         try {
-            return self.registerAccountLocked(userPublicId, request);
+            return self.registerAccountLocked(userPublicId, request, bank, holderName);
         } finally {
             // 락 보유자가 본인인 경우에만 해제(lease 만료로 다른 스레드가 가진 경우 안전).
             if (lock.isHeldByCurrentThread()) {
@@ -108,20 +124,17 @@ public class BankAccountServiceImpl implements BankAccountService {
 
     @Override
     @Transactional
-    public AccountResponse registerAccountLocked(String userPublicId, RegisterAccountRequest request) {
-        // TODO: DB UNIQUE 최종 안전망은 별도 마이그레이션 이슈로 연기. 현재는 lock:account-register:{user}
-        //       분산락이 user 단위 직렬화로 중복 계좌·다중 주계좌를 막는다.
-        //       후속: bank_accounts에 (user_public_id, bank_id, account_number) UNIQUE 제약 추가(중복 등록의
-        //       최종 안전망) — MySQL은 부분 유니크 인덱스 미지원이라 is_primary 단일성은 제약만으론 못 막고
-        //       락이 담당한다. database.md UNIQUE 정의 합의 + dev DB 중복 정리 + soft-delete 재등록 정책이
-        //       얽혀 있어 Redis 작업과 분리해 마이그레이션 이슈에서 도입한다.
+    public AccountResponse registerAccountLocked(String userPublicId, RegisterAccountRequest request,
+                                                 Bank bank, String holderName) {
+        // 1차 방어: 활성 중복 계좌 선검사(흔한 경로를 깔끔히 ACCOUNT4004로). 동시성 최종 안전망은 아래 (user,
+        //   bank, account_number) 부분 UNIQUE(prod, WACC-06)와 분산락이 함께 담당한다.
         if (bankAccountRepository.existsByUserPublicIdAndBank_CodeAndAccountNumberAndIsActiveTrue(
                 userPublicId, request.getBankCode(), request.getAccountNumber())) {
             throw new BusinessException(AccountErrorCode.ACCOUNT_ALREADY_REGISTERED);
         }
 
-        Bank bank = bankRepository.findByCode(request.getBankCode())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.INVALID_REQUEST));
+        // bank(은행 코드 검증)·holderName(은행 권위 예금주명)은 호출자(registerAccount)가 락/트랜잭션 밖에서
+        //   미리 확정해 넘긴다(F1 — ACC1 회귀 차단). 이 메서드의 critical section엔 DB read/write만 둔다.
 
         // 사용자의 첫 활성 계좌면 자동으로 주 계좌. 그 외에는 항상 false로 둔다 — 등록 흐름에서 다중
         // 주 계좌(같은 사용자에 활성 is_primary=true 둘 이상)가 발생하면 충전 시 어느 계좌가 기본인지
@@ -134,15 +147,27 @@ public class BankAccountServiceImpl implements BankAccountService {
                 .userPublicId(userPublicId)
                 .bank(bank)
                 .accountNumber(request.getAccountNumber())
-                .holderName(request.getHolderName())
+                .holderName(holderName)
                 .mockAccountToken(request.getAccountToken())
                 .isVirtual(false)
                 .isPrimary(isPrimary)
                 .isActive(true)
                 .build();
 
-        BankAccount saved = bankAccountRepository.save(account);
-        return AccountResponse.from(saved);
+        // WACC-06 — saveAndFlush로 prod의 (user_public_id, bank_id, account_number) 부분 UNIQUE 위반을 이 메서드
+        //   안에서 잡는다. 분산락 lease 만료/split-brain로 선검사를 통과한 동시 등록이 빠져나가도 DB 제약이
+        //   최종 안전망이며, 위반은 ACCOUNT4004로 매핑한다(부분 UNIQUE는 active 행만 — 삭제 계좌 재등록 허용.
+        //   DDL은 database.md 참조. dev/H2는 생성컬럼 미생성이라 본 catch는 prod에서만 실효).
+        //   이 saveAndFlush에서 발생 가능한 무결성 위반은 위 부분 UNIQUE(uk_bank_accounts_active_acct)뿐이다 —
+        //   FK(bank)·NOT NULL·holderName은 상위에서 모두 확정·검증된다. 따라서 제약명(getConstraintName)으로
+        //   골라내지 않고 contextual하게 좁혀 잡는다(제약명 판별은 prod-only·null 가능이라 비이식적, CMN 정합).
+        //   (만약 미상의 위반이라면 rethrow돼 중앙 핸들러가 500 COMMON5000으로 처리한다.)
+        try {
+            BankAccount saved = bankAccountRepository.saveAndFlush(account);
+            return AccountResponse.from(saved);
+        } catch (DataIntegrityViolationException duplicate) {
+            throw new BusinessException(AccountErrorCode.ACCOUNT_ALREADY_REGISTERED);
+        }
     }
 
     @Override

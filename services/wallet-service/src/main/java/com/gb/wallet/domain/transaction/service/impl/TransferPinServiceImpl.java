@@ -5,6 +5,7 @@ import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.transaction.service.TransferPinService;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
+import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import com.gb.wallet.global.redis.TransferPinAttemptStore;
@@ -26,6 +27,13 @@ public class TransferPinServiceImpl implements TransferPinService {
     public void setPin(String userPublicId, String pin) {
         Wallet wallet = walletRepository.findByUserPublicId(userPublicId)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+
+        // WTX-05 — 동결(SUSPENDED)/폐쇄(CLOSED) 지갑은 PIN 설정도 차단(ACTIVE만 허용). 송금 PIN은 송금 실행의
+        // 전제이므로, 송금 자체가 막힌 비활성 지갑에 PIN을 새로 거는 것은 의미가 없고 상태 일관성도 깨진다.
+        // 충전/송금과 동일한 WALLET4003(422) 가드.
+        if (wallet.getStatus() != WalletStatus.ACTIVE) {
+            throw new BusinessException(WalletErrorCode.WALLET_INACTIVE);
+        }
 
         // 최초 설정만 허용. 이미 있으면 충돌(변경은 기존 PIN 확인이 필요한 후속 과제).
         if (wallet.hasTransferPin()) {

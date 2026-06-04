@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -28,6 +29,7 @@ import com.gb.member.domain.member.repository.MemberRepository;
 import com.gb.member.global.client.IdpUserClient;
 import com.gb.member.global.exception.code.MemberErrorCode;
 import com.gb.member.global.mail.EmailSender;
+import com.gb.member.global.redis.PasswordResetRateLimiter;
 import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -35,6 +37,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -60,6 +64,7 @@ class MemberServiceImplTest {
     @Mock private MemberRepository memberRepository;
     @Mock private IdpUserClient idpUserClient;
     @Mock private PasswordResetTokenStore passwordResetTokenStore;
+    @Mock private PasswordResetRateLimiter passwordResetRateLimiter;
     @Mock private EmailSender emailSender;
 
     @InjectMocks private MemberServiceImpl memberService;
@@ -80,11 +85,11 @@ class MemberServiceImplTest {
 
         when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
+        // MEM-02 — 로컬 row를 IdP 호출 전에 먼저 선점(saveAndFlush). publicId는 Service가 채워 넘기므로 그대로 돌려준다.
+        when(memberRepository.saveAndFlush(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
         // IdP가 사용자를 만들고 식별자(sub=uuid)를 돌려준다. publicId는 Service가 만들어 4번째 인자로 넘긴다.
         when(idpUserClient.provisionUser(eq("new@example.com"), eq("홍길동"), eq("P@ssw0rd!"), anyString()))
                 .thenReturn("idp-sub-uuid-9999");
-        // 저장 시 publicId는 Service가 이미 채워 넘기므로 그대로 돌려준다(덮어쓰지 않는다).
-        when(memberRepository.save(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // when
         SignupResponse response = memberService.signup(request);
@@ -98,12 +103,44 @@ class MemberServiceImplTest {
         verify(idpUserClient).provisionUser(eq("new@example.com"), eq("홍길동"), eq("P@ssw0rd!"), idpPublicId.capture());
 
         ArgumentCaptor<Member> saved = ArgumentCaptor.forClass(Member.class);
-        verify(memberRepository).save(saved.capture());
+        verify(memberRepository).saveAndFlush(saved.capture());
         assertThat(saved.getValue().getPublicId()).isEqualTo(idpPublicId.getValue());
         // 응답 publicId도 동일해야 한다.
         assertThat(response.getPublicId()).isEqualTo(idpPublicId.getValue());
-        // IdP가 준 sub가 회원의 authProviderId로 저장돼야 한다.
+        // IdP가 준 sub가 assignAuthProviderId로 회원에 채워져야 한다(같은 인스턴스라 캡처 후에도 반영됨).
         assertThat(saved.getValue().getAuthProviderId()).isEqualTo("idp-sub-uuid-9999");
+
+        // MEM-02 회귀: 로컬 선점(saveAndFlush)이 IdP provision보다 *먼저* 실행돼야 한다(IdP 고아계정 방지의 핵심).
+        InOrder order = inOrder(memberRepository, idpUserClient);
+        order.verify(memberRepository).saveAndFlush(any(Member.class));
+        order.verify(idpUserClient).provisionUser(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("MEM-02: provision 실패 시 예외 전파 + 로컬 선점(saveAndFlush)이 provision보다 먼저(실패 시 tx 롤백으로 로컬도 제거 → 고아 방지)")
+    void signup_provision실패_고아방지_순서() {
+        SignupRequest request = new SignupRequest();
+        ReflectionTestUtils.setField(request, "email", "new@example.com");
+        ReflectionTestUtils.setField(request, "password", "P@ssw0rd!");
+        ReflectionTestUtils.setField(request, "name", "홍길동");
+        ReflectionTestUtils.setField(request, "nickname", "gildong");
+        ReflectionTestUtils.setField(request, "nationality", "VN");
+        ReflectionTestUtils.setField(request, "language", "vi");
+
+        when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
+        when(memberRepository.existsByNickname("gildong")).thenReturn(false);
+        when(memberRepository.saveAndFlush(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(idpUserClient.provisionUser(any(), any(), any(), any()))
+                .thenThrow(new RuntimeException("IdP unavailable"));
+
+        assertThatThrownBy(() -> memberService.signup(request))
+                .isInstanceOf(RuntimeException.class);
+
+        // 로컬 선점이 provision보다 먼저였음을 보장한다 — provision 실패 시 @Transactional 롤백으로 ①에서 만든
+        // 로컬 row도 사라진다(로컬·IdP 모두 없음). 단위 테스트는 tx 경계 밖이라 "순서"를 회귀로 고정한다.
+        InOrder order = inOrder(memberRepository, idpUserClient);
+        order.verify(memberRepository).saveAndFlush(any(Member.class));
+        order.verify(idpUserClient).provisionUser(any(), any(), any(), any());
     }
 
     @Test
@@ -121,8 +158,33 @@ class MemberServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(MemberErrorCode.EMAIL_ALREADY_EXISTS);
 
-        verify(memberRepository, never()).save(any());
+        verify(memberRepository, never()).saveAndFlush(any());
         // 중복이면 IdP에도 사용자를 만들지 않는다(로컬 검증이 먼저).
+        verify(idpUserClient, never()).provisionUser(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("WU-F8: existsBy 통과 후 동시 가입 race(saveAndFlush UNIQUE 위반) → COMMON4091, IdP provision 미호출(고아 방지)")
+    void signup_동시가입race_COMMON4091() {
+        SignupRequest request = new SignupRequest();
+        ReflectionTestUtils.setField(request, "email", "race@example.com");
+        ReflectionTestUtils.setField(request, "password", "P@ssw0rd!");
+        ReflectionTestUtils.setField(request, "name", "홍길동");
+        ReflectionTestUtils.setField(request, "nickname", "gildong");
+        ReflectionTestUtils.setField(request, "nationality", "VN");
+        ReflectionTestUtils.setField(request, "language", "vi");
+        when(memberRepository.existsByEmail("race@example.com")).thenReturn(false);
+        when(memberRepository.existsByNickname("gildong")).thenReturn(false);
+        // 선검사는 통과했으나 커밋 전 saveAndFlush에서 동시 가입 race가 UNIQUE를 위반.
+        when(memberRepository.saveAndFlush(any(Member.class)))
+                .thenThrow(new DataIntegrityViolationException("Duplicate entry for key 'uk_members_email'"));
+
+        assertThatThrownBy(() -> memberService.signup(request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS); // 중앙 핸들러(500) 대신 contextual 409
+
+        // race를 saveAndFlush(IdP 호출 전)에서 잡으므로 IdP 사용자(고아)는 만들어지지 않는다.
         verify(idpUserClient, never()).provisionUser(any(), any(), any(), any());
     }
 
@@ -144,7 +206,7 @@ class MemberServiceImplTest {
         when(memberRepository.existsByPublicId("pub-uuid-1")).thenReturn(false);
         when(memberRepository.existsByEmail("google@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
-        when(memberRepository.save(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(memberRepository.saveAndFlush(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // when
         SocialProfileResponse response = memberService.completeSocialProfile(
@@ -157,7 +219,7 @@ class MemberServiceImplTest {
 
         // 저장된 회원: 토큰 claim은 토큰값, 나머지는 입력값으로 채워져야 한다.
         ArgumentCaptor<Member> saved = ArgumentCaptor.forClass(Member.class);
-        verify(memberRepository).save(saved.capture());
+        verify(memberRepository).saveAndFlush(saved.capture());
         Member m = saved.getValue();
         assertThat(m.getPublicId()).isEqualTo("pub-uuid-1");
         assertThat(m.getEmail()).isEqualTo("google@example.com");
@@ -182,7 +244,25 @@ class MemberServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
 
-        verify(memberRepository, never()).save(any());
+        verify(memberRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("WU-F8: 소셜 보완 existsBy 통과 후 동시 호출 race(saveAndFlush UNIQUE 위반) → COMMON4091(중앙 핸들러 500 대신 contextual 409)")
+    void completeSocialProfile_동시race_COMMON4091() {
+        SocialProfileRequest request = socialProfileRequest("gildong", "VN", "vi");
+        when(memberRepository.existsByPublicId("pub-uuid-1")).thenReturn(false);
+        when(memberRepository.existsByEmail("google@example.com")).thenReturn(false);
+        when(memberRepository.existsByNickname("gildong")).thenReturn(false);
+        // 선검사는 통과했으나 saveAndFlush에서 동시 호출 race가 UNIQUE를 위반.
+        when(memberRepository.saveAndFlush(any(Member.class)))
+                .thenThrow(new DataIntegrityViolationException("Duplicate entry for key 'uk_members_public_id'"));
+
+        assertThatThrownBy(() -> memberService.completeSocialProfile(
+                "pub-uuid-1", "google@example.com", "홍길동", "idp-sub-1", request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
     }
 
     @Test
@@ -198,7 +278,7 @@ class MemberServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(MemberErrorCode.EMAIL_ALREADY_EXISTS);
 
-        verify(memberRepository, never()).save(any());
+        verify(memberRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -215,7 +295,7 @@ class MemberServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
 
-        verify(memberRepository, never()).save(any());
+        verify(memberRepository, never()).saveAndFlush(any());
     }
 
     // ──────────────────── 이메일/닉네임 중복 확인 ────────────────────
@@ -268,16 +348,21 @@ class MemberServiceImplTest {
     // ──────────────────── 비밀번호 재설정 ────────────────────
 
     @Test
-    @DisplayName("재설정 메일: 가입된 이메일이면 토큰 저장 + 메일 발송한다")
+    @DisplayName("재설정 메일: 가입된 이메일이면 토큰 저장 + 메일 발송(MEM-08: 본문 유효시간이 TTL 단일출처와 일치)")
     void sendPasswordResetEmail_가입됨_발송() {
         PasswordResetEmailRequest request = new PasswordResetEmailRequest();
         ReflectionTestUtils.setField(request, "email", "user@example.com");
+        when(passwordResetRateLimiter.tryAcquire("user@example.com")).thenReturn(true);
         when(memberRepository.existsByEmail("user@example.com")).thenReturn(true);
+        when(passwordResetTokenStore.ttlMinutes()).thenReturn(30L);
 
         memberService.sendPasswordResetEmail(request);
 
         verify(passwordResetTokenStore).save(anyString(), eq("user@example.com"));
-        verify(emailSender).send(eq("user@example.com"), anyString(), anyString());
+        // MEM-08: 본문 "N분 내 유효"의 N이 TTL 단일출처(ttlMinutes)에서 와야 한다(리터럴 분리 방지).
+        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(emailSender).send(eq("user@example.com"), anyString(), bodyCaptor.capture());
+        assertThat(bodyCaptor.getValue()).contains("30분 내 유효");
     }
 
     @Test
@@ -285,11 +370,30 @@ class MemberServiceImplTest {
     void sendPasswordResetEmail_미가입_조용히종료() {
         PasswordResetEmailRequest request = new PasswordResetEmailRequest();
         ReflectionTestUtils.setField(request, "email", "nobody@example.com");
+        when(passwordResetRateLimiter.tryAcquire("nobody@example.com")).thenReturn(true);
         when(memberRepository.existsByEmail("nobody@example.com")).thenReturn(false);
 
         memberService.sendPasswordResetEmail(request);
 
         // 미가입이어도 예외 없이 끝나고, 토큰 저장·메일 발송은 하지 않는다.
+        verify(passwordResetTokenStore, never()).save(anyString(), anyString());
+        verifyNoInteractions(emailSender, idpUserClient);
+    }
+
+    @Test
+    @DisplayName("MEM-04: 재설정 메일 rate-limit 초과 → COMMON4291, 가입조회/토큰/메일 모두 미진입(메일폭탄 차단)")
+    void sendPasswordResetEmail_rateLimit_초과_COMMON4291() {
+        PasswordResetEmailRequest request = new PasswordResetEmailRequest();
+        ReflectionTestUtils.setField(request, "email", "victim@example.com");
+        when(passwordResetRateLimiter.tryAcquire("victim@example.com")).thenReturn(false);
+
+        assertThatThrownBy(() -> memberService.sendPasswordResetEmail(request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.TOO_MANY_REQUESTS);
+
+        // rate-limit이 가입 여부 확인 *전*에 차단 — 가입조회/토큰/메일 모두 미진입.
+        verify(memberRepository, never()).existsByEmail(anyString());
         verify(passwordResetTokenStore, never()).save(anyString(), anyString());
         verifyNoInteractions(emailSender, idpUserClient);
     }

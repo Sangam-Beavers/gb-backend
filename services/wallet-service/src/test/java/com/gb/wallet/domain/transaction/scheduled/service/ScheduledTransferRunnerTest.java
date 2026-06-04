@@ -66,7 +66,7 @@ class ScheduledTransferRunnerTest {
     @Test
     @DisplayName("락 획득 실패(다른 인스턴스 실행 중) → 도래 행 조회조차 안 함")
     void runDueTransfers_락실패시_조용히_종료() {
-        given(distributedLockHelper.tryLock(anyString())).willReturn(null);
+        given(distributedLockHelper.tryLockWithWatchdog(anyString())).willReturn(null);
 
         runner.runDueTransfers();
 
@@ -81,7 +81,7 @@ class ScheduledTransferRunnerTest {
         ScheduledTransfer st = scheduled(10L, TransactionType.REMITTANCE, null, 99L,
                 LocalDate.of(2020, 1, 1));  // 과거 — double-check(nextRunDate.isAfter(today)) 통과
 
-        given(distributedLockHelper.tryLock(anyString())).willReturn(lock);
+        given(distributedLockHelper.tryLockWithWatchdog(anyString())).willReturn(lock);
         given(scheduledTransferRepository.findAllByStatusAndNextRunDateLessThanEqual(
                 eq(ScheduledTransferStatus.ACTIVE), any(LocalDate.class)))
                 .willReturn(List.of(st));
@@ -118,7 +118,7 @@ class ScheduledTransferRunnerTest {
         ScheduledTransfer st = scheduled(11L, TransactionType.INTERNAL_TRANSFER, "receiver-uuid", null,
                 LocalDate.of(2020, 1, 1));  // 과거 — double-check(nextRunDate.isAfter(today)) 통과
 
-        given(distributedLockHelper.tryLock(anyString())).willReturn(lock);
+        given(distributedLockHelper.tryLockWithWatchdog(anyString())).willReturn(lock);
         given(scheduledTransferRepository.findAllByStatusAndNextRunDateLessThanEqual(any(), any()))
                 .willReturn(List.of(st));
         given(scheduledTransferRepository.findById(11L)).willReturn(Optional.of(st));
@@ -149,7 +149,7 @@ class ScheduledTransferRunnerTest {
         ScheduledTransfer st2 = scheduled(21L, TransactionType.INTERNAL_TRANSFER, "r2", null,
                 LocalDate.of(2020, 1, 1));  // 과거 — double-check(nextRunDate.isAfter(today)) 통과
 
-        given(distributedLockHelper.tryLock(anyString())).willReturn(lock);
+        given(distributedLockHelper.tryLockWithWatchdog(anyString())).willReturn(lock);
         given(scheduledTransferRepository.findAllByStatusAndNextRunDateLessThanEqual(any(), any()))
                 .willReturn(List.of(st1, st2));
         given(scheduledTransferRepository.findById(20L)).willReturn(Optional.of(st1));

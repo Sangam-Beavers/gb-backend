@@ -2,10 +2,14 @@ package com.gb.community.domain.comment.repository;
 
 import com.gb.community.domain.comment.entity.Comment;
 import com.gb.community.domain.post.entity.Post;
+import java.time.LocalDateTime;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 /**
  * Comment 엔티티 Repository.
@@ -36,4 +40,18 @@ public interface CommentRepository extends JpaRepository<Comment, Long> {
      * post 일치 여부는 서비스 책임이라 여기선 검증하지 않는다(post 무관 단건 조회).
      */
     Optional<Comment> findByPublicIdAndDeletedAtIsNull(String publicId);
+
+    /**
+     * publicId(UUID) 댓글을 원자적으로 soft delete하고 영향받은 행 수를 반환한다(댓글 삭제 API).
+     *
+     * <p><b>동시 중복 삭제 가드(COM1 회귀):</b> {@code WHERE deleted_at IS NULL} 조건으로 활성 행 1건만
+     * 전이시킨다. 같은 댓글을 동시에 삭제하는 두 트랜잭션은 행 락으로 직렬화돼 승자만 1, 패자는 0을 받는다.
+     * 서비스는 반환값이 1일 때만 {@code comment_count}를 감소시켜 과차감을 막는다(post unlike의 affected-row
+     * 게이트와 동일 패턴). 엔티티 {@code softDelete()}(행 가드 없는 dirty-update)는 동시 중복 삭제 시 둘 다
+     * 통과해 과차감되므로 댓글 삭제 경로에선 이 메서드를 쓴다. 벌크 UPDATE라 영속성 컨텍스트의 Comment
+     * 인스턴스는 갱신되지 않는다(삭제 후 미사용).
+     */
+    @Modifying
+    @Query("UPDATE Comment c SET c.deletedAt = :now WHERE c.publicId = :publicId AND c.deletedAt IS NULL")
+    int softDeleteByPublicId(@Param("publicId") String publicId, @Param("now") LocalDateTime now);
 }

@@ -51,12 +51,17 @@ public class RealIdpUserClient implements IdpUserClient {
     private final String apiBaseUri;
     private final String adminToken;
 
+    /**
+     * connect/read 타임아웃이 설정된 {@code idpRestClient} 빈을 주입받는다(IdpClientConfig — MEM1).
+     * 타임아웃 없는 raw 빌더를 직접 build()하면 IdP 지연 시 가입/탈퇴가 DB 락을 보유한 채 무한 대기해
+     * Hikari 풀이 고갈된다.
+     */
     public RealIdpUserClient(
-            RestClient.Builder restClientBuilder,
+            RestClient idpRestClient,
             ObjectMapper objectMapper,
             @Value("${auth.idp.api-base-uri}") String apiBaseUri,
             @Value("${auth.idp.admin-token}") String adminToken) {
-        this.restClient = restClientBuilder.build();
+        this.restClient = idpRestClient;
         this.objectMapper = objectMapper;
         this.apiBaseUri = apiBaseUri;
         this.adminToken = adminToken;
@@ -197,11 +202,22 @@ public class RealIdpUserClient implements IdpUserClient {
                 return;
             }
 
-            Integer pk = list.results().get(0).pk();
-            if (pk == null) {
-                log.error("Authentik 사용자 조회 응답에 pk가 없습니다. uuid={}", authProviderId);
+            // ?uuid 필터가 부분일치/엉뚱한 사용자를 돌려줄 수 있으므로, uuid가 "정확히" 일치하는 1건만 쓴다
+            // (엉뚱한 사용자를 비활성화하지 않도록 방어 — changePassword와 동일 패턴, member-6). 정확 일치 0건은
+            // 대상 없음으로 보고 멱등 통과, 2건 이상이면 비정상이라 거절한다.
+            List<UserEntry> matched = list.results().stream()
+                    .filter(u -> authProviderId.equals(u.uuid()) && u.pk() != null)
+                    .toList();
+            if (matched.isEmpty()) {
+                log.warn("Authentik uuid 정확 일치 대상 없음(멱등 통과). uuid={}", authProviderId);
+                return;
+            }
+            if (matched.size() > 1) {
+                log.error("Authentik uuid 정확 일치가 2건 이상(비활성화): uuid={}, count={}",
+                        authProviderId, matched.size());
                 throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
             }
+            Integer pk = matched.get(0).pk();
 
             // 2) is_active=false로 비활성화. 본문은 ObjectMapper로 직접 JSON 문자열화(컨버터 환경차 회피).
             restClient.patch()
@@ -255,9 +271,13 @@ public class RealIdpUserClient implements IdpUserClient {
     private record UserListResponse(@JsonProperty("results") List<UserEntry> results) {
     }
 
-    /** 목록 항목(필요한 필드만). changePassword는 username 정확 일치 확인에, deactivateUser는 pk에 쓴다. */
+    /**
+     * 목록 항목(필요한 필드만). changePassword는 {@code username} 정확 일치 확인에, deactivateUser는 {@code uuid}
+     * 정확 일치 확인에 쓰고, 일치한 항목의 {@code pk}로 후속 PATCH/POST를 호출한다(member-6 — 첫 건 맹신 방지).
+     */
     private record UserEntry(
             @JsonProperty("pk") Integer pk,
-            @JsonProperty("username") String username) {
+            @JsonProperty("username") String username,
+            @JsonProperty("uuid") String uuid) {
     }
 }

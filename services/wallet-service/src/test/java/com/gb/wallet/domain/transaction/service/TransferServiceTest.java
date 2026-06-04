@@ -244,7 +244,7 @@ class TransferServiceTest {
         RecentAccountsResponse response = transferService.getRecentRemittanceAccounts(SENDER, 10);
 
         assertThat(response.getAccounts())
-                .as("순서(A→B) + 모든 필드 매핑 + 마스킹(앞3-****-뒤4) + 금액 string(스케일4) + ISO Z 시각")
+                .as("순서(A→B) + 모든 필드 매핑 + 마스킹(앞3 + 별표 + 뒤2, WACC-08) + 금액 string(스케일4) + ISO Z 시각")
                 .extracting(AccountItem::getBankCode,
                             AccountItem::getBankName,
                             AccountItem::getAccountNumber,
@@ -253,8 +253,8 @@ class TransferServiceTest {
                             AccountItem::getLastAmount,
                             AccountItem::getLastTransferredAt)
                 .containsExactly(
-                        tuple("KOOKMIN", "국민은행",  "123-****-1111", "김민수",  "KRW", "200000.0000", "2026-06-03T10:00:00Z"),
-                        tuple("ACB",     "ACB Bank", "987-****-4321", "Nguyen", "USD", "50.0000",     "2026-06-02T10:00:00Z"));
+                        tuple("KOOKMIN", "국민은행",  "123********11", "김민수",  "KRW", "200000.0000", "2026-06-03T10:00:00Z"),
+                        tuple("ACB",     "ACB Bank", "987****21",     "Nguyen", "USD", "50.0000",     "2026-06-02T10:00:00Z"));
 
         verifyNoInteractions(memberClient);
     }

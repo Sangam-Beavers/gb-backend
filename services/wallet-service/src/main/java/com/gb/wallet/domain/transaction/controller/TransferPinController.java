@@ -71,7 +71,7 @@ public class TransferPinController {
     @Operation(
             summary = "송금 PIN 검증",
             description = "송금 실행 전 PIN을 검증한다. 성공 시 송금 생성 API로 진행한다. "
-                    + "5회 연속 실패 시 10분간 잠긴다.")
+                    + "5회 연속 실패 시 10분간 잠기고, 24시간 누적 15회 실패 시 24시간 장기 잠긴다.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200", description = "검증 성공."),
@@ -89,7 +89,7 @@ public class TransferPinController {
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "429", description = "TRANSFER4008 - 입력 횟수 초과로 잠김(10분).",
+                    responseCode = "429", description = "TRANSFER4008 - 입력 횟수 초과로 잠김(단기 10분 또는 24h 누적 시 24시간).",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class)))
     })

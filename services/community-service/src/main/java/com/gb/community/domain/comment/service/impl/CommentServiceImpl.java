@@ -13,6 +13,7 @@ import com.gb.community.domain.post.repository.PostRepository;
 import com.gb.community.global.client.MemberClient;
 import com.gb.community.global.client.MemberInfo;
 import com.gb.community.global.exception.code.CommunityErrorCode;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
@@ -112,8 +113,14 @@ public class CommentServiceImpl implements CommentService {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
 
-        // (5) Soft delete + comment_count -1(동시 삭제 lost update 방지 위해 DB 원자 UPDATE, count>0 가드).
-        comment.softDelete();
+        // (5) 원자 조건부 soft delete — deleted_at IS NULL 행만 1건 전이시키고 영향행 수를 받는다.
+        //     같은 댓글을 동시에 삭제하는 두 요청은 행 락으로 직렬화돼 패자는 affected==0을 받는다. 반환값이
+        //     1일 때만 comment_count를 감소시켜 과차감을 막는다(post unlike의 affected-row 게이트 미러링, COM1
+        //     회귀). entity softDelete()는 행 가드가 없어 동시 중복 삭제 시 둘 다 통과·둘 다 -1 되므로 쓰지 않는다.
+        int affected = commentRepository.softDeleteByPublicId(commentPublicId, LocalDateTime.now());
+        if (affected == 0) {
+            return; // 다른 트랜잭션이 이미 삭제(멱등 no-op) — comment_count를 감소시키지 않는다.
+        }
         postRepository.decrementCommentCount(post.getId());
     }
 

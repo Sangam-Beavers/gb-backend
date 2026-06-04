@@ -42,12 +42,13 @@
 | 7 | wallet | `transactions` | 모든 금융 거래 마스터 |
 | 8 | wallet | `transaction_audit_logs` | 거래 감사 로그 + 상태 이력 (append-only) |
 | 9 | wallet | `remittance_attempts` | REMITTANCE 외부 호출 시도 흔적 (운영 reconcile 입력, append-only) |
-| 10 | wallet | `scheduled_transfers` | 정기 송금 설정 (매주/매월 자동 실행 대상) |
-| 11 | document | `document_submissions` | 문서 업로드 ~ 분석 전 메타 |
-| 12 | document | `document_results` | 분석 완료 결과 메타 **+ 분석 내용** |
-| 13 | community | `posts` | 게시글 + 번역 캐시 |
-| 14 | community | `comments` | 댓글 + 대댓글 |
-| 15 | community | `likes` | 게시글/댓글 좋아요 통합 |
+| 10 | wallet | `charge_attempts` | CHARGE 외부 호출 시도 흔적 (운영 reconcile 입력, append-only) |
+| 11 | wallet | `scheduled_transfers` | 정기 송금 설정 (매주/매월 자동 실행 대상) |
+| 12 | document | `document_submissions` | 문서 업로드 ~ 분석 전 메타 |
+| 13 | document | `document_results` | 분석 완료 결과 메타 **+ 분석 내용** |
+| 14 | community | `posts` | 게시글 + 번역 캐시 |
+| 15 | community | `comments` | 댓글 + 대댓글 |
+| 16 | community | `likes` | 게시글/댓글 좋아요 통합 |
 
 > **통화 마스터 테이블 없음** — 지원 통화 4개(KRW/USD/PHP/VND) 고정. `currency_code`를 VARCHAR로 직접 저장.
 
@@ -147,7 +148,7 @@
 | `bank_id` | BIGINT | FK → banks.id, NOT NULL | 스키마 내부 참조 |
 | `account_number` | VARCHAR(100) | NOT NULL | 계좌번호 (암호화 권장) |
 | `mock_account_token` | VARCHAR(36) | NULL | **충전용 토큰.** 계좌 인증 시 Mock 은행(또는 실서비스 PG)이 발급한 토큰. 충전(출금) 호출 시 이 값으로 계좌를 지칭한다. 실서비스에서는 PG 빌링키에 해당 |
-| `holder_name` | VARCHAR(100) | NULL | **외부 계좌 예금주명.** 계좌 등록 시 verify 응답에서 받아 저장. REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot 복사. 송금 확인증 receiver_name 출처. 컬럼 추가 전 등록된 기존 계좌는 null. |
+| `holder_name` | VARCHAR(100) | NULL | **외부 계좌 예금주명.** 계좌 등록 시 은행 `inquiry` 권위 값으로 저장한다(WACC-05 — 클라이언트 입력 불신, 송금 확인증 receiver_name 위조 방지). REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot 복사. 컬럼 추가 전 등록된 기존 계좌는 null. |
 | `is_virtual` | BOOLEAN | NOT NULL, DEFAULT FALSE | TRUE면 가상계좌(Beaver Bank 발급) |
 | `is_primary` | BOOLEAN | NOT NULL, DEFAULT FALSE | 주 계좌 여부 |
 | `is_active` | BOOLEAN | NOT NULL, DEFAULT TRUE | |
@@ -155,6 +156,16 @@
 | `updated_at` | DATETIME | NOT NULL | |
 
 > `mock_account_token`은 계좌 등록(`POST /accounts`) 시 Mock 은행 `verify` 응답의 `account_token`을 저장한다. 충전(`POST /accounts/{id}/charge`) 시 이 토큰으로 Mock 은행 `withdrawal`을 호출한다. 미인증 계좌(`is_active`/토큰 없음)는 충전 불가. 상세 연동: [`remittance/api-spec.md`](./remittance/api-spec.md)의 "Mock 은행 연동" 섹션.
+>
+> **중복 등록 부분 UNIQUE (WACC-06, prod 수동 DDL):** 활성 계좌의 `(user_public_id, bank_id, account_number)` 중복을 DB 레벨에서 막는다. soft-delete(비활성 행 잔존) 재등록을 허용해야 하므로 **활성 행에만** 적용하는 부분 유니크가 필요한데, MySQL은 부분 유니크 인덱스를 직접 지원하지 않아 **생성 컬럼**으로 우회한다(활성일 때만 키가 채워지고 비활성이면 NULL → NULL은 유니크에서 다중 허용):
+> ```sql
+> ALTER TABLE bank_accounts
+>   ADD COLUMN active_acct_key VARCHAR(160)
+>     GENERATED ALWAYS AS (IF(is_active, CONCAT(user_public_id,':',bank_id,':',account_number), NULL)) STORED,
+>   ADD CONSTRAINT uk_bank_accounts_active_acct UNIQUE (active_acct_key);
+> ```
+> > 길이: 생성 키 최대 = `user_public_id`(36) + `:`(1) + `bank_id`(BIGINT 최대 19자리) + `:`(1) + `account_number`(VARCHAR 100) = **157자**. 이전 `VARCHAR(120)`은 이보다 짧아 긴 키가 잘려 유니크 판정이 어긋날 수 있어 **160**으로 둔다(여유 포함).
+> 분산락(`lock:account-register:{user}`)이 1차 직렬화이고, 본 제약은 lease 만료/split-brain로 락이 뚫린 동시 등록의 **최종 안전망**이다(위반 시 `BankAccountServiceImpl`이 `DataIntegrityViolationException`→ACCOUNT4004 매핑). **dev는 `ddl-auto=update`/H2가 이 생성 컬럼을 자동 생성하지 않으므로(JPA 미매핑) stage/prod에 위 DDL을 수동 적용**한다. 적용 전 기존 중복 활성 행은 사전 정리 필요.
 
 ### `transactions`
 > 모든 금융 거래 마스터. `type`으로 유형 구분, 유형별 상세 컬럼 보유.
@@ -227,6 +238,24 @@
 > **soft delete 없음**: 흔적이 사라지면 reconcile 입력이 사라지므로 영구 보존.
 > **transaction_audit_logs와의 분리**: audit log는 `transaction_id` NOT NULL이라 본 `transactions` INSERT 전엔 행을 만들 수 없고, "거래 1:1 흔적" 의미를 흐린다 → 별도 테이블로 분리해 충전·1단계 INTERNAL_TRANSFER엔 영향 없게.
 > **현 사이클(2단계 c1) 범위**: 테이블/엔티티/Repository/Writer 인프라만 도입. TransferServiceImpl 통합은 c2에서. reconcile 배치는 미구현 — 향후 운영 도입 시 본 테이블을 입력으로 사용한다.
+
+### `charge_attempts`
+> CHARGE 외부 호출 시도 흔적. **append-only (INSERT만).** `remittance_attempts`와 **동일 구조**이며, 충전(`withdrawal`)을 위한 별도 테이블이다(WACC-01).
+> 외부 Mock 은행 `withdrawal` 호출 *직전* `REQUIRES_NEW`로 별도 커밋한다 — 메인 트랜잭션이 rollback돼도 흔적은 살아남아 timeout-but-success(또는 외부 성공 후 비재시도성 로컬 실패) 시 운영 reconcile 입력 자료가 된다.
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| `id` | BIGINT | PK, AI | |
+| `idempotency_key` | VARCHAR(100) | UNIQUE, NOT NULL | 시도 1회당 1행. 같은 키 재시도/동시 race는 UNIQUE로 1행 유지 |
+| `user_public_id` | VARCHAR(36) | NOT NULL | **회원 논리 참조 (물리 FK 없음)**. reconcile 시 사용자별 조회용 인덱스 보유 |
+| `bank_account_id` | BIGINT | NOT NULL | 출금(차감)을 시도한 외부 계좌 id (`transactions.bank_account_id`와 동일 raw 컬럼 패턴) |
+| `amount` | DECIMAL(18,4) | NOT NULL | 시도 출금액(외부 계좌에서 빼려는 충전 금액). "이만큼 출금 시도함" 의미 |
+| `currency_code` | VARCHAR(10) | NOT NULL | KRW(충전은 KRW 고정). FK 없이 직접 저장 |
+| `attempted_at` | DATETIME | NOT NULL | 외부 호출 직전 기록 시각 |
+
+> **왜 remittance_attempts와 분리하나(WACC-01)**: 충전은 외부계좌 `withdrawal`(차감), 송금은 `payout`(증액)으로 외부 계좌 기준 돈 방향이 정반대다. 고아 흔적(외부 성공인데 메인 tx 롤백) 발생 시 reconcile 교정 방향도 정반대(충전=환불, 송금=클로백)이므로 유형을 섞지 않고 별도 테이블로 둔다.
+> **공통 컬럼/`soft delete` 미적용**: `remittance_attempts`와 동일(append-only — `updated_at` 무의미, `created_at`은 `attempted_at`과 의미 중복, `BaseEntity` 미상속, 흔적 영구 보존).
+> **마이그레이션**: dev는 `ddl-auto=update`가 엔티티에서 신규 테이블을 자동 생성한다. stage/prod 등 수동 스키마 환경은 위 DDL 표를 기준으로 생성한다.
 
 ### `scheduled_transfers`
 > 정기 송금 설정. 매주/매월 자동 실행되는 송금의 메타. 실행 자체는 별도 스케줄러(KST 매일 새벽 1시)가 `status=ACTIVE` & `next_run_date <= today` 행을 가져와 `TransferService.execute`를 호출하고 `next_run_date`를 갱신한다.
@@ -383,7 +412,8 @@
 | 멱등성 키 (송금 INTERNAL_TRANSFER) | `idempotency:internal_transfer:{key}:{userPublicId}:{receiverPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 수신자)로 스코프 → 교차 응답 노출 차단(rebuildFromPrior → WALLET4001) | 24시간 |
 | 멱등성 키 (충전, 요청자·계좌 스코프) | `idempotency:charge:{key}:{userPublicId}:{accountPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 계좌)로 스코프 → 교차 사용자/계좌는 캐시 미스 → DB(rebuildFromPrior)가 ACCOUNT4001로 차단 | 24시간 |
 | 멱등성 키 (환전 EXCHANGE, 요청자 스코프) | `idempotency:exchange:{key}:{userPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자)로 스코프 → 교차 사용자는 캐시 미스 → DB(rebuildFromPrior)가 차단 | 24시간 |
-| 계좌 인증(verify) rate-limit (IP 단위) | `ratelimit:account-verify:{clientIp}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 ACCOUNT4005(429), Redis 장애 시 fail-open | 윈도(기본 60초) |
+| 계좌 인증(verify) rate-limit (user 단위, WACC-02) | `ratelimit:account-verify:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 ACCOUNT4005(429), Redis 장애 시 fail-open. 위조 가능한 IP(XFF) 대신 위조불가 userPublicId로 키잉 | 윈도(기본 60초) |
+| 예금주 조회(holder) rate-limit (user 단위, WACC-03) | `ratelimit:account-holder:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 COMMON4291(429), Redis 장애 시 fail-open. PII(예금주명) 조회 폭주 차단 | 윈도(기본 60초) |
 | 송금 rate-limit (user 단위) | `ratelimit:transfer:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 TRANSFER4006(429), Redis 장애 시 fail-open | 윈도(기본 60초, 30회) |
 | 송금 PIN 실패 카운터 (user 단위) | `pin:fail:{userPublicId}` | `INCR`(첫 실패 시 `EXPIRE 600`). 5회 도달 시 잠금 키 설정 후 카운트 삭제 | 10분(윈도) |
 | 송금 PIN 잠금 (user 단위) | `pin:lock:{userPublicId}` | `SET locked EX 600`(5회 연속 실패 시). 존재하면 PIN 검증 TRANSFER4008(429) | 10분 |

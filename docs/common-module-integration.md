@@ -128,6 +128,7 @@ throw new BusinessException(WalletErrorCode.WALLET_NOT_FOUND);
 |---|---|---|---|
 | WALLET | WALLET4001 | 404 | 존재하지 않는 지갑입니다. |
 | WALLET | WALLET4002 | 422 | 지갑 잔액이 부족합니다. |
+| WALLET | WALLET4003 | 422 | 비활성 지갑입니다. (status가 ACTIVE가 아님 — SUSPENDED/CLOSED) |
 | TRANSFER | TRANSFER4001 | 404 | 존재하지 않는 송금 내역입니다. |
 | TRANSFER | TRANSFER4002 | 400 | 지원하지 않는 통화입니다. |
 

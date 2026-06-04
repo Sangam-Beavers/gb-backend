@@ -224,6 +224,7 @@
 | --- | --- | --- |
 | 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (Body 검증 실패, REMITTANCE 시 `bank_account_public_id` 누락 포함) |
 | 422 | WALLET4002 | 지갑 잔액이 부족합니다. (REMITTANCE는 amount + fee ≤ 송신자 잔액. 요청 형식은 정상이나 잔액 부족으로 처리 불가) |
+| 422 | WALLET4003 | 비활성 지갑입니다. (지갑 status≠ACTIVE — SUSPENDED/CLOSED. INTERNAL은 송신·수신 둘 다, REMITTANCE는 송신자 검증) |
 | 400 | TRANSFER4002 | 지원하지 않는 통화입니다. |
 | 400 | TRANSFER4003 | 지원하지 않는 송금 유형입니다. (INTERNAL_TRANSFER/REMITTANCE 외 — 예: CHARGE/EXCHANGE) |
 | 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. (INTERNAL_TRANSFER 한정) |
@@ -724,7 +725,7 @@ wallet:
 
 - 목록: `GET /api/v1/accounts` → `data: { accounts: [...] }`
 - 지원 은행: `GET /api/v1/accounts/supported-banks`
-- 예금주 실명 조회: `GET /api/v1/accounts/holder?bankCode={}&accountNumber={}`
+- 예금주 실명 조회: `GET /api/v1/accounts/holder?bankCode={}&accountNumber={}` (user 단위 rate-limit — 초과 시 `COMMON4291`(429), PII(예금주명) 조회 폭주 차단·WACC-03)
 - 계좌 연결+자동이체 인증 요청: `POST /api/v1/accounts/verify` (※ Mock/화면용. 실제 인증 미구현). 응답으로 `account_token`만 반환한다(§13 은행 연동·`VerifyAccountResponse` 정본). 예금주 실명은 위 `GET /api/v1/accounts/holder`로 받는다.
 - 계좌 등록 최종 완료: `POST /api/v1/accounts` → 201, `bank_accounts` INSERT
     - **Body 필수 필드**: `bank_code`, `account_number`, `account_token`(verify 응답), **`holder_name`(`GET /accounts/holder` 응답의 `account_holder_name`을 그대로 전달, 최대 100자)**.
@@ -734,7 +735,7 @@ wallet:
     - **자동 승격 정책**: 주 계좌를 삭제하면 남은 활성 계좌 중 **가장 최근 등록 1건**이 자동으로 주 계좌로 승격된다(마지막 1개를 삭제하면 주 계좌 없는 상태 허용).
 - 위 변경/삭제는 "사용자당 주 계좌 1개" 불변식을 user 단위 분산락으로 직렬화한다 — 락 획득 실패 시 503 `COMMON5031`.
 
-**계좌 에러 코드**: ACCOUNT4001(없음) / ACCOUNT4002(인증 실패) / ACCOUNT4004(이미 등록, 409) / ACCOUNT4005(인증 요청 초과, 429) / ACCOUNT4006(미인증 계좌, 403)
+**계좌 에러 코드**: ACCOUNT4001(없음) / ACCOUNT4002(인증 실패) / ACCOUNT4004(이미 등록, 409) / ACCOUNT4005(인증 요청 초과, 429) / ACCOUNT4006(미인증 계좌, 403) / COMMON4291(예금주 조회 횟수 초과, 429 — `GET /accounts/holder` rate-limit, WACC-03)
 
 ---
 
@@ -767,6 +768,7 @@ wallet:
 | 404 | ACCOUNT4001 | 존재하지 않는 계좌입니다. |
 | 404 | WALLET4001 | 존재하지 않는 지갑입니다. (계좌는 있으나 해당 회원의 지갑이 없는 방어 케이스) |
 | 422 | ACCOUNT4007 | 충전 한도를 초과했습니다. |
+| 422 | WALLET4003 | 비활성 지갑입니다. (충전 지갑 status≠ACTIVE — SUSPENDED/CLOSED. Mock 출금 전 차단) |
 | 500 | COMMON5000 | 서버 오류가 발생했습니다. (멱등성 일관성 위반 등 정상 흐름에서 발생 불가 — 방어) |
 | 503 | COMMON5031 | 일시적으로 처리할 수 없습니다. |
 

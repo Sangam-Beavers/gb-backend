@@ -41,6 +41,7 @@ import com.gb.wallet.global.client.MemberInfo;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
+import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.client.dto.PayoutResult;
 import com.gb.wallet.global.common.util.AccountNumberMasker;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
@@ -78,6 +79,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 @Slf4j
 @Service
@@ -307,6 +309,13 @@ public class TransferServiceImpl implements TransferService {
      * ({@link #executeInTransaction})이 같은 정책을 쓰도록 단일 헬퍼로 통일한다.
      * docs/remittance/api-spec.md §4 정책: INTERNAL_TRANSFER=0, REMITTANCE=amount×0.5%(HALF_UP 4자리).
      */
+    /** WTX-05 — 지갑이 ACTIVE가 아니면(동결 SUSPENDED·폐쇄 CLOSED) WALLET4003(422)으로 차단한다. */
+    private void requireActiveWallet(Wallet wallet) {
+        if (wallet.getStatus() != WalletStatus.ACTIVE) {
+            throw new BusinessException(WalletErrorCode.WALLET_INACTIVE);
+        }
+    }
+
     private BigDecimal calculateFee(TransactionType type, BigDecimal amount) {
         return switch (type) {
             case INTERNAL_TRANSFER -> BigDecimal.ZERO.setScale(FEE_SCALE, RoundingMode.HALF_UP);
@@ -327,15 +336,12 @@ public class TransferServiceImpl implements TransferService {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public TransferExecuteResponse execute(String userPublicId, String idempotencyKey,
                                            TransferExecuteRequest request) {
-        // 0) Rate-limit — user 단위 고정 윈도. 폭주 차단(외부 자금 이동 보호). Redis 장애 시 fail-open(통과).
-        //    초과 시 TRANSFER4006(429). 캐시·검증 비용을 절감하기 위해 진입 최상단에 둔다.
-        String rateLimitKey = TRANSFER_RATE_LIMIT_PREFIX + userPublicId;
-        boolean allowed = rateLimitHelper.tryAcquire(
-                rateLimitKey,
-                transferRateLimitProperties.limit(),
-                Duration.ofSeconds(transferRateLimitProperties.windowSeconds()));
-        if (!allowed) {
-            throw new BusinessException(TransferErrorCode.RATE_LIMIT_EXCEEDED);
+        // 비-HTTP 경로(스케줄러·내부 직접 호출) 서비스단 가드(WTX-02): HTTP는 컨트롤러
+        // @RequestHeader("Idempotency-Key") @NotBlank로 막지만(WTX-01), 빈 키가 멱등 3-layer 키 스코프
+        // (cacheKey/findByIdempotencyKey)를 무력화하므로 모든 side effect(rate-limit/캐시/DB) 전에
+        // fail-fast로 COMMON4001 처리한다.
+        if (!StringUtils.hasText(idempotencyKey)) {
+            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
 
         // 1) 입력 검증을 캐시 조회 전에 먼저 — cacheKey 생성에 transferType·scopeId가 필요하므로.
@@ -371,6 +377,18 @@ public class TransferServiceImpl implements TransferService {
                     existing.get(), userPublicId, transferType, scopeId);
             writeToCache(cacheKey, resp); // Layer 1 채워두기
             return resp;
+        }
+
+        // 5.5) Rate-limit — user 단위 고정 윈도. 폭주 차단(외부 자금 이동 보호). Redis 장애 시 fail-open(통과).
+        //      초과 시 TRANSFER4006(429). 멱등 재요청(Layer1/2 hit)은 *신규 처리가 아니므로* 토큰을 소모하면
+        //      안 된다(WTX-04) — 그래서 dedup 뒤에 둔다. 정당한 재시도가 토큰 고갈로 TRANSFER4006되는 것을 막고,
+        //      rate-limit은 실제 신규 자금 이동(아래 6)에만 적용된다.
+        boolean allowed = rateLimitHelper.tryAcquire(
+                TRANSFER_RATE_LIMIT_PREFIX + userPublicId,
+                transferRateLimitProperties.limit(),
+                Duration.ofSeconds(transferRateLimitProperties.windowSeconds()));
+        if (!allowed) {
+            throw new BusinessException(TransferErrorCode.RATE_LIMIT_EXCEEDED);
         }
 
         // 6) 실 처리 + 락 경합 재시도 래퍼 — race(UNIQUE 위반)와 락 경합을 도메인별 분기에 공통 처리.
@@ -428,6 +446,11 @@ public class TransferServiceImpl implements TransferService {
         Wallet receiverWallet = walletRepository.findByUserPublicId(request.receiverPublicId())
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
 
+        // WTX-05 — 동결(SUSPENDED)/폐쇄(CLOSED) 지갑은 송신·수신 모두 차단(ACTIVE만 허용). 송신자뿐 아니라
+        // 수신자도 비활성이면 입금하지 않는다(비활성 지갑에 돈이 쌓이는 것 방지).
+        requireActiveWallet(senderWallet);
+        requireActiveWallet(receiverWallet);
+
         // 자기 자신에게 송금 차단 (이후 MultiLock에서 같은 키 2회 잠금 문제 회피도 겸함).
         if (senderWallet.getId().equals(receiverWallet.getId())) {
             throw new BusinessException(TransferErrorCode.SELF_TRANSFER_NOT_ALLOWED);
@@ -455,10 +478,12 @@ public class TransferServiceImpl implements TransferService {
     // ----- 멱등성 캐시 키 + race 응답 검증 헬퍼 -----
 
     /**
-     * 도메인별 스코프 ID 추출. 캐시 키와 race 검증의 양쪽 기준.
+     * 도메인별 스코프 ID 추출. 캐시 키와 race 검증의 양쪽 기준이자, 도메인별 <b>조건부 필수 필드</b> 검증
+     * 지점이다(조건부 필수는 Bean Validation으로 표현이 까다로워 Service에서 — validateScheduled와 동일).
      * <ul>
-     *   <li>REMITTANCE → bank_account.public_id (없으면 COMMON4001 — DTO @NotBlank 부재 보완)</li>
-     *   <li>INTERNAL_TRANSFER → receiver_public_id (DTO @NotBlank로 이미 강제됨)</li>
+     *   <li>REMITTANCE → bank_account.public_id (없으면 COMMON4001)</li>
+     *   <li>INTERNAL_TRANSFER → receiver_public_id (없으면 COMMON4001 — TX1: DTO @NotBlank 제거로 이리 이동.
+     *       무조건 @NotBlank면 REMITTANCE가 @Valid에서 거부돼 HTTP 도달 불가였다)</li>
      * </ul>
      */
     private static String resolveScopeId(TransactionType transferType, TransferExecuteRequest request) {
@@ -470,7 +495,13 @@ public class TransferServiceImpl implements TransferService {
                 }
                 yield bankAccountPublicId;
             }
-            case INTERNAL_TRANSFER -> request.receiverPublicId();
+            case INTERNAL_TRANSFER -> {
+                String receiverPublicId = request.receiverPublicId();
+                if (receiverPublicId == null || receiverPublicId.isBlank()) {
+                    throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+                }
+                yield receiverPublicId;
+            }
             default -> throw new BusinessException(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE);
         };
     }
@@ -872,6 +903,9 @@ public class TransferServiceImpl implements TransferService {
         Wallet senderWallet = walletRepository.findById(senderWalletId)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
 
+        // (1.5) WTX-05 — 동결/폐쇄 지갑은 송금 차단(ACTIVE만 허용). REMITTANCE는 수취가 외부 계좌라 송신자만 본다.
+        requireActiveWallet(senderWallet);
+
         // (2) 본인 소유 + 활성 계좌 조회 (충전과 동일 패턴). 사유 미구분 — 정보 누설 방지로 ACCOUNT4001 통일.
         BankAccount account = bankAccountRepository
                 .findByPublicIdAndUserPublicIdAndIsActiveTrue(
@@ -885,6 +919,14 @@ public class TransferServiceImpl implements TransferService {
 
         // (4) 송신자 잔액 행 FOR UPDATE — 단일 행이라 데드락 회피용 ordering 불필요.
         //     송신자는 자동 생성 안 함(돈을 보내려면 잔액 행이 이미 있어야 정상).
+        //
+        //     ⚠️ 알려진 한계(WTX-03): 이 FOR UPDATE 락은 아래 (7) 외부 Mock 은행 payout(HTTP)이 끝날 때까지
+        //        유지된다 — 외부 호출 동안 송신자 잔액 행이 잠겨 있어, 같은 송신자의 다른 송금/환전이 락 대기한다.
+        //        현재는 (a) 단일 행·단일 사용자라 락 경합 캐스케이드가 낮고, (b) BankClient에 타임아웃이 구현돼
+        //        무한 보유는 없어 위험이 낮다. payout을 락 밖 짧은 별도 tx로 빼면(reserve→payout→confirm Saga)
+        //        락 보유 시간은 줄지만, payout 성공 후 로컬 차감 실패 시 외부만 빠져나가는 정합성 창과 보상(환불)
+        //        로직이 새로 필요해 정합성 모델이 바뀐다. 이는 팀 합의 + 진짜 MySQL(Testcontainers) 검증을 선행해야
+        //        안전하므로 본 사이클 범위 밖으로 연기한다(외부 성공 흔적은 (6.5) remittance_attempts로 이미 보존).
         WalletBalance senderBalance = walletBalanceRepository
                 .findForUpdateByWalletAndCurrency(senderWallet, currency)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
@@ -914,6 +956,14 @@ public class TransferServiceImpl implements TransferService {
                 amount, currency.name(), idempotencyKey);
         // 방어 — 정상 응답이지만 status가 COMPLETED 아닐 때는 일시 장애로 본다(충전 패턴 동일).
         if (payoutResult == null || !"COMPLETED".equals(payoutResult.status())) {
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
+        // WTX-09 — 은행이 처리한 금액·통화가 요청과 일치하는지 대조한다(status만 믿지 않음). 불일치는
+        //   부분처리/통화오류 등 정합성 깨짐이라 잔액 차감 없이 일시 장애(503)로 보류한다(reconcile 대상, 충전 대칭).
+        if (payoutResult.amount() == null || payoutResult.amount().compareTo(amount) != 0
+                || !currency.name().equals(payoutResult.currencyCode())) {
+            log.error("송금 payout 응답 금액/통화 불일치 — 요청 {}{} vs 응답 {}{}. key={}",
+                    amount, currency.name(), payoutResult.amount(), payoutResult.currencyCode(), idempotencyKey);
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
 

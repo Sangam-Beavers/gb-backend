@@ -8,6 +8,7 @@ import com.gb.wallet.domain.account.dto.request.ChargeRequest;
 import com.gb.wallet.domain.account.dto.response.ChargeResponse;
 import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
+import com.gb.wallet.domain.account.service.ChargeAttemptWriter;
 import com.gb.wallet.domain.account.service.ChargeService;
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import com.gb.wallet.domain.transaction.entity.TransactionAuditLog;
@@ -23,6 +24,7 @@ import com.gb.wallet.global.client.dto.WithdrawalResult;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
+import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.config.ChargeProperties;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
@@ -63,6 +65,7 @@ public class ChargeServiceImpl implements ChargeService {
     private final TransactionRepository transactionRepository;
     private final TransactionAuditLogRepository auditLogRepository;
     private final BankClient bankClient;
+    private final ChargeAttemptWriter chargeAttemptWriter;
     private final ChargeProperties chargeProperties;
     private final IdempotencyCacheHelper idempotencyCacheHelper;
     private final ObjectMapper objectMapper;
@@ -181,6 +184,16 @@ public class ChargeServiceImpl implements ChargeService {
         Wallet wallet = walletRepository.findByUserPublicId(userPublicId)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
 
+        // (5.5) WTX-05 — 동결(SUSPENDED)/폐쇄(CLOSED) 지갑은 충전 차단(ACTIVE만 허용). WALLET4003(422).
+        if (wallet.getStatus() != WalletStatus.ACTIVE) {
+            throw new BusinessException(WalletErrorCode.WALLET_INACTIVE);
+        }
+
+        // (6.5) 외부 호출 *직전* 시도 흔적을 REQUIRES_NEW로 별도 커밋(WACC-01) — withdraw가 외부 성공 후
+        //       메인 tx가 (비재시도성) 롤백/타임아웃돼도 흔적은 남아 운영 reconcile 입력이 된다(송금 payout의
+        //       RemittanceAttemptWriter와 대칭). 같은 idempotency_key 재시도/race는 Writer 내부 UNIQUE 흡수로 1행 유지.
+        chargeAttemptWriter.record(idempotencyKey, userPublicId, account.getId(), amount, CHARGE_CURRENCY);
+
         // (6) Mock 은행 출금. 실패는 BankErrorMapper가 BusinessException으로 변환해 던지므로 그대로 전파한다.
         //     idempotencyKey를 그대로 forward — Mock도 같은 키로 첫 응답을 재반환한다.
         WithdrawalResult mockResult = bankClient.withdraw(
@@ -188,6 +201,14 @@ public class ChargeServiceImpl implements ChargeService {
         // 방어 — 응답이 null이거나 COMPLETED가 아닌 비정상 케이스는 일시 장애(503)로 본다. 현재 구현체
         //     (MockBankClient)는 null 대신 예외를 던지지만, 향후 구현체가 null을 줘도 NPE→500이 아니라 503으로 매핑한다.
         if (mockResult == null || !COMPLETED_STATUS.equals(mockResult.status())) {
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
+        // (6-2) WTX-09 — 은행이 처리한 금액·통화가 요청과 일치하는지 대조한다(status만 믿지 않음). 불일치는
+        //       부분처리/통화오류 등 정합성 깨짐이라 잔액에 반영하지 않고 일시 장애(503)로 보류한다(reconcile 대상).
+        if (mockResult.amount() == null || mockResult.amount().compareTo(amount) != 0
+                || !CHARGE_CURRENCY.name().equals(mockResult.currencyCode())) {
+            log.error("충전 은행 응답 금액/통화 불일치 — 요청 {}{} vs 응답 {}{}. key={}",
+                    amount, CHARGE_CURRENCY.name(), mockResult.amount(), mockResult.currencyCode(), idempotencyKey);
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
 

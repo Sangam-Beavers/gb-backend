@@ -15,4 +15,11 @@ dependencies {
     // EntryPoint가 HttpServletRequest/Response를 다루므로 서블릿 API가 컴파일 시점에 필요하다.
     // (이 모듈은 starter-web을 두지 않으므로 명시한다. 런타임엔 사용 서비스의 톰캣이 제공.)
     compileOnly 'jakarta.servlet:jakarta.servlet-api'
+
+    // SecurityExceptionHandler 단위/MockMvc 테스트가 advice를 직접 구동하려면 spring-webmvc(@RestControllerAdvice
+    // 해석기·MockMvc)가 테스트 컴파일/런타임에 필요하다. 본 모듈은 starter-web을 두지 않으므로 테스트 한정으로만 둔다.
+    testImplementation 'org.springframework.boot:spring-boot-starter-web'
+    // Gradle 9는 JUnit Platform launcher를 테스트 런타임에 자동 제공하지 않는다. 서비스 모듈은 spring-boot
+    // 플러그인 경유로 전이되지만 common 모듈(플러그인 미적용)은 명시해야 테스트가 기동된다.
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
