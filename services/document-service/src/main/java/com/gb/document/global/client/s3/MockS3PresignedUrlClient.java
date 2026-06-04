@@ -39,4 +39,12 @@ public class MockS3PresignedUrlClient implements S3PresignedUrlClient {
                 properties.uploadBucket(), key, contentType, metadata, expiresAt);
         return new IssueUrlResult(url, signedHeaders, expiresAt);
     }
+
+    @Override
+    public String issueDownloadUrl(String key, Duration ttl) {
+        String url = "https://mock-s3.local/%s/%s?X-Amz-MockSignature=dev-get"
+                .formatted(properties.uploadBucket(), key);
+        log.info("[mock-s3] presigned GET 발급 — bucket={} key={} ttl={}", properties.uploadBucket(), key, ttl);
+        return url;
+    }
 }

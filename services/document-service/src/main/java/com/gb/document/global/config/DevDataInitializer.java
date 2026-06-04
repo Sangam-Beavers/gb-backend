@@ -86,7 +86,7 @@ public class DevDataInitializer implements ApplicationRunner {
                 .riskItems(risks)
                 .translatedText("번역된 본문(데모).")
                 .translatedLang("ko")
-                .maskedFileUrl("s3://gb-document-masked-dev/demo/masked.png")
+                .s3MaskedKey("masked/demo-masked.png")
                 .completedAt(LocalDateTime.now())
                 .build());
 

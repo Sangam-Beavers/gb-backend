@@ -59,8 +59,8 @@ public class DocumentResult extends BaseEntity {
     @Column(name = "overall_risk_level", length = 10)
     private RiskLevel overallRiskLevel;
 
-    /** v1.1: DECIMAL(3,2), 범위 [0.00, 1.00]. 표시 전용 수치라 number로 응답. */
-    @Column(name = "ocr_confidence", precision = 3, scale = 2)
+    /** DECIMAL(5,4), 범위 [0.0000, 1.0000] — database.md 스키마 SSOT. 표시 전용 수치라 number로 응답. */
+    @Column(name = "ocr_confidence", precision = 5, scale = 4)
     private BigDecimal ocrConfidence;
 
     @JdbcTypeCode(SqlTypes.JSON)
@@ -71,15 +71,20 @@ public class DocumentResult extends BaseEntity {
     @Column(name = "risk_items", columnDefinition = "JSON")
     private List<RiskItem> riskItems;
 
-    @Column(name = "translated_text", columnDefinition = "TEXT")
+    /** 번역 전문은 TEXT(64KB) 초과 가능 → MEDIUMTEXT(database.md 스키마 SSOT). */
+    @Column(name = "translated_text", columnDefinition = "MEDIUMTEXT")
     private String translatedText;
 
     @Column(name = "translated_lang", length = 8)
     private String translatedLang;
 
-    /** 풀 URL("s3://bucket/key") 저장 — 환경별 버킷 구분 보존(api-spec.md §3 v1.1). */
-    @Column(name = "masked_file_url", length = 512)
-    private String maskedFileUrl;
+    /**
+     * 마스킹본 S3 키만 저장(예: "masked/&lt;id&gt;.txt") — database.md 스키마 SSOT. 버킷은 환경 설정
+     * 소관이라 분리하고, 조회 시 presigned GET URL을 생성해 응답한다(api-spec.md §3 masked_file_url).
+     * SQS 와이어 포맷(masked_file_url, 풀 s3:// URI)은 불변 — Consumer가 키로 변환해 적재한다.
+     */
+    @Column(name = "s3_masked_key", length = 500)
+    private String s3MaskedKey;
 
     @Column(name = "failed_reason", length = 255)
     private String failedReason;
@@ -97,7 +102,7 @@ public class DocumentResult extends BaseEntity {
                            List<RiskItem> riskItems,
                            String translatedText,
                            String translatedLang,
-                           String maskedFileUrl,
+                           String s3MaskedKey,
                            String failedReason,
                            LocalDateTime completedAt) {
         this.submission = submission;
@@ -109,7 +114,7 @@ public class DocumentResult extends BaseEntity {
         this.riskItems = riskItems;
         this.translatedText = translatedText;
         this.translatedLang = translatedLang;
-        this.maskedFileUrl = maskedFileUrl;
+        this.s3MaskedKey = s3MaskedKey;
         this.failedReason = failedReason;
         this.completedAt = completedAt;
     }
@@ -127,7 +132,7 @@ public class DocumentResult extends BaseEntity {
                                     List<RiskItem> riskItems,
                                     String translatedText,
                                     String translatedLang,
-                                    String maskedFileUrl,
+                                    String s3MaskedKey,
                                     String failedReason,
                                     LocalDateTime completedAt) {
         this.analysisDocumentType = analysisDocumentType;
@@ -138,7 +143,7 @@ public class DocumentResult extends BaseEntity {
         this.riskItems = riskItems;
         this.translatedText = translatedText;
         this.translatedLang = translatedLang;
-        this.maskedFileUrl = maskedFileUrl;
+        this.s3MaskedKey = s3MaskedKey;
         this.failedReason = failedReason;
         this.completedAt = completedAt;
     }

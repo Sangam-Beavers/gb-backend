@@ -239,6 +239,21 @@ class AnalysisResultIngestServiceImplTest {
         assertThat(captor.getValue().getOcrConfidence()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
+    @Test
+    @DisplayName("masked_file_url(풀 s3:// URI)은 s3_masked_key(키만)로 변환 저장 — database.md 스키마")
+    void maskedFileUrl은_키로_변환되어_저장() {
+        Document submission = analyzingDoc();
+        given(documentRepository.findByPublicId(DOC_PUBLIC_ID)).willReturn(Optional.of(submission));
+        given(documentResultRepository.findBySubmission_Id(any())).willReturn(Optional.empty());
+
+        // 헬퍼 메시지의 masked_file_url = "s3://gb-document-masked-test/2026-05-29/x.png"
+        service.ingest(message(ProcessingStatus.COMPLETED, RiskLevel.HIGH, null));
+
+        ArgumentCaptor<DocumentResult> captor = ArgumentCaptor.forClass(DocumentResult.class);
+        verify(documentResultRepository).save(captor.capture());
+        assertThat(captor.getValue().getS3MaskedKey()).isEqualTo("2026-05-29/x.png");
+    }
+
     // ---- helpers ----
 
     private Document analyzingDoc() {
