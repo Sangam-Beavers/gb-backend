@@ -64,8 +64,8 @@ class BankAccountServiceTest {
     @InjectMocks private BankAccountServiceImpl service;
 
     private static final String USER_PUBLIC_ID = "user-uuid";
-    private static final String IP = "127.0.0.1";
-    private static final String VERIFY_KEY = "ratelimit:account-verify:" + IP;
+    // WACC-02: verify rate-limit은 위조불가 userPublicId로 키잉한다(과거 IP 키잉에서 전환).
+    private static final String VERIFY_KEY = "ratelimit:account-verify:" + USER_PUBLIC_ID;
     private static final String REGISTER_LOCK_KEY = "lock:account-register:" + USER_PUBLIC_ID;
 
     @BeforeEach
@@ -122,20 +122,20 @@ class BankAccountServiceTest {
         given(bankClient.verify("004", "1234567890", "홍길동"))
                 .willReturn(new AccountToken("tok-abcdef"));
 
-        VerifyAccountResponse response = service.verifyAccount(request, IP);
+        VerifyAccountResponse response = service.verifyAccount(request, USER_PUBLIC_ID);
 
         assertThat(response.getAccountToken()).isEqualTo("tok-abcdef");
         verifyNoInteractions(bankAccountRepository, bankRepository);
     }
 
     @Test
-    @DisplayName("verifyAccount: IP 기반 키(ratelimit:account-verify:{ip})로 카운터를 센다")
-    void verifyAccount_IP기반_키() {
+    @DisplayName("verifyAccount: 사용자 기반 키(ratelimit:account-verify:{userPublicId})로 카운터를 센다(WACC-02)")
+    void verifyAccount_사용자기반_키() {
         VerifyAccountRequest request = verifyRequest("004", "1234567890", "홍길동");
         given(rateLimitHelper.tryAcquire(any(), anyLong(), any(Duration.class))).willReturn(true);
         given(bankClient.verify(any(), any(), any())).willReturn(new AccountToken("tok"));
 
-        service.verifyAccount(request, IP);
+        service.verifyAccount(request, USER_PUBLIC_ID);
 
         ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<Long> limitCaptor = ArgumentCaptor.forClass(Long.class);
@@ -153,7 +153,7 @@ class BankAccountServiceTest {
         given(rateLimitHelper.tryAcquire(eq(VERIFY_KEY), anyLong(), any(Duration.class)))
                 .willReturn(false);
 
-        assertThatThrownBy(() -> service.verifyAccount(request, IP))
+        assertThatThrownBy(() -> service.verifyAccount(request, USER_PUBLIC_ID))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(AccountErrorCode.VERIFICATION_RATE_LIMITED);
@@ -170,7 +170,7 @@ class BankAccountServiceTest {
         willThrow(new BusinessException(AccountErrorCode.ACCOUNT_VERIFICATION_FAILED))
                 .given(bankClient).verify("004", "1234567890", "임꺽정");
 
-        assertThatThrownBy(() -> service.verifyAccount(request, IP))
+        assertThatThrownBy(() -> service.verifyAccount(request, USER_PUBLIC_ID))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(AccountErrorCode.ACCOUNT_VERIFICATION_FAILED);

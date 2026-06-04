@@ -229,11 +229,12 @@ class AccountControllerTest {
     }
 
     @Test
-    @DisplayName("POST /verify - X-Forwarded-For가 있으면 맨 앞 IP를 clientIp(rate-limit 키)로 service에 전달")
-    void verify_forwardsClientIpFromXff() throws Exception {
+    @DisplayName("POST /verify - 인증 사용자(public_id)를 rate-limit 키로 service에 전달(WACC-02, 위조불가 키잉)")
+    void verify_forwardsUserPublicId() throws Exception {
         given(bankAccountService.verifyAccount(any(), anyString()))
                 .willReturn(VerifyAccountResponse.from(new AccountToken("tok")));
 
+        // X-Forwarded-For가 있어도 더 이상 키잉에 쓰이지 않는다 — 토큰의 public_id가 키다.
         mockMvc.perform(post("/api/v1/accounts/verify")
                         .with(authedJwt())
                         .header("X-Forwarded-For", "203.0.113.9, 10.0.0.2")
@@ -244,9 +245,9 @@ class AccountControllerTest {
                                 "holder_name", "홍길동"))))
                 .andExpect(status().isOk());
 
-        ArgumentCaptor<String> ipCaptor = ArgumentCaptor.forClass(String.class);
-        verify(bankAccountService).verifyAccount(any(), ipCaptor.capture());
-        assertThat(ipCaptor.getValue()).isEqualTo("203.0.113.9");
+        ArgumentCaptor<String> userCaptor = ArgumentCaptor.forClass(String.class);
+        verify(bankAccountService).verifyAccount(any(), userCaptor.capture());
+        assertThat(userCaptor.getValue()).isEqualTo(USER_ID);
     }
 
     // --- POST /accounts ---
@@ -329,7 +330,7 @@ class AccountControllerTest {
     @Test
     @DisplayName("GET /holder 200: 정상 시 ApiResponse + account_holder_name 반환")
     void holder_정상() throws Exception {
-        given(holderService.getAccountHolder("004", "1234567890"))
+        given(holderService.getAccountHolder("004", "1234567890", USER_ID))
                 .willReturn(stubHolderResponse("홍길동"));
 
         mockMvc.perform(get("/api/v1/accounts/holder")

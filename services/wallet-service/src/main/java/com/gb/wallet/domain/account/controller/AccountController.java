@@ -138,8 +138,10 @@ public class AccountController {
     @GetMapping("/holder")
     public ApiResponse<AccountHolderResponse> getAccountHolder(
             @RequestParam("bankCode") @NotBlank @Size(max = 20) String bankCode,
-            @RequestParam("accountNumber") @NotBlank @Size(max = 100) String accountNumber) {
-        return ApiResponse.success(holderService.getAccountHolder(bankCode, accountNumber));
+            @RequestParam("accountNumber") @NotBlank @Size(max = 100) String accountNumber,
+            @CurrentUserPublicId String userPublicId) {
+        // userPublicId는 PII enumeration 방어 rate-limit 키로 쓰인다(WACC-03).
+        return ApiResponse.success(holderService.getAccountHolder(bankCode, accountNumber, userPublicId));
     }
 
     /** 계좌 인증 요청(외부 Mock 은행 호출 → account_token 발급). 🔒 JWT 필요. 본체 DB 미사용. */
@@ -167,7 +169,7 @@ public class AccountController {
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "429",
-                    description = "ACCOUNT4005 - 계좌 인증 요청 횟수를 초과했습니다(IP 단위 rate-limit).",
+                    description = "ACCOUNT4005 - 계좌 인증 요청 횟수를 초과했습니다(사용자 단위 rate-limit).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
@@ -181,10 +183,9 @@ public class AccountController {
     @PostMapping("/verify")
     public ApiResponse<VerifyAccountResponse> verifyAccount(
             @Valid @RequestBody VerifyAccountRequest request,
-            HttpServletRequest httpRequest) {
-        // rate-limit 카운터 키로 쓸 클라이언트 IP를 추출한다(충전과 동일 — 프록시 뒤 X-Forwarded-For 우선).
-        String clientIp = ClientIpResolver.resolve(httpRequest);
-        return ApiResponse.success(bankAccountService.verifyAccount(request, clientIp));
+            @CurrentUserPublicId String userPublicId) {
+        // rate-limit은 위조 가능한 IP가 아니라 위조불가 userPublicId로 키잉한다(WACC-02).
+        return ApiResponse.success(bankAccountService.verifyAccount(request, userPublicId));
     }
 
     /** 계좌 등록 최종 완료. 🔒 JWT 필요. */

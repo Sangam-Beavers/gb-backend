@@ -35,7 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class BankAccountServiceImpl implements BankAccountService {
 
-    /** 계좌 인증 rate-limit 카운터 키 prefix(IP 단위). database.md §7 등록. */
+    /** 계좌 인증 rate-limit 카운터 키 prefix(사용자 단위 — WACC-02). database.md §7 등록. */
     private static final String VERIFY_RATE_LIMIT_KEY_PREFIX = "ratelimit:account-verify:";
     /**
      * 계좌 변경 직렬화 분산락 키 prefix(user 단위). database.md §7 등록. 상수 이름은 register지만 실제
@@ -69,11 +69,12 @@ public class BankAccountServiceImpl implements BankAccountService {
     }
 
     @Override
-    public VerifyAccountResponse verifyAccount(VerifyAccountRequest request, String clientIp) {
-        // IP 단위 고정 윈도 rate-limit — 한 출처의 외부 은행 인증 폭주를 막는다. 초과 시 ACCOUNT4005(429).
+    public VerifyAccountResponse verifyAccount(VerifyAccountRequest request, String userPublicId) {
+        // 사용자 단위 고정 윈도 rate-limit — 한 사용자의 외부 은행 인증 폭주를 막는다. 초과 시 ACCOUNT4005(429).
+        // 위조 가능한 IP(XFF) 대신 위조불가 userPublicId로 키잉해 우회를 막는다(WACC-02).
         // Redis 장애 시 fail-open(통과) — rate-limit은 보안 보조 장치이고 verify는 저위험(외부 호출만, DB 미사용).
         boolean allowed = rateLimitHelper.tryAcquire(
-                VERIFY_RATE_LIMIT_KEY_PREFIX + clientIp,
+                VERIFY_RATE_LIMIT_KEY_PREFIX + userPublicId,
                 verifyRateLimitProperties.limit(),
                 Duration.ofSeconds(verifyRateLimitProperties.windowSeconds()));
         if (!allowed) {
