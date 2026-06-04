@@ -52,7 +52,7 @@ public class RecentAccountsResponse {
         @Schema(description = "은행명", example = "국민은행")
         private final String bankName;
 
-        @Schema(description = "마스킹된 계좌번호 (앞 3 + -****- + 뒤 4)", example = "123-****-1111")
+        @Schema(description = "마스킹된 계좌번호 (앞 3 + 별표 + 뒤 2)", example = "123********11")
         private final String accountNumber;
 
         @Schema(description = "수취인명 (송금 시점의 transactions.receiver_name)", example = "김민수")

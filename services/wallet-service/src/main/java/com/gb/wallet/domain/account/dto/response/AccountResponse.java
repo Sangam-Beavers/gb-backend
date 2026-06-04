@@ -1,6 +1,7 @@
 package com.gb.wallet.domain.account.dto.response;
 
 import com.gb.wallet.domain.account.entity.BankAccount;
+import com.gb.wallet.global.common.util.AccountNumberMasker;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -64,26 +65,12 @@ public class AccountResponse {
                 .accountPublicId(bankAccount.getPublicId())
                 .bankCode(bankAccount.getBank().getCode())
                 .bankName(bankAccount.getBank().getName())
-                .accountNumberMasked(mask(bankAccount.getAccountNumber()))
+                .accountNumberMasked(AccountNumberMasker.mask(bankAccount.getAccountNumber()))
                 .isPrimary(bankAccount.isPrimary())
                 .isVirtual(bankAccount.isVirtual())
                 .isVerified(verified)
                 .createdAt(toUtcZ(bankAccount.getCreatedAt()))
                 .build();
-    }
-
-    /** 앞 3자리 + 끝 2자리만 노출하고 가운데를 별표로 채운다. 길이 5 이하면 전체 마스킹(방어). */
-    private static String mask(String accountNumber) {
-        if (accountNumber == null) {
-            return null;
-        }
-        int len = accountNumber.length();
-        if (len <= 5) {
-            return "*".repeat(len);
-        }
-        return accountNumber.substring(0, 3)
-                + "*".repeat(len - 5)
-                + accountNumber.substring(len - 2);
     }
 
     /**

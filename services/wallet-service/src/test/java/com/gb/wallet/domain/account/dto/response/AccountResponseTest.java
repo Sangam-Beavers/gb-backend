@@ -12,13 +12,13 @@ import org.springframework.test.util.ReflectionTestUtils;
 /**
  * {@link AccountResponse#from(BankAccount)}의 마스킹·파생필드 변환 단위 테스트.
  *
- * <p>private static {@code mask()}는 실제 응답이 쓰는 변환이므로 공개 진입점 {@code from()}을 통해 검증한다.
+ * <p>마스킹은 공용 {@code AccountNumberMasker}에 위임하므로 공개 진입점 {@code from()}을 통해 검증한다.
  * JPA·Spring 없이 순수 객체로 돌린다. BaseEntity의 {@code createdAt}은 비영속 객체라 auditing이 덮어쓰지
  * 않으므로 {@link ReflectionTestUtils}로 직접 주입한다 — "persist 후 native UPDATE" 규칙은 auditing이
  * {@code @PrePersist}에서 값을 덮어쓰는 영속 테스트에만 해당하며, 여기선 @PrePersist가 발화하지 않는다.
  *
- * <p><b>주의:</b> 이 {@code mask()}는 계좌 도메인 전용(앞3+끝2, 임계값 5)이며,
- * 송금 도메인의 {@code AccountNumberMasker}(다른 형식·임계값 7)와는 의도적으로 분리돼 있다 — 혼동·통합 금지.
+ * <p><b>WACC-08:</b> 계좌번호 마스킹은 {@code AccountNumberMasker}(앞3 + 별표 + 끝2) 단일 SSOT로 통일됐다.
+ * {@code AccountResponse}는 그 유틸에 위임하며, 과거 도메인별로 달랐던 규칙(끝4 vs 끝2)은 더 보수적인 끝2로 합쳐졌다.
  */
 class AccountResponseTest {
 

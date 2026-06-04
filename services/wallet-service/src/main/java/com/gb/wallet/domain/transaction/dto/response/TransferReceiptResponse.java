@@ -52,8 +52,8 @@ public record TransferReceiptResponse(
                 example = "Quokka Bank", nullable = true)
         String bankName,
 
-        @Schema(description = "수취 계좌번호(마스킹). REMITTANCE만 값 있음, INTERNAL은 null",
-                example = "****1234", nullable = true)
+        @Schema(description = "수취 계좌번호(마스킹, 앞 3 + 별표 + 뒤 2). REMITTANCE만 값 있음, INTERNAL은 null",
+                example = "123********11", nullable = true)
         String accountNumber,
 
         @Schema(description = "송금 금액 (string 십진수, 소수점 4자리)", example = "500000.0000")
