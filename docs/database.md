@@ -70,7 +70,7 @@
 | `nickname` | VARCHAR(50) | NOT NULL | 닉네임 |
 | `nationality` | VARCHAR(10) | NOT NULL | 국적 코드 (KR, VN, PH 등) |
 | `language` | VARCHAR(10) | NOT NULL | 주 사용 언어 (BCP 47 소문자, 예: "vi") |
-| `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | 인증 배지 여부. **(미구현 — 엔티티 미반영, `user_verifications` APPROVED 시 반영 예정. 현재 응답 false 고정)** |
+| `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | 인증 배지 여부. `user_verifications` APPROVED 시 true로 반영(엔티티 `Member.isVerified` 반영 완료). |
 | `bio` | VARCHAR(200) | NULL | 자기소개(한 줄, 마이페이지 입력, 선택값) |
 | `created_at` | DATETIME | NOT NULL | |
 | `updated_at` | DATETIME | NOT NULL | |
@@ -80,14 +80,14 @@
 
 ### `user_verifications`
 > 신분증 인증. APPROVED 시 `members.is_verified = TRUE`. **member 내부 테이블 → `user_id`는 BIGINT FK 유지.**
-> ⚠️ **엔티티 미구현(계획 테이블)** — 신분증 인증 도메인 구현 시 추가한다. 총 15개 문서화 테이블 중 본 테이블만 JPA 엔티티 미반영(구현 14 + 계획 1).
+> 엔티티 반영 완료(`UserVerification`, @ManyToOne Member). 데모 구현은 번호 형식(정규식) 검증 통과 시 즉시 APPROVED + 배지 부여(관리자 검토 단계 생략).
 
 | 컬럼 | 타입 | 제약 | 설명 |
 | --- | --- | --- | --- |
 | `id` | BIGINT | PK, AI | |
 | `user_id` | BIGINT | FK → members.id, NOT NULL | member 내부 참조 → BIGINT FK |
 | `document_type` | VARCHAR(30) | NOT NULL | 신분증 유형 (ALIEN_REGISTRATION/PASSPORT/NATIONAL_ID) ※ API에선 `identity_document_type` |
-| `document_number` | VARCHAR(100) | NOT NULL | **AES-256 암호화 저장** |
+| `document_number` | VARCHAR(100) | NOT NULL | **AES-256 암호화 저장 예정** (현재 데모 평문 저장, D-3 암복호 유틸 도입 후 교체 — 서비스 `// TODO`) |
 | `s3_key` | VARCHAR(500) | NOT NULL | 신분증 이미지 S3 경로 |
 | `status` | VARCHAR(20) | NOT NULL, DEFAULT 'PENDING' | PENDING/APPROVED/REJECTED |
 | `reviewed_at` | DATETIME | NULL | |
