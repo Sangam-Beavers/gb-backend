@@ -2,6 +2,7 @@ package com.gb.member.global.redis;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -46,11 +47,18 @@ public class PasswordResetRateLimiter {
     /**
      * 이메일 단위로 1회 시도를 센다. 윈도 내 카운트가 한도 이하면 {@code true}(허용), 초과면 {@code false}.
      * Redis 장애 시에는 {@code true}(fail-open)로 통과시킨다.
+     *
+     * <p><b>키 정규화(MEM2 회귀):</b> Redis 키는 byte-exact라 {@code "A@x"}/{@code "a@x"}/{@code "a@x "}가
+     * 서로 다른 버킷이 되어 한도를 우회(피해자 메일 폭탄)할 수 있다. 키 생성 시 {@code trim().toLowerCase}로
+     * 정규화해 같은 이메일의 대소문자·공백 변형을 한 버킷으로 모은다. ({@code existsByEmail}은 MySQL 기본
+     * collation으로 이미 대소문자 무시라 여기서만 정규화하면 충분하다. 토큰 저장·{@code changePassword}로
+     * 흐르는 이메일은 IdP username 정확 일치 때문에 원본 케이스를 유지해야 하므로 본 정규화는 키에 한정한다.)
      */
     public boolean tryAcquire(String email) {
         try {
+            String normalizedKey = KEY_PREFIX + email.trim().toLowerCase(Locale.ROOT);
             Long count = redisTemplate.execute(
-                    INCR_EXPIRE, List.of(KEY_PREFIX + email), String.valueOf(WINDOW.toMillis()));
+                    INCR_EXPIRE, List.of(normalizedKey), String.valueOf(WINDOW.toMillis()));
             return count == null || count <= LIMIT;
         } catch (RuntimeException e) {
             log.warn("비밀번호 재설정 rate-limit 조회 실패 — fail-open(통과). email-hash 키 prefix={}", KEY_PREFIX, e);

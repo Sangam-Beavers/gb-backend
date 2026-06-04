@@ -4,10 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -51,5 +55,25 @@ class PasswordResetRateLimiterTest {
                 .willThrow(new org.springframework.dao.QueryTimeoutException("redis down"));
 
         assertThat(limiter.tryAcquire("a@example.com")).isTrue();
+    }
+
+    @Test
+    @DisplayName("MEM2 회귀: rate-limit 키는 trim+소문자 정규화 — 대소문자·앞뒤 공백 변형이 같은 버킷")
+    @SuppressWarnings("unchecked")
+    void 키_정규화_대소문자공백_같은버킷() {
+        given(redisTemplate.execute(any(RedisScript.class), anyList(), any())).willReturn(1L);
+
+        // 같은 이메일의 케이스·공백 변형 3종. 정규화 전이면 각각 다른 Redis 키 → 한도 우회(메일 폭탄).
+        limiter.tryAcquire("User@X.com ");
+        limiter.tryAcquire("user@x.com");
+        limiter.tryAcquire("  USER@X.COM");
+
+        ArgumentCaptor<List<String>> keysCaptor = ArgumentCaptor.forClass(List.class);
+        verify(redisTemplate, times(3))
+                .execute(any(RedisScript.class), keysCaptor.capture(), any());
+        assertThat(keysCaptor.getAllValues())
+                .as("대소문자·앞뒤 공백 변형이 모두 같은 정규화 키로 모인다")
+                .allSatisfy(keys -> assertThat(keys)
+                        .containsExactly("ratelimit:pwreset:user@x.com"));
     }
 }
