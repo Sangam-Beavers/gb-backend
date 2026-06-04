@@ -5,12 +5,15 @@ dependencies {
 
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-security'
+    // 검표원(방식 B): issuer-uri 기반 JWT(RS256/JWKS) 검증. Jwt/JwtAuthenticationToken/JwtDecoder 및
+    // oauth2ResourceServer().jwt() DSL을 제공한다. starter-security만으론 미포함(wallet/member/community와 동일).
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.kafka:spring-kafka'
-    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.14'
 
     // R1 PoC — Lambda Function URL을 IAM(SigV4)로 서명해 호출하기 위한 AWS SDK v2 auth 모듈.
     // HTTP 자체는 Java 17 java.net.http.HttpClient로 처리하고, 여기서는 서명 유틸만 사용한다.

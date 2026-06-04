@@ -4,6 +4,7 @@ import com.gb.document.domain.chat.dto.request.ChatbotPayload;
 import com.gb.document.domain.chat.dto.request.PocChatRequest;
 import com.gb.document.domain.chat.service.ChatbotLambdaClient;
 import com.gb.document.domain.chat.util.SseRelayListener;
+import io.swagger.v3.oas.annotations.Hidden;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,6 +34,7 @@ import java.util.concurrent.CompletableFuture;
  *   <li>analysis_summary는 하드코딩(R1은 MySQL 미연결)</li>
  * </ul>
  */
+@Hidden // R1 PoC 전용 — Phase 3에서 삭제 예정이므로 Swagger 문서에서 숨긴다.
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/poc")

@@ -12,7 +12,7 @@ import java.util.Map;
  * {@link ChatStreamListener}를 {@link SseEmitter}에 어댑팅. Lambda에서 흘러오는 토큰을
  * {@code event: token}, 종료 신호를 {@code event: done}으로 SSE 스트림에 그대로 중계한다.
  *
- * <p>ChatController(진짜)와 ChatPocController(임시 PoC) 양쪽에서 동일하게 사용된다.
+ * <p>{@link com.gb.document.domain.chat.controller.ChatController}에서 사용된다.
  */
 @Slf4j
 @RequiredArgsConstructor

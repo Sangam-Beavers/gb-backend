@@ -1,8 +1,17 @@
 package com.gb.document.domain.chat.controller;
 
+import com.gb.common.response.ErrorResponse;
 import com.gb.document.domain.chat.dto.request.ChatRequest;
 import com.gb.document.domain.chat.service.ChatService;
 import com.gb.document.domain.chat.util.SseRelayListener;
+import com.gb.document.global.security.CurrentUserPublicId;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -10,7 +19,6 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -31,23 +39,71 @@ import java.util.concurrent.CompletableFuture;
  *   <li>{@link SseRelayListener}가 Lambda 토큰을 SSE 이벤트(token/done)로 변환해 흘림.</li>
  * </ol>
  *
- * <h3>임시 처리 (인증 미구현)</h3>
- * CLAUDE.md §9 / conventions.md §14 — JWT 인증 도입 전까지 {@code X-User-Public-Id} 헤더로 임시 수신.
- * 인증 확정 시 이 부분만 JWT(sub) 추출로 교체.
+ * <h3>인증</h3>
+ * OAuth2 Resource Server(방식 B) — 본인 식별자는 JWT custom claim {@code public_id}를
+ * {@code @CurrentUserPublicId}로 추출한다(member/wallet/community와 동일, CLAUDE.md §9).
  */
+@Tag(name = "Document Chat", description = "분석 결과 후속 질문 챗봇 (SSE 스트리밍)")
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/documents")
 @RequiredArgsConstructor
 public class ChatController {
 
+    // 응답별 ErrorResponse 예시 — DocumentController와 동일 코드/메시지(권한·인증은 공통 코드 재사용).
+    private static final String EX_DOCUMENT4001 =
+            "{\"success\":false,\"code\":\"DOCUMENT4001\",\"message\":\"존재하지 않는 문서입니다.\"}";
+    private static final String EX_COMMON4031 =
+            "{\"success\":false,\"code\":\"COMMON4031\",\"message\":\"접근 권한이 없습니다.\"}";
+    private static final String EX_AUTH4011 =
+            "{\"success\":false,\"code\":\"AUTH4011\",\"message\":\"인증이 필요합니다.\"}";
+
     private final ChatService chatService;
 
+    @Operation(
+            summary = "분석 결과 후속 질문 챗봇 (SSE 스트리밍)",
+            description = "분석이 끝난 문서에 대한 사용자의 후속 질문을 받아 답변을 SSE로 스트리밍한다. "
+                    + "본문 처리(법령 KB · 환율/커뮤니티 MCP · 웹 검색)는 계정 B 챗봇 Lambda가 담당하고, 본체는 "
+                    + "① 본인 문서 권한 검증 ② 첫 대화면 분석요약 추출 ③ Lambda 호출 ④ 토큰 SSE 중계만 한다. "
+                    + "권한 검증은 SSE 시작 전 동기로 수행되어 실패 시 정상 HTTP 4xx 에러 envelope으로 응답한다. "
+                    + "응답 본문은 text/event-stream — `event: token`(부분 토큰)이 반복된 뒤 `event: done`으로 종료된다. "
+                    + "사용자는 인증된 JWT의 public_id claim으로 식별한다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "스트리밍 시작. Content-Type: text/event-stream. event: token(부분 토큰) 반복 후 event: done.",
+                    content = @Content(mediaType = MediaType.TEXT_EVENT_STREAM_VALUE,
+                            schema = @Schema(type = "string",
+                                    example = "event: token\ndata: 법령을\n\nevent: token\ndata: 확인했습니다\n\nevent: done\ndata: \n\n"))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 요청 본문 검증 실패(message/user_lang 누락).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다(토큰 누락·만료·위조).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "COMMON4031 - 다른 사용자의 문서.",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4031", value = EX_COMMON4031))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "DOCUMENT4001 - 존재하지 않는 문서.",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "DOCUMENT4001", value = EX_DOCUMENT4001)))
+    })
     @PostMapping(value = "/{publicId}/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(
+            @Parameter(description = "분석 문서 식별자(UUID). dev 시드 완료문서 ...0001로 테스트(COMPLETED라야 챗봇 200)",
+                    example = "00000000-0000-0000-0000-000000000001")
             @PathVariable("publicId") String documentPublicId,
-            // TODO: 인증 구현 후 JWT(sub)에서 userPublicId 추출로 교체 (CLAUDE.md §9).
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @Valid @RequestBody ChatRequest request
     ) {
         log.info("[chat] documentPublicId={} userPublicId={} firstTurn={}",

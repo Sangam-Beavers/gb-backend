@@ -9,7 +9,9 @@ import com.gb.document.domain.document.dto.response.DocumentStatusResponse;
 import com.gb.document.domain.document.dto.response.DocumentSummaryResponse;
 import com.gb.document.domain.document.dto.response.SubmissionResponse;
 import com.gb.document.domain.document.service.DocumentSubmissionService;
+import com.gb.document.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -26,7 +28,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -42,8 +43,8 @@ public class DocumentController {
             "{\"success\":false,\"code\":\"DOCUMENT4001\",\"message\":\"존재하지 않는 문서입니다.\"}";
     private static final String EX_COMMON4031 =
             "{\"success\":false,\"code\":\"COMMON4031\",\"message\":\"접근 권한이 없습니다.\"}";
-    private static final String EX_COMMON4011 =
-            "{\"success\":false,\"code\":\"COMMON4011\",\"message\":\"인증 정보가 유효하지 않습니다.\"}";
+    private static final String EX_AUTH4011 =
+            "{\"success\":false,\"code\":\"AUTH4011\",\"message\":\"인증이 필요합니다.\"}";
     private static final String EX_COMMON4221 =
             "{\"success\":false,\"code\":\"COMMON4221\",\"message\":\"처리할 수 없는 요청입니다.\"}";
     private static final String EX_COMMON5000 =
@@ -55,7 +56,9 @@ public class DocumentController {
             summary = "문서 분석 요청",
             description = "분석 대상 문서 종류와 파일명을 받아 분석 요청을 생성하고, "
                     + "사용자가 원본 파일을 업로드할 S3 Pre-signed PUT URL을 발급한다. "
-                    + "Pre-signed URL은 약 10분 동안 유효하다.")
+                    + "Pre-signed URL은 약 10분 동안 유효하다. 사용자는 JWT의 public_id claim으로 식별한다.")
+    // 비즈니스 코드(DOCUMENT4001 등)는 HTTP 상태와 별개이므로 responseCode에는 HTTP 상태를,
+    // description에 "비즈니스 코드 - 의미"를 적는다. 실패 응답 본문은 공통 ErrorResponse 구조.
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -66,9 +69,9 @@ public class DocumentController {
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
-                    description = "COMMON4011 - 인증 정보 누락(X-User-Public-Id 헤더 없음).",
+                    description = "AUTH4011 - 인증이 필요합니다(토큰 누락·만료·위조).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류.",
@@ -78,9 +81,7 @@ public class DocumentController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<SubmissionResponse> submit(
-            // TODO: 인증 구현 후 JWT 토큰(sub/claim)에서 userPublicId 추출로 교체.
-            //       현재는 인증 미구현으로 헤더(X-User-Public-Id)로 임시 수신.
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @Valid @RequestBody SubmitRequest request) {
         SubmissionResponse data = documentSubmissionService.submit(userPublicId, request);
         return ApiResponse.success(SuccessStatus.CREATED, data);
@@ -93,9 +94,9 @@ public class DocumentController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "조회 성공."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
-                    description = "COMMON4011 - 인증 정보 누락.",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
                     description = "COMMON4031 - 다른 사용자의 문서.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
@@ -107,7 +108,9 @@ public class DocumentController {
     })
     @GetMapping("/{publicId}/status")
     public ApiResponse<DocumentStatusResponse> getStatus(
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @CurrentUserPublicId String userPublicId,
+            @Parameter(description = "문서 식별자(UUID). dev 시드: ...0001=완료, ...0002=FAILED, ...0003=분석중",
+                    example = "00000000-0000-0000-0000-000000000001")
             @PathVariable String publicId) {
         return ApiResponse.success(documentSubmissionService.getStatus(userPublicId, publicId));
     }
@@ -120,9 +123,9 @@ public class DocumentController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "조회 성공. data에 DocumentResultResponse."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
-                    description = "COMMON4011 - 인증 정보 누락.",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
                     description = "COMMON4031 - 다른 사용자의 문서.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
@@ -138,7 +141,9 @@ public class DocumentController {
     })
     @GetMapping("/{publicId}/result")
     public ApiResponse<DocumentResultResponse> getResult(
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @CurrentUserPublicId String userPublicId,
+            @Parameter(description = "문서 식별자(UUID). dev 시드 ...0001=완료+결과(200), ...0003=분석중(422)",
+                    example = "00000000-0000-0000-0000-000000000001")
             @PathVariable String publicId) {
         return ApiResponse.success(documentSubmissionService.getResult(userPublicId, publicId));
     }
@@ -150,13 +155,13 @@ public class DocumentController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "조회 성공. data는 Spring Page 구조(content, totalElements, totalPages, ...)."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
-                    description = "COMMON4011 - 인증 정보 누락.",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011)))
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011)))
     })
     @GetMapping
     public ApiResponse<Page<DocumentSummaryResponse>> list(
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @CurrentUserPublicId String userPublicId,
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC)
             Pageable pageable) {
         return ApiResponse.success(documentSubmissionService.list(userPublicId, pageable));
@@ -169,9 +174,9 @@ public class DocumentController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "재요청 접수. status가 ANALYZING으로 전환된다."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
-                    description = "COMMON4011 - 인증 정보 누락.",
+                    description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4011", value = EX_COMMON4011))),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
                     description = "COMMON4031 - 다른 사용자의 문서.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
@@ -187,7 +192,9 @@ public class DocumentController {
     })
     @PostMapping("/{publicId}/retry")
     public ApiResponse<SubmissionResponse> retry(
-            @RequestHeader("X-User-Public-Id") String userPublicId,
+            @CurrentUserPublicId String userPublicId,
+            @Parameter(description = "문서 식별자(UUID). dev 시드 ...0002=FAILED(재요청→200, ANALYZING 전환)",
+                    example = "00000000-0000-0000-0000-000000000002")
             @PathVariable String publicId) {
         return ApiResponse.success(documentSubmissionService.retry(userPublicId, publicId));
     }

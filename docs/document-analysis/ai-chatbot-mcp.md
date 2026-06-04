@@ -9,7 +9,10 @@
 
 ## 1. 한 줄 정의와 확정 결정
 
-분석 결과 화면 하단에서 "이 계약서에 대해 더 물어보세요"로 들어오는 **동기 + SSE 스트리밍 챗봇**이다. 다른 팀 소유 도메인 데이터(환율·커뮤니티)에는 **MCP**로, 우리 도메인 데이터(법령)에는 **KB**로 접근한다.
+분석 결과 화면 하단에서 "이 계약서에 대해 더 물어보세요"로 들어오는 **동기 + SSE 스트리밍 챗봇**이다. 데이터 성격에 따라 도구 4종을 다른 패턴으로 통합:
+- **우리 도메인(법령)** → Bedrock **KB**
+- **같은 회사 다른 팀(환율·커뮤니티)** → 자체 **MCP1·MCP2** 어댑터 서버 (도메인 분리)
+- **외부 회사(웹 검색)** → **Tavily Remote MCP** 직결 (외부 회사 시스템 표준 통합 — MCP 본래 가치 정면)
 
 | # | 항목 | 결정 |
 | --- | --- | --- |
@@ -19,28 +22,34 @@
 | 4 | 분석결과 저장 | 계정 A MySQL `document_results` (기존 그대로, 변경 0) |
 | 5 | 대화내역 저장 | 계정 B DynamoDB `chat_sessions`(TTL 90일) + Redis 캐시(TTL 30분) |
 | 6 | 법령 검색 | **Bedrock Knowledge Bases `retrieve`**(분석 파이프라인과 동일 KB 공유) |
-| 7 | 환율 / 커뮤니티 | MCP Server 경유 |
-| 8 | MCP Pod 배포 | 개발·스테이징·운영 전 환경, `environment` 라우팅, replicas=2 + PDB |
-| 9 | 콜드 스타트 | EventBridge 5분 워밍업 |
-| 10 | 멱등성 | 대화 저장 `message_uuid` |
-| 11 | 시연 언어 | 한국어(다국어 구조 유지, 값만 ko) |
-| 12 | 화면/API | 기존 무변경 + 결과 화면에 채팅 영역 1개 + `POST /chat` 1개 추가 |
+| 7 | 환율 / 커뮤니티 | 자체 MCP 어댑터 서버 경유(MCP1 환율, MCP2 커뮤니티) |
+| 8 | **웹 검색 (MCP3)** | **Tavily 가 운영하는 공식 Remote MCP Server 직접 연결** — 챗봇 Lambda 가 클라이언트로 붙음. 자체 어댑터 서버 없음. URL: `https://mcp.tavily.com/mcp/`, Transport: Streamable HTTP, 인증: `Authorization: Bearer ${TAVILY_API_KEY}` |
+| 9 | MCP Pod 배포 | 자체 MCP1/MCP2 한정. 개발·스테이징·운영 전 환경, `environment` 라우팅, replicas=2 + PDB. MCP3는 외부 서버라 Pod 없음 |
+| 10 | 콜드 스타트 | EventBridge 5분 워밍업 |
+| 11 | 멱등성 | 대화 저장 `message_uuid` |
+| 12 | 시연 언어 | 한국어(다국어 구조 유지, 값만 ko) |
+| 13 | 화면/API | 기존 무변경 + 결과 화면에 채팅 영역 1개 + `POST /chat` 1개 추가 |
 
 ---
 
 ## 2. MCP를 쓰는 이유
 
-판단 기준은 **데이터 모델을 누가 소유하느냐** 하나다.
+판단 기준은 **데이터 모델을 누가 소유하느냐**다. 소유 주체에 따라 도구 통합 패턴이 3가지로 갈린다:
 
 ```
-법령(Knowledge Bases)   → 서류분석 도메인(우리)  → KB 직접 호출
-환율(Redis, 송금팀)      → 다른 팀              → MCP
-커뮤니티(posts, 커뮤팀)  → 다른 팀              → MCP
+법령(Knowledge Bases)        → 서류분석 도메인(우리)        → KB 직접 호출
+환율(Redis, 송금팀)           → 같은 회사 다른 팀            → 자체 MCP 어댑터 서버
+커뮤니티(posts, 커뮤팀)        → 같은 회사 다른 팀            → 자체 MCP 어댑터 서버
+웹 검색(Tavily Search)        → 외부 회사 (Tavily)           → 외부 Remote MCP 직결 ⭐
 ```
 
-핵심 가치: 다른 팀이 자기 도메인 데이터 모델을 바꿔도 **챗봇 코드는 변경 없음**(결합도↓). REST 대신 MCP인 이유는 LLM이 "어떤 도구가 필요한가"를 동적으로 판단하는 표준(JSON-RPC 2.0)이기 때문이다 — 키워드 분기를 사람이 박지 않는다.
+**자체 MCP 어댑터 (MCP1/2)** — 다른 팀이 자기 도메인 데이터 모델을 바꿔도 **챗봇 코드 변경 없음**(결합도↓). REST 대신 MCP 인 이유는 LLM 이 "어떤 도구가 필요한가"를 동적으로 판단하는 표준(JSON-RPC 2.0)이기 때문이다.
 
-> 법령을 KB로 두는 이유: 법령은 **우리 서류분석 도메인 소유** 데이터다. 게다가 [`ai-pipeline.md`](./ai-pipeline.md)의 분석 Lambda도 같은 법령을 KB `retrieve`로 검색하므로, 챗봇과 분석이 **동일한 KB 하나를 공유**한다. (KB 백엔드 저장소 = S3 Vectors)
+**외부 회사 MCP 직결 (MCP3 — Tavily)** — Anthropic 이 MCP 를 제안한 핵심 가치 ("LLM 이 학습 시점에 모르는 외부 시스템을 표준 인터페이스로 통합") 의 정면 사례. 자체 어댑터 서버를 거치지 않고, Tavily 가 운영하는 공식 Remote MCP Server (`https://mcp.tavily.com/mcp/`) 에 챗봇 Lambda 가 Python `mcp` SDK 의 Streamable HTTP 클라이언트로 직접 붙는다. Tavily 가 노출한 도구 5개(`tavily_search`, `tavily_extract`, `tavily_crawl`, `tavily_map`, `tavily_research`) 중 `tavily_search` 만 사용 (시연 시나리오 ⑤ 충족). Tavily 가 서버 운영·확장·갱신을 책임지므로 우리 인프라 부담 0.
+
+> **자체 MCP vs 외부 MCP 의 결정 기준** — 데이터 모델을 같은 회사가 소유하면 자체 어댑터(권한·도메인 분리 + 서버 통제권 유지), 외부 회사가 소유하면 그 회사의 공식 MCP 가 있을 때 직결(인프라 외주 + 본래 MCP 가치 정면). 둘 다 동일한 MCP 표준(JSON-RPC 2.0) 이라 챗봇 입장에선 차이 없이 호출 가능.
+
+> 법령을 KB 로 두는 이유: 법령은 **우리 서류분석 도메인 소유** 데이터다. 게다가 [`ai-pipeline.md`](./ai-pipeline.md) 의 분석 Lambda 도 같은 법령을 KB `retrieve` 로 검색하므로, 챗봇과 분석이 **동일한 KB 하나를 공유**한다. (KB 백엔드 저장소 = S3 Vectors)
 
 ---
 
@@ -162,10 +171,12 @@ if (!doc.getUserPublicId().equals(userPublicId)) {
    ▼
 [챗봇 Lambda (계정 B) — Function URL + Response Streaming]
    │ a. Redis 세션 로드 (miss면 DynamoDB 복구, §3-4) — 첫 대화면 요약을 messages[0]에 주입
-   │ b. Bedrock Tool Use 루프:
-   │      ├─ search_legal_standard → KB retrieve (우리 도메인)
-   │      ├─ get_exchange_rate     → MCP Server 1 (송금 도메인)
-   │      └─ search_community_posts→ MCP Server 2 (커뮤니티 도메인)
+   │ b. Bedrock Tool Use 루프 (도구 4종):
+   │      ├─ search_legal_standard  → KB retrieve              (우리 도메인)
+   │      ├─ get_exchange_rate      → 자체 MCP1 (FastMCP)      (같은 회사 다른 팀 — 송금)
+   │      ├─ search_community_posts → 자체 MCP2 (FastMCP)      (같은 회사 다른 팀 — 커뮤)
+   │      └─ search_web             → 외부 Tavily Remote MCP  (외부 회사 직결 ⭐)
+   │           내부 매핑: search_web (Bedrock toolSpec) → tavily_search (Tavily 실명)
    │ c. 응답 SSE 토큰 스트리밍
    │ d. Redis 갱신(30분) + DynamoDB 저장(90일, message_uuid)
    ▼ (SSE)
@@ -289,18 +300,24 @@ save_to_dynamo(session_id, user_public_id, document_public_id, message, reply, e
 
 ## 9. MCP Server — 전 환경 배포
 
-백엔드/프론트는 환경마다 따로 뜨고, AI(챗봇 Lambda)는 계정 B에 1개만 떠서 공유한다. MCP Server는 도메인 옆 어댑터이므로 각 환경에 함께 배포한다.
+백엔드/프론트는 환경마다 따로 뜨고, AI(챗봇 Lambda)는 계정 B에 1개만 떠서 공유한다. **자체 MCP Server(MCP1·MCP2)** 는 도메인 옆 어댑터이므로 각 환경에 함께 배포한다. **외부 MCP3(Tavily)** 는 우리 인프라 밖에 있으므로 환경별 배포 대상이 아니다.
 
 ```
 개발기(온프렘 K8s):  MCP1(환율)→온프렘 Redis / MCP2(커뮤니티)→온프렘 posts
 스테이징(AWS EKS):   MCP1→stage Redis / MCP2→stage posts
 운영기(AWS EKS):     MCP1→prod Redis  / MCP2→prod posts
+모든 환경 공통:      MCP3(웹검색) = Tavily Remote MCP (https://mcp.tavily.com/mcp/) ← 외부 회사 운영
 ```
 
-- 챗봇 Lambda는 페이로드 `environment`(dev/stage/prod)로 MCP URL을 라우팅한다. (인프라 계열 `source`가 아니라 환경 3값으로 가른다 — §6 페이로드 주석 참고. dev는 온프렘 EC2 HAProxy 경유, stage/prod는 각 EKS의 MCP Pod.)
-- 온프렘 MCP 통신은 기존 EC2 HAProxy에 frontend(8000)만 추가(신규 컴포넌트 0, ai-pipeline의 HAProxy 패턴 재사용).
-- Helm: **replicas=2 + PodDisruptionBudget(minAvailable=1)** + podAntiAffinity. Pod 1개가 죽어도 무중단, 도구 1개가 죽어도 나머지는 정상(장애 격리).
-- 커뮤니티 MCP는 환경별 DB에 **읽기 전용 계정(`mcp_reader`, SELECT만)** 으로 접근하고, 검색 시 `deleted_at IS NULL`로 삭제글을 제외한다(최소권한).
+- 챗봇 Lambda 는 페이로드 `environment`(dev/stage/prod) 로 자체 MCP(1·2) URL 을 라우팅한다. MCP3 는 환경 무관하게 동일한 외부 URL 을 사용 (인증 키만 환경별로 분리: `TAVILY_API_KEY_DEV`, `..._STAGE`, `..._PROD` — quota 분리 + 사고 격리).
+- 온프렘 MCP 통신은 기존 EC2 HAProxy 에 frontend(8000)만 추가(신규 컴포넌트 0, ai-pipeline 의 HAProxy 패턴 재사용).
+- Helm: **replicas=2 + PodDisruptionBudget(minAvailable=1)** + podAntiAffinity. Pod 1 개가 죽어도 무중단, 도구 1 개가 죽어도 나머지는 정상(장애 격리).
+- 커뮤니티 MCP 는 환경별 DB 에 **읽기 전용 계정(`mcp_reader`, SELECT 만)** 으로 접근하고, 검색 시 `deleted_at IS NULL` 로 삭제글을 제외한다(최소권한).
+- **MCP3(Tavily) 운영 시 주의**:
+  - API 키는 환경변수 `TAVILY_API_KEY` (운영기엔 Secrets Manager → 환경변수 주입). 코드/이미지/이슈/PR 어디에도 박지 않음.
+  - Tavily Free Researcher Plan = 월 1,000 search. 데모/초기 운영용으론 충분. 트래픽 증가 시 유료 전환 검토.
+  - 외부 API 장애 시 시나리오 ⑤만 깨지고 ①②③④는 정상 동작 (장애 격리).
+  - 도구 이름: Tavily docs 페이지의 `tavily-search` (hyphen) 는 outdated, 실제 `list_tools` 응답은 `tavily_search` (underscore). 실측 기준으로 박음.
 
 ---
 
@@ -321,7 +338,8 @@ save_to_dynamo(session_id, user_public_id, document_public_id, message, reply, e
 ## 11. 인프라 변경 범위 요약
 
 **추가 (계정 B):** 챗봇 Lambda(Function URL + Response Streaming) 1 · DynamoDB `chat_sessions` 1(TTL 90일) · 챗봇 전용 Redis 1 · 법령 KB 1(분석과 공유, 백엔드 S3 Vectors) · EventBridge 워밍업 1
-**추가 (각 환경):** MCP Server 1(환율)·2(커뮤니티) Pod (replicas=2+PDB) · `mcp_reader` 계정
+**추가 (각 환경):** 자체 MCP Server 1(환율)·2(커뮤니티) Pod (replicas=2+PDB) · `mcp_reader` 계정
+**추가 (외부 통합):** Tavily Remote MCP 직결 (외부 회사 운영, 우리 인프라 0). 챗봇 Lambda 환경변수 `TAVILY_API_KEY` 만 주입 (운영기엔 Secrets Manager).
 **추가 (계정 A 백엔드):** `POST /api/v1/documents/{id}/chat`(권한검증 + 요약추출 + Lambda 호출 + SSE 중계) · Function URL 호출 클라이언트(IAM 서명)
 **추가 (EC2 HAProxy):** frontend `mcp_community_front`(8000)
 **변경 없음:** 기존 와이어프레임/프론트(결과 화면 하단 영역만 추가) · 기존 분석 API 6개 · VPC/서브넷/NAT/ALB/WireGuard · Lambda A/B · MySQL 스키마 · 기존 Redis · 분석 결과 저장 경로(SQS→Consumer→MySQL)
@@ -342,18 +360,26 @@ save_to_dynamo(session_id, user_public_id, document_public_id, message, reply, e
 ## 13. 멘토 Q&A 치트시트
 
 ```
-왜 MCP?            다른 팀 도메인 모델이 바뀌어도 챗봇 코드 불변(결합도↓). LLM 동적 도구 선택(JSON-RPC).
-법령은 왜 KB?       데이터 모델이 우리 소유(서류분석 도메인). 분석 파이프라인과 같은 KB 공유.
-권한 검증 어디?     백엔드(architecture §7). 단 현재 인증 미구현이라 X-User-Public-Id 헤더 임시처리(conventions §14).
-분석결과 왜 MySQL?  사용자가 조회하는 관계형 데이터, 기존에 이미 있음. 챗봇은 요약만 필요→백엔드가 페이로드.
+왜 MCP?              다른 팀/외부 회사 도메인 모델이 바뀌어도 챗봇 코드 불변(결합도↓). LLM 동적 도구 선택(JSON-RPC).
+법령은 왜 KB?         데이터 모델이 우리 소유(서류분석 도메인). 분석 파이프라인과 같은 KB 공유.
+자체 MCP1/2 vs MCP3?  자체(MCP1/2) = 같은 회사 다른 팀의 도메인 분리 어댑터(권한·결합도 분리 + 서버 통제 유지).
+                     외부(MCP3 Tavily) = 외부 회사가 직접 운영하는 공식 MCP 에 챗봇이 클라이언트로 붙음.
+                     MCP 본래 가치("외부 시스템을 표준으로 통합") 의 정면 사례. 인프라 외주.
+왜 외부 MCP 자체 어댑터 안 만들었나?
+                     자체 MCP 패턴은 이미 MCP1/2 두 번 시연. Tavily 가 표준 MCP 서버를 운영하므로
+                     중간 어댑터는 over-engineering. 코드/운영 비용 0, 발표 narrative 도 강력.
+권한 검증 어디?       백엔드(architecture §7). 현재 인증 미구현이라 X-User-Public-Id 헤더 임시처리.
+분석결과 왜 MySQL?    사용자가 조회하는 관계형 데이터, 기존에 이미 있음. 챗봇은 요약만 필요→백엔드가 페이로드.
 챗봇이 분석결과 계속 읽나? 아니. 첫 턴 요약 1회. 이후 messages 맥락에 묻어 따라다님. MySQL 재접근 0.
 대화내역 왜 DynamoDB? 챗봇이 매 턴 직접 R/W, 같은 계정B→크로스계정0, SSE와 맞음, 서버리스 구조 유지.
-분석결과 DynamoDB 미사용 아니었나? 그건 '분석 결과' 한정. 대화기록은 별도 워크로드라 신규 도입. 분석결과는 여전히 MySQL.
+분석결과 DynamoDB 미사용 아니었나? 그건 '분석 결과' 한정. 대화기록은 별도 워크로드라 신규 도입.
 30분 지나면 대화 끊겨? 아니. Redis는 캐시(30분), 기록은 DynamoDB(90일). miss면 복구해 계속.
-PII 영구보관?       아니. TTL 90일. 마스킹+보관기간으로 관리.
-동기/비동기?        분석=비동기(3~5분), 챗봇=동기+SSE(체감 0.5초). WebFlux 아님, MVC SseEmitter.
-Pod 죽으면?         replicas=2+PDB 무중단. 도구1개 죽어도 나머지 정상(장애 격리).
-기존 안 건드린다며?  화면은 결과 하단 영역만 추가, API는 /chat 1개만 추가, 기존 6개·스키마·인프라 무변경.
+PII 영구보관?         아니. TTL 90일. 마스킹+보관기간으로 관리.
+동기/비동기?          분석=비동기(3~5분), 챗봇=동기+SSE(체감 0.5초). WebFlux 아님, MVC SseEmitter.
+Pod 죽으면?           replicas=2+PDB 무중단. 도구1개 죽어도 나머지 정상(장애 격리).
+Tavily 외부 장애 시?  시나리오 ⑤만 깨지고 ①②③④는 정상. 장애 격리 그대로.
+Tavily 비용?          Researcher Free Plan 월 1,000 search. 데모/초기 운영 충분. 증가 시 유료 전환.
+기존 안 건드린다며?    화면은 결과 하단 영역만 추가, API는 /chat 1개만 추가, 기존 6개·스키마·인프라 무변경.
 ```
 
 ---
