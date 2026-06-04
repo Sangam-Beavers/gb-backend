@@ -86,7 +86,9 @@ public class ScheduledTransferRunner {
     @Scheduled(cron = "${wallet.scheduled-transfer.cron:0 0 1 * * *}", zone = "Asia/Seoul")
     public void runDueTransfers() {
         // (1) 분산 락 — multi-replica 환경에서 단 1개만 실행. 못 잡으면 그냥 종료(다음 트리거에서 재경쟁).
-        RLock lock = distributedLockHelper.tryLock(LOCK_KEY);
+        //     배치는 5초 고정 lease보다 오래 걸려 lease가 도중에 만료되면 2파드가 동시에 돈다(WSCH-03) →
+        //     watchdog 락(보유 동안 자동 갱신)으로 끝까지 단독 실행을 보장한다(파드 사망 시 ~30s 후 자동 해제).
+        RLock lock = distributedLockHelper.tryLockWithWatchdog(LOCK_KEY);
         if (lock == null) {
             log.debug("정기송금 스케줄러 — 다른 인스턴스가 락 보유 중 (정상, 정상 분산 환경)");
             return;
