@@ -20,6 +20,12 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 /**
  * 모든 서비스에 공통 적용되는 전역 예외 처리기.
  * 실패 응답은 항상 {@link ApiResponse#fail(String, String)}({@link ErrorResponse}) 포맷으로 통일한다.
+ *
+ * <p><b>보안 예외는 여기서 다루지 않는다(common 의존 방향 유지, CLAUDE.md §2):</b> 인증 실패(401/AUTH4011)는
+ * common-security의 {@code RestAuthenticationEntryPoint}가, 인가 실패(403/COMMON4031)는 common-security의
+ * {@code SecurityExceptionHandler}(catch-all보다 먼저 잡히도록 {@code @Order} 우선)가 처리한다. 둘 다 Spring
+ * Security 타입이라 보안 모듈에 둬, 보안 무의존인 common-exception으로 의존이 역류하지 않게 한다. 에러 코드
+ * 자체의 SSOT는 {@code CommonErrorCode}로 단일 유지된다.
  */
 @Slf4j
 @RestControllerAdvice
