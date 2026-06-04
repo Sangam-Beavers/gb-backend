@@ -336,17 +336,6 @@ public class TransferServiceImpl implements TransferService {
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
 
-        // 0) Rate-limit — user 단위 고정 윈도. 폭주 차단(외부 자금 이동 보호). Redis 장애 시 fail-open(통과).
-        //    초과 시 TRANSFER4006(429). 캐시·검증 비용을 절감하기 위해 진입 최상단에 둔다.
-        String rateLimitKey = TRANSFER_RATE_LIMIT_PREFIX + userPublicId;
-        boolean allowed = rateLimitHelper.tryAcquire(
-                rateLimitKey,
-                transferRateLimitProperties.limit(),
-                Duration.ofSeconds(transferRateLimitProperties.windowSeconds()));
-        if (!allowed) {
-            throw new BusinessException(TransferErrorCode.RATE_LIMIT_EXCEEDED);
-        }
-
         // 1) 입력 검증을 캐시 조회 전에 먼저 — cacheKey 생성에 transferType·scopeId가 필요하므로.
         //    enum/도메인 검증은 여기서, 형식은 @Valid에서.
         CurrencyType currency = CurrencyType.fromCode(request.currencyCode())
@@ -380,6 +369,18 @@ public class TransferServiceImpl implements TransferService {
                     existing.get(), userPublicId, transferType, scopeId);
             writeToCache(cacheKey, resp); // Layer 1 채워두기
             return resp;
+        }
+
+        // 5.5) Rate-limit — user 단위 고정 윈도. 폭주 차단(외부 자금 이동 보호). Redis 장애 시 fail-open(통과).
+        //      초과 시 TRANSFER4006(429). 멱등 재요청(Layer1/2 hit)은 *신규 처리가 아니므로* 토큰을 소모하면
+        //      안 된다(WTX-04) — 그래서 dedup 뒤에 둔다. 정당한 재시도가 토큰 고갈로 TRANSFER4006되는 것을 막고,
+        //      rate-limit은 실제 신규 자금 이동(아래 6)에만 적용된다.
+        boolean allowed = rateLimitHelper.tryAcquire(
+                TRANSFER_RATE_LIMIT_PREFIX + userPublicId,
+                transferRateLimitProperties.limit(),
+                Duration.ofSeconds(transferRateLimitProperties.windowSeconds()));
+        if (!allowed) {
+            throw new BusinessException(TransferErrorCode.RATE_LIMIT_EXCEEDED);
         }
 
         // 6) 실 처리 + 락 경합 재시도 래퍼 — race(UNIQUE 위반)와 락 경합을 도메인별 분기에 공통 처리.

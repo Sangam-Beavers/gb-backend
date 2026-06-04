@@ -430,6 +430,8 @@ class TransferServiceImplExecuteTest {
         verify(transactionRepository, never()).findByIdempotencyKey(anyString());
         // replay 경로는 executeInTransaction 미진입 — ensure도 호출되면 안 된다.
         verify(walletBalanceWriter, never()).ensureBalanceRow(any(), any());
+        // WTX-04: 멱등 replay(캐시 hit)는 신규 처리가 아니므로 rate-limit 토큰을 소모하지 않는다.
+        verify(rateLimitHelper, never()).tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class));
     }
 
     @Test
@@ -455,6 +457,8 @@ class TransferServiceImplExecuteTest {
         verify(walletBalanceWriter, never()).ensureBalanceRow(any(), any());
         // 회귀 가드: replay는 어떤 분기로도 흔적을 박지 않는다.
         verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
+        // WTX-04: Layer 2 멱등 재반환도 신규 처리가 아니므로 rate-limit 토큰을 소모하지 않는다.
+        verify(rateLimitHelper, never()).tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class));
     }
 
     @Test
@@ -810,8 +814,12 @@ class TransferServiceImplExecuteTest {
     // ===== 신규: P1 rate-limit =====
 
     @Test
-    @DisplayName("Rate-limit 초과(tryAcquire=false) → TRANSFER4006, 캐시/DB/락 모두 미진입")
+    @DisplayName("Rate-limit 초과(tryAcquire=false) → TRANSFER4006, 실제 자금이동(지갑/락/저장) 미진입(WTX-04: dedup 뒤에서 차단)")
     void execute_rateLimit_초과_TRANSFER4006() {
+        // WTX-04: rate-limit은 이제 Layer1(캐시)·Layer2(DB) dedup *뒤*에 위치한다. 신규 키라 캐시/DB는 miss로
+        // 거친 뒤 rate-limit에서 막힌다(둘 다 stub 필요).
+        stubCacheMiss();
+        stubDbMiss();
         // 기본 @BeforeEach가 true로 설정한 stub을 false로 덮어쓴다(이 케이스 한정).
         given(rateLimitHelper.tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class)))
                 .willReturn(false);
@@ -821,10 +829,8 @@ class TransferServiceImplExecuteTest {
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(TransferErrorCode.RATE_LIMIT_EXCEEDED);
 
-        // 진입 최상단에서 차단 — 캐시/DB/락/저장 모두 미진입.
-        verifyNoInteractions(idempotencyCacheHelper, walletRepository,
-                walletBalanceRepository, distributedLockHelper);
-        verify(transactionRepository, never()).findByIdempotencyKey(anyString());
+        // dedup(캐시/DB)은 거치되, 실제 자금 이동(지갑/락/저장)은 미진입.
+        verifyNoInteractions(walletRepository, walletBalanceRepository, distributedLockHelper);
         verify(transactionRepository, never()).save(any());
     }
 
