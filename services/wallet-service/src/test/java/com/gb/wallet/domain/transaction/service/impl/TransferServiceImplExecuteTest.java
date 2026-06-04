@@ -53,6 +53,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
@@ -747,6 +750,27 @@ class TransferServiceImplExecuteTest {
 
         verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
         verifyNoInteractions(bankClient);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    // ===== WTX-02: 빈 Idempotency-Key 서비스단 가드(비-HTTP 경로) =====
+
+    @ParameterizedTest(name = "[{index}] idempotencyKey=\"{0}\"")
+    @NullAndEmptySource
+    @ValueSource(strings = {"   ", "\t"})
+    @DisplayName("WTX-02: 빈/공백 Idempotency-Key → COMMON4001, rate-limit/캐시/DB/락 모두 미진입(side effect 전 fail-fast)")
+    void execute_빈_idempotencyKey_COMMON4001(String blankKey) {
+        assertThatThrownBy(() -> service.execute(SENDER_USER, blankKey, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+
+        // 모든 side effect 전에 차단 — rate-limit 토큰 소모/캐시/DB/락 진입 0.
+        // (rateLimitHelper는 @BeforeEach가 lenient 스텁해 두므로 never()로 "코드가 호출 안 함"만 검증.)
+        verify(rateLimitHelper, never()).tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class));
+        verifyNoInteractions(idempotencyCacheHelper, walletRepository,
+                walletBalanceRepository, distributedLockHelper);
+        verify(transactionRepository, never()).findByIdempotencyKey(anyString());
         verify(transactionRepository, never()).save(any());
     }
 

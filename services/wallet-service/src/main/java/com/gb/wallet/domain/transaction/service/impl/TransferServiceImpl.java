@@ -78,6 +78,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 @Slf4j
 @Service
@@ -327,6 +328,14 @@ public class TransferServiceImpl implements TransferService {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public TransferExecuteResponse execute(String userPublicId, String idempotencyKey,
                                            TransferExecuteRequest request) {
+        // 비-HTTP 경로(스케줄러·내부 직접 호출) 서비스단 가드(WTX-02): HTTP는 컨트롤러
+        // @RequestHeader("Idempotency-Key") @NotBlank로 막지만(WTX-01), 빈 키가 멱등 3-layer 키 스코프
+        // (cacheKey/findByIdempotencyKey)를 무력화하므로 모든 side effect(rate-limit/캐시/DB) 전에
+        // fail-fast로 COMMON4001 처리한다.
+        if (!StringUtils.hasText(idempotencyKey)) {
+            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+        }
+
         // 0) Rate-limit — user 단위 고정 윈도. 폭주 차단(외부 자금 이동 보호). Redis 장애 시 fail-open(통과).
         //    초과 시 TRANSFER4006(429). 캐시·검증 비용을 절감하기 위해 진입 최상단에 둔다.
         String rateLimitKey = TRANSFER_RATE_LIMIT_PREFIX + userPublicId;
