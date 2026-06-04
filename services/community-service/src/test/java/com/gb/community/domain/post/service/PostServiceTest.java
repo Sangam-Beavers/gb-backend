@@ -22,6 +22,7 @@ import com.gb.community.global.client.MemberClient;
 import com.gb.community.global.client.MemberInfo;
 import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -53,12 +54,12 @@ class PostServiceTest {
     private static final String OTHER = "00000000-0000-0000-0000-000000000009";
     private static final String PID = "post-uuid-1";
 
-    private static final MemberInfo MINH = new MemberInfo("Minh", true, "GREEN");
+    private static final MemberInfo MINH = new MemberInfo("Minh", true);
 
     // ----- create -----
 
     @Test
-    @DisplayName("작성 정상: 저장 + 작성자 정보 매핑, image_urls는 빈 배열, category 문자열 매핑")
+    @DisplayName("작성 정상: 저장 + 작성자 정보 매핑, category 문자열 매핑")
     void createPost_정상() {
         Post saved = Post.of(USER, PostCategory.JOB, "제목", "본문");
         given(postRepository.save(any(Post.class))).willReturn(saved);
@@ -69,10 +70,8 @@ class PostServiceTest {
         assertThat(res.getCategory()).isEqualTo("JOB");
         assertThat(res.getTitle()).isEqualTo("제목");
         assertThat(res.getContent()).isEqualTo("본문");
-        assertThat(res.getImageUrls()).isEmpty();
         assertThat(res.getAuthorNickname()).isEqualTo("Minh");
         assertThat(res.isAuthorIsVerified()).isTrue();
-        assertThat(res.getAuthorTemperature()).isEqualTo("GREEN");
         verify(postRepository).save(any(Post.class));
     }
 
@@ -173,6 +172,22 @@ class PostServiceTest {
         verifyNoInteractions(memberClient);
     }
 
+    @Test
+    @DisplayName("수정: 본인 글이지만 all-blank(category·title·content 모두 비움) → COMMON4001, 변경·member 호출 없음")
+    void updatePost_all_blank() {
+        Post post = Post.of(USER, PostCategory.JOB, "title", "content");
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+
+        // title은 공백("  ") — nullIfBlank로 null 정규화되어 세 값 모두 변경 없음 → 빈 PATCH로 거절돼야 한다.
+        assertThatThrownBy(() -> service.updatePost(USER, PID, updateReq(null, "  ", null)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+
+        assertThat(post.getTitle()).isEqualTo("title"); // 변경 안 됨
+        verifyNoInteractions(memberClient);
+    }
+
     // ----- delete -----
 
     @Test
@@ -256,12 +271,13 @@ class PostServiceTest {
         Post b = Post.of(USER, PostCategory.VISA, "t2", "c2");
         given(postRepository.search(any(), any(), any()))
                 .willReturn(new PageImpl<>(List.of(a, b), PageRequest.of(0, 20), 2));
-        given(memberClient.getMember(USER)).willReturn(MINH);
+        given(memberClient.getMembers(List.of(USER))).willReturn(Map.of(USER, MINH));
 
         PostListResponse res = service.getPosts(null, null, "latest", 0, 20);
 
         assertThat(res.getPosts()).hasSize(2);
-        verify(memberClient, times(1)).getMember(USER);
+        // 같은 작성자 2건이어도 distinct로 묶어 배치 1회(작성자 1명짜리 리스트)만 호출한다.
+        verify(memberClient, times(1)).getMembers(List.of(USER));
     }
 
     @Test
@@ -295,15 +311,15 @@ class PostServiceTest {
         Post p2 = Post.of(OTHER, PostCategory.VISA, "t2", "c2");
         Page<Post> page = new PageImpl<>(List.of(p1, p2), PageRequest.of(0, 20), 2);
         given(postRepository.search(any(), any(), any())).willReturn(page);
-        given(memberClient.getMember(USER)).willReturn(MINH);
-        given(memberClient.getMember(OTHER)).willReturn(new MemberInfo("Sokha", false, "YELLOW"));
+        given(memberClient.getMembers(List.of(USER, OTHER)))
+                .willReturn(Map.of(USER, MINH, OTHER, new MemberInfo("Sokha", false)));
 
         PostListResponse res = service.getPosts(null, null, "latest", 0, 20);
 
         assertThat(res.getPosts()).hasSize(2);
         assertThat(res.getTotalElements()).isEqualTo(2);
-        verify(memberClient).getMember(USER);
-        verify(memberClient).getMember(OTHER);
+        // 서로 다른 작성자 2명을 배치 1회(distinct 작성자 id 리스트)로 조회한다.
+        verify(memberClient).getMembers(List.of(USER, OTHER));
     }
 
     // ----- helpers -----

@@ -3,6 +3,7 @@ package com.gb.community.global.config;
 import com.gb.common.security.RestAuthenticationEntryPoint;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -20,7 +21,9 @@ import org.springframework.security.web.SecurityFilterChain;
  * ({@link com.gb.community.global.security.CurrentUserPublicId} 참고). 인증 미구현 시절의
  * {@code X-User-Public-Id} 헤더 임시 처리를 대체한다.
  *
- * <p>모든 community 비즈니스 엔드포인트는 인증 필요(api-spec 전부 Auth ✅). 문서/헬스체크만 공개.
+ * <p>대부분의 community 비즈니스 엔드포인트는 인증 필요(api-spec Auth ✅). 단 **주요 QnA 목록**
+ * ({@code GET /api/v1/community/qna})은 로그인 전 사용자도 인기 질문을 둘러볼 수 있도록 공개(api-spec §8).
+ * 문서·헬스체크는 항상 공개.
  */
 @Configuration
 @EnableWebSecurity
@@ -37,8 +40,12 @@ public class SecurityConfig {
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // 문서 · 헬스체크만 공개. 그 외 community 엔드포인트는 전부 인증 필요(api-spec Auth ✅).
+                        // 문서 · 헬스체크는 항상 공개.
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/actuator/**").permitAll()
+                        // 주요 QnA 목록은 비로그인 사용자도 인기 질문을 둘러볼 수 있도록 공개(api-spec §8).
+                        // GET만 명시 — 다른 메서드(POST/PUT/DELETE)는 향후 추가돼도 인증 필요 정책 유지.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/community/qna").permitAll()
+                        // 그 외 community 엔드포인트는 전부 인증 필요(api-spec Auth ✅).
                         .anyRequest().authenticated())
                 // 검표원: issuer-uri의 JWKS로 RS256 토큰 검증. 실패(만료·위조·서명 불일치) 시 AUTH4011.
                 //   ⚠️ entry point를 oauth2ResourceServer DSL "안"에도 건다. BearerTokenAuthenticationFilter는

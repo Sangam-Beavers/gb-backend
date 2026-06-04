@@ -14,8 +14,7 @@ import lombok.Getter;
  * 식별자는 {@code public_id}만 노출(내부 id 비노출), 시각은 UTC Z 문자열(CLAUDE.md §5).
  *
  * <p>작성자 표시 정보(닉네임/인증배지)는 {@link MemberInfo}(MemberClient 조회 결과)에서 가져온다 —
- * MSA 경계 회원 참조라 DB 직접 SELECT 없이 client로 받는다(CLAUDE.md §7). 댓글 응답에는 이웃 온도가 없어
- * (api-spec §6) {@code temperatureGrade}는 싣지 않는다.
+ * MSA 경계 회원 참조라 DB 직접 SELECT 없이 client로 받는다(CLAUDE.md §7).
  *
  * <p>boolean 필드명을 {@code authorIsVerified}로 둬 게터 {@code isAuthorIsVerified()} → 프로퍼티
  * {@code authorIsVerified} → {@code author_is_verified}로 변환되게 한다(필드명을 'is'로 시작하면 'is'가

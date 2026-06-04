@@ -2,34 +2,44 @@ package com.gb.community.domain.comment.controller;
 
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
+import com.gb.common.response.SuccessStatus;
+import com.gb.community.domain.comment.dto.request.CreateCommentRequest;
 import com.gb.community.domain.comment.dto.response.CommentListResponse;
+import com.gb.community.domain.comment.dto.response.CommentResponse;
 import com.gb.community.domain.comment.service.CommentService;
+import com.gb.community.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 커뮤니티 댓글 API — 댓글 목록 조회 (api-spec §7).
+ * 커뮤니티 댓글 API — 목록 조회 / 작성 / 삭제 (api-spec §6·§7·§7-2).
  *
- * <p>{@code GET /posts/{id}/comments}는 {@code PostController}/{@code LikeController}와 같은 베이스 경로
+ * <p>{@code /posts/{id}/comments}는 {@code PostController}/{@code LikeController}와 같은 베이스 경로
  * ({@code /api/v1/community/posts})에 공존한다. 리터럴 세그먼트(/comments)가 path-variable과 충돌하지 않아
  * 별도 컨트롤러로 둔다(도메인형 패키지 분리, CLAUDE.md §3).
  *
- * <p>본 PR 범위는 댓글 목록 조회만 — 작성/수정/삭제·대댓글·좋아요는 별도 이슈다.
+ * <p>현재 댓글 목록 조회·작성·삭제를 제공한다. 대댓글({@code parent_comment_public_id} 항상 null)·수정은 별도 이슈다.
  */
 @Tag(name = "Community Comment", description = "커뮤니티 댓글 API")
 @RestController
@@ -49,6 +59,10 @@ public class CommentController {
             "{\"success\":false,\"code\":\"COMMON5000\",\"message\":\"서버 오류가 발생했습니다.\"}";
     private static final String EX_COMMUNITY4001 =
             "{\"success\":false,\"code\":\"COMMUNITY4001\",\"message\":\"존재하지 않는 게시글입니다.\"}";
+    private static final String EX_COMMUNITY4002 =
+            "{\"success\":false,\"code\":\"COMMUNITY4002\",\"message\":\"존재하지 않는 댓글입니다.\"}";
+    private static final String EX_COMMON4031 =
+            "{\"success\":false,\"code\":\"COMMON4031\",\"message\":\"접근 권한이 없습니다.\"}";
 
     private final CommentService commentService;
 
@@ -87,9 +101,103 @@ public class CommentController {
     @GetMapping("/{id}/comments")
     public ApiResponse<CommentListResponse> getComments(
             @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId,
-            @RequestParam(defaultValue = "0") @Min(0) int page,
+            // page 상한(10000): 깊은 페이지네이션(거대한 OFFSET) 방어 가드. size와 대칭(둘 다 @Max).
+            @RequestParam(defaultValue = "0") @Min(0) @Max(10000) int page,
             // size 상한(100)은 명세에 없지만 과도한 조회를 막는 방어적 가드(Post/Like 목록과 동일).
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return ApiResponse.success(commentService.getComments(postPublicId, page, size));
+    }
+
+    /** 댓글 작성. 🔒 JWT 필요. 본인 명의로 INSERT + 게시글 comment_count +1. */
+    @Operation(
+            summary = "댓글 작성",
+            description = "게시글에 댓글을 작성한다. 작성자는 JWT public_id claim에서 식별된다. "
+                    + "작성 성공 시 게시글의 comment_count가 1 증가한다. "
+                    + "대댓글은 본 사이클 범위 밖 — 모든 댓글이 최상위로 INSERT된다(parent_comment_public_id 응답은 항상 null). "
+                    + "없거나 삭제된 게시글이면 404 COMMUNITY4001.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "작성 성공. data에 CommentResponse가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 잘못된 요청 (content 빈값/길이 초과/path variable 형식 위반).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "COMMUNITY4001 - 존재하지 않는 게시글입니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMUNITY4001", value = EX_COMMUNITY4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000)))
+    })
+    @PostMapping("/{id}/comments")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ApiResponse<CommentResponse> createComment(
+            @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId,
+            @CurrentUserPublicId String userPublicId,
+            @Valid @RequestBody CreateCommentRequest request) {
+        return ApiResponse.success(SuccessStatus.CREATED,
+                commentService.createComment(postPublicId, userPublicId, request));
+    }
+
+    /** 댓글 삭제(soft delete). 🔒 JWT 필요. 본인 댓글만 삭제 가능 + 게시글 comment_count -1. */
+    @Operation(
+            summary = "댓글 삭제",
+            description = "본인이 작성한 댓글을 soft delete한다(deleted_at만 갱신, row 보존). "
+                    + "삭제 성공 시 게시글의 comment_count가 1 감소한다(같은 트랜잭션 내). "
+                    + "응답 body는 data: null. 본인이 아닌 경우 403 COMMON4031. "
+                    + "이미 삭제된 댓글의 재삭제는 404 COMMUNITY4002로 응답한다(deleted_at IS NULL 필터). "
+                    + "URL의 postId와 댓글의 실제 게시글이 다르면 404 COMMUNITY4002로 통일.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "삭제 성공. data는 null."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - path variable 형식 위반(빈값/36자 초과).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "COMMON4031 - 본인이 작성한 댓글이 아닙니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4031", value = EX_COMMON4031))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "COMMUNITY4001 - 존재하지 않는 게시글입니다. / "
+                            + "COMMUNITY4002 - 존재하지 않는 댓글입니다(미존재·이미 삭제됨·URL 불일치).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = {
+                                    @ExampleObject(name = "COMMUNITY4001", value = EX_COMMUNITY4001),
+                                    @ExampleObject(name = "COMMUNITY4002", value = EX_COMMUNITY4002)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000)))
+    })
+    @DeleteMapping("/{postId}/comments/{commentId}")
+    public ApiResponse<Void> deleteComment(
+            @PathVariable("postId") @NotBlank @Size(max = 36) String postPublicId,
+            @PathVariable("commentId") @NotBlank @Size(max = 36) String commentPublicId,
+            @CurrentUserPublicId String userPublicId) {
+        commentService.deleteComment(postPublicId, commentPublicId, userPublicId);
+        return ApiResponse.success(null);
     }
 }

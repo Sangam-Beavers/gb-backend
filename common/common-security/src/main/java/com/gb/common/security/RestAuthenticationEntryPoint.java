@@ -25,7 +25,12 @@ import org.springframework.stereotype.Component;
 @Component
 public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    // Spring이 관리하는 ObjectMapper를 주입받는다(프로젝트 Jackson 설정 일관 적용, DI 원칙).
+    private final ObjectMapper objectMapper;
+
+    public RestAuthenticationEntryPoint(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     @Override
     public void commence(

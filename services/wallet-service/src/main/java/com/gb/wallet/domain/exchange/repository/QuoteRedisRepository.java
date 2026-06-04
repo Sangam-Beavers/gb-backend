@@ -1,6 +1,8 @@
 package com.gb.wallet.domain.exchange.repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gb.common.exception.BusinessException;
+import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.exchange.dto.QuoteData;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -20,7 +22,7 @@ import org.springframework.stereotype.Repository;
  * 만료 시각을 별도로 계산·비교할 필요가 없다.
  *
  * <p>QuoteData(record)는 JSON 문자열로 직렬화해 RBucket에 담는다. 직렬화는 ObjectMapper로 처리하며,
- * 실패는 견적 발급/조회를 진행할 수 없는 상황이므로 호출 측에서 서버 오류로 변환한다.
+ * 직렬화 실패는 견적을 진행할 수 없는 상황이라 {@code BusinessException}(COMMON5000)으로 던진다.
  */
 @Slf4j
 @Repository
@@ -45,7 +47,7 @@ public class QuoteRedisRepository {
             bucket.set(json, TTL_MINUTES, TimeUnit.MINUTES);
         } catch (Exception e) {
             log.error("견적 Redis 저장 실패. quotePublicId={}", quote.quotePublicId(), e);
-            throw new IllegalStateException("견적 저장에 실패했습니다.", e);
+            throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR, e);
         }
     }
 
@@ -64,8 +66,17 @@ public class QuoteRedisRepository {
         }
     }
 
-    /** 실행 완료된 견적을 삭제한다(재사용 방지). 없으면 no-op. */
+    /**
+     * 실행 완료된 견적을 삭제한다(재사용 방지). 없으면 no-op.
+     *
+     * <p>이미 환전이 완료된 뒤의 정리 작업이라 best-effort다 — Redis 일시 장애로 삭제가 실패해도 견적은
+     * TTL(5분)로 자동 만료되므로, 예외를 전파해 완료된 거래 응답을 깨뜨리지 않고 경고만 남긴다(find의 비치명 패턴).
+     */
     public void delete(String quotePublicId) {
-        redissonClient.getBucket(KEY_PREFIX + quotePublicId).delete();
+        try {
+            redissonClient.getBucket(KEY_PREFIX + quotePublicId).delete();
+        } catch (Exception e) {
+            log.warn("견적 Redis 삭제 실패(무시 — TTL로 자동 만료). quotePublicId={}", quotePublicId, e);
+        }
     }
 }

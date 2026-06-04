@@ -89,7 +89,8 @@ public class PostController {
             @RequestParam(required = false) String category,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false, defaultValue = "latest") String sort,
-            @RequestParam(defaultValue = "0") @Min(0) int page,
+            // page 상한(10000): 깊은 페이지네이션(거대한 OFFSET) 방어 가드. size와 대칭(둘 다 @Max).
+            @RequestParam(defaultValue = "0") @Min(0) @Max(10000) int page,
             // size 상한(100)은 명세에 없지만 과도한 조회를 막는 방어적 가드.
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return ApiResponse.success(postService.getPosts(category, keyword, sort, page, size));
@@ -98,7 +99,7 @@ public class PostController {
     /** 게시글 단건 조회. 🔒 JWT 필요. */
     @Operation(
             summary = "게시글 단건 조회",
-            description = "게시글 public_id로 본문 + 작성자(닉네임/인증배지/이웃온도) + 카운트를 반환한다. "
+            description = "게시글 public_id로 본문 + 작성자(닉네임/인증배지) + 카운트를 반환한다. "
                     + "삭제됐거나 없는 글이면 404 COMMUNITY4001.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -134,8 +135,7 @@ public class PostController {
     /** 게시글 작성. 🔒 JWT 필요. */
     @Operation(
             summary = "게시글 작성",
-            description = "category·title·content(필수)로 게시글을 작성한다. image_urls(선택)는 현재 미저장이며 "
-                    + "응답의 image_urls는 빈 배열로 반환된다. 작성 언어는 현재 \"ko\"로 고정된다(인증/locale 연동 전).")
+            description = "category·title·content(필수)로 게시글을 작성한다. 작성 언어는 현재 \"ko\"로 고정된다(인증/locale 연동 전).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -169,7 +169,7 @@ public class PostController {
     @Operation(
             summary = "게시글 수정",
             description = "본인 게시글의 category/title/content를 부분 수정한다(보낸 필드만 변경). "
-                    + "타인 글이면 403 COMMON4031, 없는 글이면 404 COMMUNITY4001. image_urls는 미저장.")
+                    + "타인 글이면 403 COMMON4031, 없는 글이면 404 COMMUNITY4001.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",

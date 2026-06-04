@@ -9,11 +9,13 @@ import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 /**
  * 모든 서비스에 공통 적용되는 전역 예외 처리기.
@@ -74,11 +76,27 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ServletRequestBindingException.class)
     public ResponseEntity<ErrorResponse> handleBindingException(ServletRequestBindingException e) {
         ErrorCode errorCode = CommonErrorCode.INVALID_REQUEST;
-        String message = e.getMessage() != null ? e.getMessage() : errorCode.getMessage();
-        log.warn("Request binding failed: code={}, message={}", errorCode.getCode(), message);
+        // 프레임워크 raw 메시지(예: "Required request header 'X-...' is not present")는 내부 헤더/파라미터명을
+        // 노출할 수 있어 응답엔 고정 메시지만 싣고, 진단용 상세는 서버 로그로만 남긴다.
+        log.warn("Request binding failed: code={}, detail={}", errorCode.getCode(), e.getMessage());
         return ResponseEntity
                 .status(errorCode.getHttpStatus())
-                .body(ApiResponse.fail(errorCode.getCode(), message));
+                .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));
+    }
+
+    /**
+     * 본문 파싱 실패({@link HttpMessageNotReadableException} — 잘못된/빈 JSON·타입 불일치 본문)와
+     * {@code @RequestParam}/{@code @PathVariable} 타입 변환 실패({@link MethodArgumentTypeMismatchException})
+     * → COMMON4001(400). 둘 다 클라이언트 입력 문제라 fallback 500이 아닌 400으로 통일한다.
+     * 프레임워크 raw 메시지는 내부 구조를 노출할 수 있어 응답엔 고정 메시지만, 상세는 서버 로그로만 남긴다.
+     */
+    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
+    public ResponseEntity<ErrorResponse> handleNotReadableOrTypeMismatch(Exception e) {
+        ErrorCode errorCode = CommonErrorCode.INVALID_REQUEST;
+        log.warn("Malformed request body/param: code={}, detail={}", errorCode.getCode(), e.getMessage());
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));
     }
 
     /** 처리되지 않은 모든 예외 → COMMON5000. 스택트레이스 포함 error 레벨 로깅. */

@@ -21,12 +21,6 @@ import org.springframework.data.repository.query.Param;
  */
 public interface PostRepository extends JpaRepository<Post, Long> {
 
-    /**
-     * 스켈레톤부터 있던 단건 조회. soft delete된 글도 잡히므로 CRUD 흐름에서는 쓰지 않는다.
-     * (삭제건 제외가 필요하면 {@link #findByPublicIdAndDeletedAtIsNull}을 쓴다.)
-     */
-    Optional<Post> findByPublicId(String publicId);
-
     /** 활성(미삭제) 게시글 단건 조회. 단건 조회/수정/삭제 흐름에서 사용한다. */
     Optional<Post> findByPublicIdAndDeletedAtIsNull(String publicId);
 
@@ -82,6 +76,23 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     void decrementLikeCount(@Param("id") Long id);
 
     /**
+     * 댓글 수 캐시({@code comment_count}) 원자적 +1 (댓글 작성 시). 엔티티 RMW의 lost update를 피해
+     * DB에서 원자적으로 증가시킨다({@link #incrementLikeCount}와 동일 패턴). 벌크 UPDATE라 1차 캐시의
+     * Post 인스턴스 {@code commentCount}는 갱신되지 않으나, 응답에 댓글 수를 싣지 않아 보정 불필요.
+     */
+    @Modifying
+    @Query("UPDATE Post p SET p.commentCount = p.commentCount + 1 WHERE p.id = :id")
+    void incrementCommentCount(@Param("id") Long id);
+
+    /**
+     * 댓글 수 캐시({@code comment_count}) 원자적 -1 (댓글 삭제 시).
+     * {@code comment_count > 0} 가드로 음수로 내려가지 않게 막는다.
+     */
+    @Modifying
+    @Query("UPDATE Post p SET p.commentCount = p.commentCount - 1 WHERE p.id = :id AND p.commentCount > 0")
+    void decrementCommentCount(@Param("id") Long id);
+
+    /**
      * like_count 캐시의 현재 저장값 단건 조회.
      *
      * <p>{@link #incrementLikeCount}/{@link #decrementLikeCount} 같은 벌크 UPDATE 직후, 같은 트랜잭션에서
@@ -91,4 +102,23 @@ public interface PostRepository extends JpaRepository<Post, Long> {
      */
     @Query("SELECT p.likeCount FROM Post p WHERE p.id = :id")
     Optional<Integer> findLikeCountById(@Param("id") Long id);
+
+    /**
+     * 주요 QnA 목록 조회 (api-spec §8) — 특정 카테고리의 활성 게시글을 답변(댓글) 수 내림차순으로
+     * 상위 N건 반환한다. 페이지네이션 메타 없는 고정 N건 목록(Top N) 용도다.
+     *
+     * <p>정렬: {@code comment_count DESC, id DESC}. comment_count 동률에서 최근 글이 위로 오도록
+     * id DESC를 tie-breaker로 둔다(id는 외부 노출 X, 정렬 키로만 사용 — conventions §5).
+     *
+     * <p>입력의 size 가드는 서비스 책임이며, 여기는 호출 측이 만든 {@link Pageable}을 그대로 사용한다.
+     * count 쿼리는 Top N 용도라 호출하지 않도록 {@link Page} 대신 {@link java.util.List}를 반환한다.
+     */
+    @Query("""
+            SELECT p FROM Post p
+            WHERE p.deletedAt IS NULL
+              AND p.category = :category
+            ORDER BY p.commentCount DESC, p.id DESC
+            """)
+    java.util.List<Post> findTopByCategoryOrderByCommentCountDesc(
+            @Param("category") PostCategory category, Pageable pageable);
 }

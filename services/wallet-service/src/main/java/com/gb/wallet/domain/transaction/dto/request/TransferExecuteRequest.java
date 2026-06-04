@@ -44,9 +44,10 @@ public record TransferExecuteRequest(
         @NotBlank
         String transferType,
 
-        @Schema(description = "송금 금액 (string 십진수, 소수점 최대 4자리)", example = "10000.0000")
+        @Schema(description = "송금 금액 (string 십진수, 소수점 최대 4자리, 양수)", example = "10000.0000")
         @NotBlank
-        @Pattern(regexp = "^\\d+(\\.\\d{1,4})?$",
+        // 양수 십진수만 통과: 0, 0.0, 0.0000 차단(부정형 lookahead). 메시지의 "positive" 계약과 일치.
+        @Pattern(regexp = "^(?!0+(\\.0{1,4})?$)\\d+(\\.\\d{1,4})?$",
                 message = "amount must be a positive decimal with up to 4 fractional digits")
         String amount,
 

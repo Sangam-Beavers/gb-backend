@@ -14,7 +14,9 @@ import org.springframework.http.HttpStatus;
 public enum WalletErrorCode implements ErrorCode {
 
     WALLET_NOT_FOUND(HttpStatus.NOT_FOUND, "WALLET4001", "존재하지 않는 지갑입니다."),
-    INSUFFICIENT_BALANCE(HttpStatus.BAD_REQUEST, "WALLET4002", "지갑 잔액이 부족합니다.");
+    // WALLET4002 = 422(UNPROCESSABLE_ENTITY): 요청 형식은 정상이나 잔액이라는 비즈니스 상태 때문에 처리 불가.
+    // 전 도메인(송금·환전 등) 공용 코드이며 422가 SSOT — 명세 §8/§9·conventions와 정렬.
+    INSUFFICIENT_BALANCE(HttpStatus.UNPROCESSABLE_ENTITY, "WALLET4002", "지갑 잔액이 부족합니다.");
 
     private final HttpStatus httpStatus; // @Getter가 getHttpStatus/getCode/getMessage 생성 → ErrorCode 충족
     private final String code;

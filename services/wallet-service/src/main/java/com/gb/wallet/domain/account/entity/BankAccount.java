@@ -24,8 +24,7 @@ import lombok.NoArgsConstructor;
  * {@code @ManyToOne} 매핑하지 않는다. 사용자별 목록 조회가 핵심 액세스 패턴이라
  * {@code user_public_id} 단일 컬럼 인덱스를 둔다.
  *
- * <p>{@code account_number}는 현재 평문 저장이며 응답 직전 마스킹만 적용된다.
- * 실제 컬럼 암호화는 후속 보안 이슈에서 다룬다.
+ * <p>{@code account_number}는 평문 저장이며 응답 직전 마스킹만 적용된다.
  */
 @Entity
 @Getter
@@ -56,6 +55,16 @@ public class BankAccount extends BaseEntity {
     @Column(name = "account_number", length = 100, nullable = false)
     private String accountNumber;
 
+    /**
+     * 외부 계좌 예금주명. 계좌 등록 시 holder 조회({@code GET /accounts/holder}) 응답에서 받아 저장한다
+     * (외부 은행이 알려준 진짜 예금주) — 사용자 입력값이 아닌 외부 신뢰 source. REMITTANCE 송금 시
+     * {@code Transaction.receiverName}에 snapshot으로 복사돼 송금 확인증의 receiver_name 출처가 된다.
+     *
+     * <p>NULLABLE — 컬럼 추가 전 등록된 기존 계좌는 null. 신규 등록은 Service에서 항상 채움.
+     */
+    @Column(name = "holder_name", length = 100)
+    private String holderName;
+
     /** 외부(Mock) 은행이 발급한 계좌 토큰. 인증 완료 전이면 null. */
     @Column(name = "mock_account_token", length = 36)
     private String mockAccountToken;
@@ -74,14 +83,31 @@ public class BankAccount extends BaseEntity {
 
     @Builder
     private BankAccount(String publicId, String userPublicId, Bank bank, String accountNumber,
-                        String mockAccountToken, boolean isVirtual, boolean isPrimary, boolean isActive) {
+                        String holderName, String mockAccountToken,
+                        boolean isVirtual, boolean isPrimary, boolean isActive) {
         this.publicId = publicId;
         this.userPublicId = userPublicId;
         this.bank = bank;
         this.accountNumber = accountNumber;
+        this.holderName = holderName;
         this.mockAccountToken = mockAccountToken;
         this.isVirtual = isVirtual;
         this.isPrimary = isPrimary;
         this.isActive = isActive;
+    }
+
+    /** 주 계좌로 지정한다(주 계좌 변경 시 사용). {@code @Setter} 대신 의도를 드러내는 도메인 메서드. */
+    public void markAsPrimary() {
+        this.isPrimary = true;
+    }
+
+    /** 주 계좌 지정을 해제한다(다른 계좌를 주 계좌로 바꿀 때 기존 주 계좌에 적용). */
+    public void releasePrimary() {
+        this.isPrimary = false;
+    }
+
+    /** soft-delete — 비활성 처리한다. 비활성 계좌는 목록·조회 finder에서 제외된다. */
+    public void deactivate() {
+        this.isActive = false;
     }
 }

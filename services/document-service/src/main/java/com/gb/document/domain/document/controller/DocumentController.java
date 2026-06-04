@@ -43,8 +43,13 @@ public class DocumentController {
             "{\"success\":false,\"code\":\"DOCUMENT4001\",\"message\":\"존재하지 않는 문서입니다.\"}";
     private static final String EX_COMMON4031 =
             "{\"success\":false,\"code\":\"COMMON4031\",\"message\":\"접근 권한이 없습니다.\"}";
+<<<<<<< HEAD
     private static final String EX_AUTH4011 =
             "{\"success\":false,\"code\":\"AUTH4011\",\"message\":\"인증이 필요합니다.\"}";
+=======
+    private static final String EX_COMMON4001 =
+            "{\"success\":false,\"code\":\"COMMON4001\",\"message\":\"요청 값이 올바르지 않습니다.\"}";
+>>>>>>> origin/develop
     private static final String EX_COMMON4221 =
             "{\"success\":false,\"code\":\"COMMON4221\",\"message\":\"처리할 수 없는 요청입니다.\"}";
     private static final String EX_COMMON5000 =
@@ -65,6 +70,7 @@ public class DocumentController {
                     description = "생성 성공. data에 SubmissionResponse(public_id, upload_url, expires_at)."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
+<<<<<<< HEAD
                     description = "COMMON4001 - 요청 본문 검증 실패(파일명 형식/필드 누락 등).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -72,6 +78,11 @@ public class DocumentController {
                     description = "AUTH4011 - 인증이 필요합니다(토큰 누락·만료·위조).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+=======
+                    description = "COMMON4001 - 요청 본문 검증 실패(파일명 형식/필드 누락 등) 또는 X-User-Public-Id 헤더 누락.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
+>>>>>>> origin/develop
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류.",
@@ -93,10 +104,17 @@ public class DocumentController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "조회 성공."),
+<<<<<<< HEAD
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
                     description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+=======
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "COMMON4001 - X-User-Public-Id 헤더 누락(필수 헤더 미전송).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
+>>>>>>> origin/develop
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
                     description = "COMMON4031 - 다른 사용자의 문서.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
@@ -122,10 +140,17 @@ public class DocumentController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "조회 성공. data에 DocumentResultResponse."),
+<<<<<<< HEAD
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
                     description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+=======
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "COMMON4001 - X-User-Public-Id 헤더 누락(필수 헤더 미전송).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
+>>>>>>> origin/develop
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
                     description = "COMMON4031 - 다른 사용자의 문서.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
@@ -154,10 +179,17 @@ public class DocumentController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "조회 성공. data는 Spring Page 구조(content, totalElements, totalPages, ...)."),
+<<<<<<< HEAD
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
                     description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011)))
+=======
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "COMMON4001 - X-User-Public-Id 헤더 누락(필수 헤더 미전송).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001)))
+>>>>>>> origin/develop
     })
     @GetMapping
     public ApiResponse<Page<DocumentSummaryResponse>> list(
@@ -173,10 +205,17 @@ public class DocumentController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "재요청 접수. status가 ANALYZING으로 전환된다."),
+<<<<<<< HEAD
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
                     description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+=======
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "COMMON4001 - X-User-Public-Id 헤더 누락(필수 헤더 미전송).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
+>>>>>>> origin/develop
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
                     description = "COMMON4031 - 다른 사용자의 문서.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),

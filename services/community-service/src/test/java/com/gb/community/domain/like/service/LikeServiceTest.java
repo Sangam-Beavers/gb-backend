@@ -28,6 +28,7 @@ import com.gb.community.global.client.MemberInfo;
 import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -59,7 +60,7 @@ class LikeServiceTest {
     private static final String PID = "post-uuid-1";
     private static final Long POST_ID = 1L;
 
-    private static final MemberInfo MINH = new MemberInfo("Minh", true, "GREEN");
+    private static final MemberInfo MINH = new MemberInfo("Minh", true);
 
     // ----- like -----
 
@@ -231,7 +232,7 @@ class LikeServiceTest {
         LikedPostProjection r2 = projection(postB, LocalDateTime.of(2026, 5, 26, 9, 30));
         Page<LikedPostProjection> page = new PageImpl<>(List.of(r1, r2), PageRequest.of(0, 20), 2);
         given(likeRepository.findLikedPostsOrderByLikedAt(eq(USER), any())).willReturn(page);
-        given(memberClient.getMember(USER)).willReturn(MINH);
+        given(memberClient.getMembers(List.of(USER))).willReturn(Map.of(USER, MINH));
 
         LikedPostListResponse res = service.getLikedPosts(USER, "latest", 0, 20);
 
@@ -239,7 +240,7 @@ class LikeServiceTest {
         assertThat(res.getTotalElements()).isEqualTo(2);
         assertThat(res.getPosts().get(0).getLikedAt()).isEqualTo("2026-05-27T09:30:00Z");
         assertThat(res.getPosts().get(0).getAuthorNickname()).isEqualTo("Minh");
-        verify(memberClient, times(1)).getMember(USER); // 같은 작성자 2건이어도 1회
+        verify(memberClient, times(1)).getMembers(List.of(USER)); // 같은 작성자 2건 → distinct 1명 배치 1회
     }
 
     // ----- helpers -----

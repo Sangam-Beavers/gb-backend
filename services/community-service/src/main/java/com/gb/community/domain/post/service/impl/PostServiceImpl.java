@@ -16,8 +16,6 @@ import com.gb.community.global.client.MemberInfo;
 import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -43,12 +41,11 @@ public class PostServiceImpl implements PostService {
         Page<Post> result = postRepository.search(categoryFilter, keywordFilter, pageable);
         List<Post> posts = result.getContent();
 
-        // 작성자 표시 정보 조립. 같은 페이지 안의 중복 작성자는 1회만 조회한다.
-        // TODO: member-service 도입 시 건별 호출(N+1)을 batch 조회 API(예: GET /members?ids=...)로 교체.
-        Map<String, MemberInfo> authorsByPublicId = posts.stream()
-                .map(Post::getUserPublicId)
-                .distinct()
-                .collect(Collectors.toMap(Function.identity(), memberClient::getMember));
+        // 작성자 표시 정보를 배치로 1회 조회한다(N+1 회피). 같은 페이지 안의 중복 작성자는 distinct로 1회만.
+        // getMembers는 요청한 모든 id를 키로 포함(누락=fallback)하므로 아래 .get(id)는 null이 되지 않는다.
+        List<String> authorIds = posts.stream().map(Post::getUserPublicId).distinct().toList();
+        Map<String, MemberInfo> authorsByPublicId =
+                authorIds.isEmpty() ? Map.of() : memberClient.getMembers(authorIds);
 
         List<PostSummaryResponse> items = posts.stream()
                 .map(post -> PostSummaryResponse.from(post, authorsByPublicId.get(post.getUserPublicId())))
@@ -72,7 +69,7 @@ public class PostServiceImpl implements PostService {
             // @NotBlank가 1차로 막지만, 방어적으로 한 번 더 — 카테고리는 작성 시 필수.
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
-        // image_urls는 받기만 하고 영속화하지 않는다. language는 "ko" 고정(Post.of).
+        // language는 "ko" 고정(Post.of).
         Post saved = postRepository.save(
                 Post.of(requesterUserPublicId, category, request.getTitle(), request.getContent()));
         return PostDetailResponse.from(saved, memberClient.getMember(requesterUserPublicId));
@@ -87,7 +84,13 @@ public class PostServiceImpl implements PostService {
 
         // category는 보냈을 때만 파싱(잘못된 값 → COMMON4001). title/content는 blank를 "변경 없음"으로 정규화.
         PostCategory newCategory = parseCategory(request.getCategory());
-        post.update(newCategory, nullIfBlank(request.getTitle()), nullIfBlank(request.getContent()));
+        String newTitle = nullIfBlank(request.getTitle());
+        String newContent = nullIfBlank(request.getContent());
+        // 세 값이 모두 없으면 변경할 내용이 없는 빈 PATCH → 조용한 no-op 대신 명시적으로 거절(COMMON4001).
+        if (newCategory == null && newTitle == null && newContent == null) {
+            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+        }
+        post.update(newCategory, newTitle, newContent);
         // 변경은 영속성 컨텍스트 dirty checking으로 커밋 시 반영(별도 save 불필요).
 
         return PostDetailResponse.from(post, memberClient.getMember(post.getUserPublicId()));
@@ -136,9 +139,8 @@ public class PostServiceImpl implements PostService {
      * <ul>
      *   <li>latest(기본) — 최신순(createdAt desc)</li>
      *   <li>popular — 좋아요순(likeCount desc), 동률은 최신순</li>
-     *   <li>accuracy — 키워드 검색 정확도순. 전문검색 미도입이라 현재는 키워드 유무와 무관하게 최신순과
-     *       동일하게 정렬한다(키워드 없는 accuracy도 사실상 latest와 동치).
-     *       TODO: 관련도 랭킹 도입 시 교체.</li>
+     *   <li>accuracy — 키워드 검색 정확도순. 전문검색/관련도 랭킹은 도입하지 않기로 확정(폐지)했으므로
+     *       키워드 유무와 무관하게 최신순(latest)과 동일하게 정렬한다.</li>
      * </ul>
      * 그 외 값은 COMMON4001. id를 마지막 tie-breaker로 둬 정렬을 결정적으로 만든다(노출 X, 정렬 키로만 사용).
      */

@@ -4,6 +4,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
@@ -89,7 +90,7 @@ class PostControllerTest {
     // ----- POST /posts -----
 
     @Test
-    @DisplayName("POST 201: 정상 작성 → 201 + snake_case 직렬화(author_is_verified/image_urls), service 호출")
+    @DisplayName("POST 201: 정상 작성 → 201 + snake_case 직렬화(author_is_verified), service 호출")
     void create_정상_201() throws Exception {
         given(postService.createPost(eq(USER), any())).willReturn(stubDetail());
 
@@ -99,17 +100,13 @@ class PostControllerTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "category", "JOB",
                                 "title", "제목",
-                                "content", "본문",
-                                "image_urls", List.of("https://cdn.example.com/a.jpg")))))
+                                "content", "본문"))))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.public_id").value(PID))
                 .andExpect(jsonPath("$.data.category").value("JOB"))
                 .andExpect(jsonPath("$.data.author_nickname").value("Minh"))
                 .andExpect(jsonPath("$.data.author_is_verified").value(true))
-                .andExpect(jsonPath("$.data.author_temperature").value("GREEN"))
-                .andExpect(jsonPath("$.data.image_urls").isArray())
-                .andExpect(jsonPath("$.data.image_urls.length()").value(0))
                 .andExpect(jsonPath("$.data.created_at").value("2026-05-30T04:15:30Z"));
 
         verify(postService).createPost(eq(USER), any());
@@ -239,6 +236,18 @@ class PostControllerTest {
         verifyNoInteractions(postService);
     }
 
+    @Test
+    @DisplayName("GET 400: page 상한(10000) 초과 → COMMON4001(@Max 위반), service 미호출")
+    void getPosts_page_초과() throws Exception {
+        mockMvc.perform(get("/api/v1/community/posts")
+                        .with(authedJwt())
+                        .param("page", "10001"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(postService);
+    }
+
     // ----- PATCH /posts/{id} -----
 
     @Test
@@ -285,6 +294,31 @@ class PostControllerTest {
         verify(postService).deletePost(USER, PID);
     }
 
+    @Test
+    @DisplayName("DELETE 404: 없는/이미삭제 글(service가 COMMUNITY4001) → 404 + code")
+    void deletePost_없음_404() throws Exception {
+        willThrow(new BusinessException(CommunityErrorCode.POST_NOT_FOUND))
+                .given(postService).deletePost(USER, PID);
+
+        mockMvc.perform(delete("/api/v1/community/posts/{id}", PID)
+                        .with(authedJwt()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMUNITY4001"));
+    }
+
+    @Test
+    @DisplayName("DELETE 403: 타인 글(service가 COMMON4031) → 403 + code")
+    void deletePost_타인_403() throws Exception {
+        willThrow(new BusinessException(CommonErrorCode.FORBIDDEN))
+                .given(postService).deletePost(USER, PID);
+
+        mockMvc.perform(delete("/api/v1/community/posts/{id}", PID)
+                        .with(authedJwt()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("COMMON4031"));
+    }
+
     // ----- helpers -----
 
     private PostDetailResponse stubDetail() {
@@ -293,10 +327,8 @@ class PostControllerTest {
                 .category("JOB")
                 .title("제목")
                 .content("본문")
-                .imageUrls(List.of())
                 .authorNickname("Minh")
                 .authorIsVerified(true)
-                .authorTemperature("GREEN")
                 .likeCount(0)
                 .commentCount(0)
                 .createdAt("2026-05-30T04:15:30Z")

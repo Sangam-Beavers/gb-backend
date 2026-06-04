@@ -8,13 +8,9 @@ package com.gb.community.global.client;
  * <ul>
  *   <li>{@code nickname} — 작성자 닉네임(author_nickname)</li>
  *   <li>{@code isVerified} — 신분증 인증 배지 여부(author_is_verified, requirements §4)</li>
- *   <li>{@code temperatureGrade} — 이웃 온도 등급 문자열(RED/YELLOW/GREEN/PURPLE/BLUE)</li>
  * </ul>
- *
- * <p>{@code temperatureGrade}는 member 도메인의 enum을 그대로 받기 위해 String으로 둔다.
  */
 public record MemberInfo(
         String nickname,
-        boolean isVerified,
-        String temperatureGrade) {
+        boolean isVerified) {
 }

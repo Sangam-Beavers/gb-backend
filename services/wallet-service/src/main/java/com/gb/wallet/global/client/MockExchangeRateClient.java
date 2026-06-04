@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
  * 개발/테스트용 환율 클라이언트. 고정 환율표를 반환한다(외부 환율 API 미연동 단계).
  *
  * <p>충전의 {@code MockBankClient}와 같은 역할 — 실제 연동 전까지 흐름을 검증할 수 있게 한다.
- * 운영 전환 시 {@code RealExchangeRateClient}(@Profile "prod")를 추가하고 이 빈은 dev/stage로 한정한다.
+ * 운영 전환 시 {@code RealExchangeRateClient}(@Profile "prod")를 추가하고 이 빈은 dev/test로 한정한다.
  *
  * <p>{@code test} 프로파일도 포함한다 — {@code @SpringBootTest}(통합 컨텍스트 로딩)가 ExchangeService를
  * 생성할 때 ExchangeRateClient 빈이 필요하기 때문이다. test를 빼면 NoSuchBeanDefinitionException으로
@@ -38,5 +38,17 @@ public class MockExchangeRateClient implements ExchangeRateClient {
     public BigDecimal getRateToKrw(CurrencyType currency) {
         // 표에 없는 통화는 null 반환 → 호출 측(Service)이 미지원 통화로 판단해 TRANSFER4002 처리.
         return RATES.get(currency);
+    }
+
+    /**
+     * Mock 환경에서는 직전 환율 = 현재 환율 (동일 값) 으로 반환한다.
+     * 결과적으로 {@code /wallets/exchange-rates} 응답의 등락률(change_rate) 은 항상 0.
+     *
+     * <p>운영(Real) 에서는 Redis 의 {@code rate:KRW-<통화>:prev} 키 (exchange-updater 가 자정마다 백업)
+     * 를 사용해 전일 대비 등락률을 정확히 산정한다.
+     */
+    @Override
+    public BigDecimal getPrevRateToKrw(CurrencyType currency) {
+        return getRateToKrw(currency);
     }
 }

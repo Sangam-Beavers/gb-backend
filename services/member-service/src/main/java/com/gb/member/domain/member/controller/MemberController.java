@@ -3,6 +3,8 @@ package com.gb.member.domain.member.controller;
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
 import com.gb.common.response.SuccessStatus;
+import com.gb.member.domain.member.dto.request.PasswordResetEmailRequest;
+import com.gb.member.domain.member.dto.request.PasswordResetRequest;
 import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.service.MemberService;
@@ -52,5 +54,42 @@ public class MemberController {
     })
     public ApiResponse<SignupResponse> signup(@Valid @RequestBody SignupRequest request) {
         return ApiResponse.success(SuccessStatus.CREATED, memberService.signup(request));
+    }
+
+    @PostMapping("/password/reset-request")
+    @Operation(
+            summary = "비밀번호 재설정 링크 발송",
+            description = "가입 이메일로 비밀번호 재설정 링크를 발송한다. 가입 여부 노출 방지를 위해 "
+                    + "미가입 이메일이어도 동일하게 200을 반환한다(실제 발송은 가입된 경우만).")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "요청 접수(가입된 이메일이면 메일 발송)."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400", description = "COMMON4001 - 요청 값이 올바르지 않습니다(이메일 형식 등).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    public ApiResponse<Void> sendPasswordResetEmail(@Valid @RequestBody PasswordResetEmailRequest request) {
+        memberService.sendPasswordResetEmail(request);
+        return ApiResponse.success(null);
+    }
+
+    @PostMapping("/password/reset")
+    @Operation(
+            summary = "비밀번호 재설정",
+            description = "메일 링크의 토큰과 새 비밀번호로 비밀번호를 변경한다(IdP 경유).")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "비밀번호 변경 완료."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 요청 값 오류 / MEMBER4004 - 유효하지 않거나 만료된 재설정 토큰.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500", description = "COMMON5000 - IdP 비밀번호 변경 실패 등 서버 오류.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    public ApiResponse<Void> resetPassword(@Valid @RequestBody PasswordResetRequest request) {
+        memberService.resetPassword(request);
+        return ApiResponse.success(null);
     }
 }

@@ -4,13 +4,15 @@ import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
 import com.gb.wallet.domain.transaction.dto.request.TransferExecuteRequest;
 import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
-import com.gb.wallet.domain.transaction.dto.response.AccountHolderResponse;
+import com.gb.wallet.domain.transaction.dto.request.ValidateScheduledRequest;
 import com.gb.wallet.domain.transaction.dto.response.RecentAccountsResponse;
 import com.gb.wallet.domain.transaction.dto.response.RecentRecipientsResponse;
 import com.gb.wallet.domain.transaction.dto.response.SupportedCurrenciesResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
 import com.gb.wallet.domain.transaction.dto.response.TransferFeeResponse;
+import com.gb.wallet.domain.transaction.dto.response.TransferReceiptResponse;
 import com.gb.wallet.domain.transaction.dto.response.ValidateMemberResponse;
+import com.gb.wallet.domain.transaction.dto.response.ValidateScheduledResponse;
 import com.gb.wallet.domain.transaction.service.TransferService;
 import com.gb.wallet.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
@@ -24,10 +26,12 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -217,56 +221,6 @@ public class TransferController {
         return ApiResponse.success(transferService.getRecentRemittanceAccounts(userPublicId, size));
     }
 
-    /** 외부 은행 예금주 실명 조회. 🔒 JWT 필요. */
-    @Operation(
-            summary = "예금주 실명 조회",
-            description = "타행 송금 화면에서 사용자가 입력한 계좌의 예금주명을 외부 Mock 은행에 조회한다. "
-                    + "wallet DB는 조회하지 않으며 BankClient.inquiry만 호출. "
-                    + "Mock 은행 에러는 BankErrorMapper(§13-4)가 본체 코드로 변환한다 "
-                    + "— BANK4040→ACCOUNT4001(404), BANK4004→COMMON4001(400), 네트워크/알 수 없는 코드→COMMON5031(503). "
-                    + "사용자는 JWT의 public_id claim으로 식별한다.")
-    @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "200",
-                    description = "조회 성공. 응답은 공통 ApiResponse로 감싸지며 data에 AccountHolderResponse가 담긴다."),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400",
-                    description = "COMMON4001 - 파라미터 누락/형식 오류, 또는 외부 Mock 은행이 BANK4004로 거절.",
-                    content = @Content(
-                            schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4001", value = EX_COMMON4001))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "401",
-                    description = "AUTH4011 - 인증이 필요합니다.",
-                    content = @Content(
-                            schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "404",
-                    description = "ACCOUNT4001 - 존재하지 않는 계좌(외부 Mock 은행 BANK4040 매핑).",
-                    content = @Content(
-                            schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "ACCOUNT4001", value = EX_ACCOUNT4001))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "500",
-                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
-                    content = @Content(
-                            schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "503",
-                    description = "COMMON5031 - 외부 은행 일시 장애(네트워크 실패 또는 알 수 없는 BANK 코드).",
-                    content = @Content(
-                            schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON5031", value = EX_COMMON5031)))
-    })
-    @GetMapping("/account-holder")
-    public ApiResponse<AccountHolderResponse> getAccountHolder(
-            @RequestParam @NotBlank String bankCode,
-            @RequestParam @NotBlank String accountNumber) {
-        return ApiResponse.success(transferService.getAccountHolder(bankCode, accountNumber));
-    }
-
     /** 송금 수수료 계산. 🔒 JWT 필요. */
     @Operation(
             summary = "송금 수수료 조회",
@@ -322,7 +276,7 @@ public class TransferController {
                     description = "송금 성공. 응답은 공통 ApiResponse로 감싸지며 data에 TransferExecuteResponse가 담긴다."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "COMMON4001 - Body 검증 실패 / WALLET4002 - 잔액 부족 / "
+                    description = "COMMON4001 - Body 검증 실패 / "
                             + "TRANSFER4002 - 미지원 통화 / TRANSFER4003 - 미지원 송금 유형 / "
                             + "TRANSFER4004 - 자기 송금 / TRANSFER4005 - 미지원 통화 조합. "
                             + "같은 400이지만 비즈니스 코드가 다르다 (examples 드롭다운 참고).",
@@ -330,7 +284,6 @@ public class TransferController {
                             schema = @Schema(implementation = ErrorResponse.class),
                             examples = {
                                     @ExampleObject(name = "COMMON4001", value = EX_COMMON4001),
-                                    @ExampleObject(name = "WALLET4002", value = EX_WALLET4002),
                                     @ExampleObject(name = "TRANSFER4002", value = EX_TRANSFER4002),
                                     @ExampleObject(name = "TRANSFER4003", value = EX_TRANSFER4003),
                                     @ExampleObject(name = "TRANSFER4004", value = EX_TRANSFER4004),
@@ -349,6 +302,12 @@ public class TransferController {
                             schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "WALLET4001", value = EX_WALLET4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "422",
+                    description = "WALLET4002 - 지갑 잔액이 부족합니다 (요청 형식은 정상이나 잔액 부족으로 처리 불가).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "WALLET4002", value = EX_WALLET4002))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
                     content = @Content(
@@ -365,9 +324,93 @@ public class TransferController {
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<TransferExecuteResponse> executeTransfer(
             @CurrentUserPublicId String userPublicId,
-            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 100) String idempotencyKey,
             @Valid @RequestBody TransferExecuteRequest request) {
         TransferExecuteResponse response = transferService.execute(userPublicId, idempotencyKey, request);
         return ApiResponse.success(response, "송금이 완료되었습니다.");
+    }
+
+    /** 송금 확인증 조회. 🔒 JWT 필요. 송신자 본인만 조회 가능. */
+    @Operation(
+            summary = "송금 확인증 조회",
+            description = "완료된 송금 한 건의 확인증(송·수취인, 금액, 수수료, 적용 환율, 수취 금액 등)을 조회한다. "
+                    + "대상은 INTERNAL_TRANSFER · REMITTANCE만이며, 송신자 본인만 조회 가능하다. "
+                    + "본인 아님·미존재·미지원 유형은 정보 누설 방지로 동일한 TRANSFER4001로 모호 매핑한다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "조회 성공. data에 TransferReceiptResponse가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 요청 값이 올바르지 않습니다(path variable 형식 위반).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_COMMON4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "TRANSFER4001 - 존재하지 않는 송금 내역입니다. "
+                            + "(미존재·본인 아님·미지원 유형 모두 동일 매핑)",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_COMMON5000)))
+    })
+    @GetMapping("/{transferPublicId}/receipt")
+    public ApiResponse<TransferReceiptResponse> getReceipt(
+            @CurrentUserPublicId String userPublicId,
+            @PathVariable("transferPublicId") @NotBlank @Size(max = 36) String transferPublicId) {
+        return ApiResponse.success(transferService.getReceipt(userPublicId, transferPublicId));
+    }
+
+    /** 정기 송금 대상 유효성 사전 검증. 🔒 JWT 필요. INTERNAL_TRANSFER · REMITTANCE 둘 다 지원. */
+    @Operation(
+            summary = "정기 송금 대상 유효성 검증",
+            description = "정기 송금 설정 전 (수취 대상, 금액, 통화) 조합이 유효한지 사전 검증한다. "
+                    + "도메인 검증(통화 정합성 등) 미통과는 200 + is_valid=false + reason으로 응답되며, "
+                    + "입력 형식·계좌 미존재·미인증·자기송금 등은 도메인 에러(400/403/404)로 응답된다. "
+                    + "송금 실행 API와 동일하게 transfer_type으로 INTERNAL_TRANSFER/REMITTANCE 분기.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "검증 자체는 성공. is_valid=true면 통과, false면 reason에 사유."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - 요청 값이 올바르지 않습니다(필수 필드 누락·형식 오류) "
+                            + "/ TRANSFER4002 - 지원하지 않는 통화입니다 / TRANSFER4003 - 지원하지 않는 송금 유형입니다 "
+                            + "/ TRANSFER4004 - 자기 자신에게 송금할 수 없습니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_COMMON4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "ACCOUNT4006 - 인증되지 않은 계좌입니다(REMITTANCE — mock_account_token 미발급).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "ACCOUNT4001 - 존재하지 않는 계좌입니다(REMITTANCE — 본인 + active 미매칭) "
+                            + "/ WALLET4001 - 존재하지 않는 지갑입니다(INTERNAL — 수신자 wallet 부재).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_WALLET4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(value = EX_COMMON5000)))
+    })
+    @PostMapping("/scheduled/validate")
+    public ApiResponse<ValidateScheduledResponse> validateScheduled(
+            @CurrentUserPublicId String userPublicId,
+            @Valid @RequestBody ValidateScheduledRequest request) {
+        return ApiResponse.success(transferService.validateScheduled(userPublicId, request));
     }
 }

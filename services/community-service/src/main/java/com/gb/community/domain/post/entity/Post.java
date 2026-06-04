@@ -111,6 +111,19 @@ public class Post extends BaseSoftDeleteEntity {
     }
 
     /**
+     * 댓글 삭제 시 카운터 캐시 정합 유지용 도메인 메서드(증가 메서드와 대칭).
+     *
+     * <p>음수 방지 가드를 둔다 — 동시 삭제 race나 시드 데이터 누락으로 0 상태에서 호출돼도
+     * 음수로 떨어지지 않도록 0에서 멈춘다. 카운터는 캐시(약한 일관성)라 정합이 잠시 깨지는 것보다
+     * 음수로 노출되는 것이 더 큰 문제다(클라이언트 표시 깨짐).
+     */
+    public void decreaseCommentCount() {
+        if (this.commentCount > 0) {
+            this.commentCount -= 1;
+        }
+    }
+
+    /**
      * 게시글 작성용 정적 팩토리 (CLAUDE.md §4 — Request → Entity 변환은 정적 메서드).
      *
      * <p>{@code publicId}(UUID)는 서버가 생성하고, {@code language}는 인증/locale 연동 전이라 일단 "ko"로 고정한다.

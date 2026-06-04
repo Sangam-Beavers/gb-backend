@@ -21,7 +21,9 @@ import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabas
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase.Replace;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.test.context.ActiveProfiles;
 
 /**
@@ -218,6 +220,72 @@ class TransactionRepositoryTest {
                 .extracting(Transaction::getPublicId)
                 .isEqualTo(charge.getPublicId());
         assertThat(transactionRepository.findByIdempotencyKey("no-such-key")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("findByWallet_UserPublicId(C): 본인 전 유형(상태 무관) 거래만, Pageable 정렬(최근순)로 조회")
+    void findByWallet_UserPublicId_전유형_정렬_본인필터() {
+        Wallet userA = persistWallet("cuser-aaaa");
+        Wallet userB = persistWallet("cuser-bbbb");
+
+        // userA: 서로 다른 유형/상태 3건 — created_at 으로 순서를 통제한다.
+        persistTransfer(userA, null, CurrencyType.KRW, TransactionType.CHARGE,
+                TransactionStatus.COMPLETED, LocalDateTime.of(2026, 6, 10, 9, 0));
+        persistTransfer(userA, null, CurrencyType.KRW, TransactionType.EXCHANGE,
+                TransactionStatus.COMPLETED, LocalDateTime.of(2026, 6, 11, 9, 0));
+        persistTransfer(userA, null, CurrencyType.KRW, TransactionType.REMITTANCE,
+                TransactionStatus.FAILED, LocalDateTime.of(2026, 6, 12, 9, 0)); // FAILED도 필터 없이 포함
+        // userB: 다른 사용자 — 결과에 섞이면 안 됨
+        persistTransfer(userB, null, CurrencyType.KRW, TransactionType.CHARGE,
+                TransactionStatus.COMPLETED, LocalDateTime.of(2026, 6, 13, 9, 0));
+        em.flush();
+        em.clear();
+
+        Page<Transaction> page = transactionRepository.findByWallet_UserPublicId(
+                "cuser-aaaa", PageRequest.of(0, 20, Sort.by(Sort.Direction.DESC, "createdAt")));
+
+        assertThat(page.getTotalElements()).as("userA의 3건만(타 user 제외)").isEqualTo(3L);
+        assertThat(page.getContent())
+                .as("최근순 + 전 유형/상태 포함(유형·상태 필터 없음)")
+                .extracting(Transaction::getType)
+                .containsExactly(TransactionType.REMITTANCE, TransactionType.EXCHANGE, TransactionType.CHARGE);
+    }
+
+    @Test
+    @DisplayName("findByWallet_UserPublicIdAndType(EXCHANGE): 본인 EXCHANGE만 최근순 — 타 유형(CHARGE/REMITTANCE)·타 user 제외")
+    void findByWallet_UserPublicIdAndType_EXCHANGE_필터_정렬() {
+        Wallet userA = persistWallet("exuser-aaaa");
+        Wallet userB = persistWallet("exuser-bbbb");
+
+        // userA EXCHANGE 2건 — created_at으로 순서를 통제(둘 다 결과에 최근순으로 나와야 함)
+        persistTransfer(userA, null, CurrencyType.USD, TransactionType.EXCHANGE,
+                TransactionStatus.COMPLETED, LocalDateTime.of(2026, 6, 20, 9, 0));
+        persistTransfer(userA, null, CurrencyType.KRW, TransactionType.EXCHANGE,
+                TransactionStatus.COMPLETED, LocalDateTime.of(2026, 6, 21, 9, 0)); // 최신
+        // userA 노이즈: 타 유형 — type 필터로 제외돼야 함
+        persistTransfer(userA, null, CurrencyType.KRW, TransactionType.CHARGE,
+                TransactionStatus.COMPLETED, LocalDateTime.of(2026, 6, 22, 9, 0));
+        persistTransfer(userA, null, CurrencyType.KRW, TransactionType.REMITTANCE,
+                TransactionStatus.COMPLETED, LocalDateTime.of(2026, 6, 23, 9, 0));
+        // userB EXCHANGE — 타 user라 제외돼야 함
+        persistTransfer(userB, null, CurrencyType.KRW, TransactionType.EXCHANGE,
+                TransactionStatus.COMPLETED, LocalDateTime.of(2026, 6, 24, 9, 0));
+        em.flush();
+        em.clear();
+
+        Page<Transaction> page = transactionRepository.findByWallet_UserPublicIdAndType(
+                "exuser-aaaa", TransactionType.EXCHANGE,
+                PageRequest.of(0, 20, Sort.by(Sort.Direction.DESC, "createdAt")));
+
+        assertThat(page.getTotalElements()).as("userA의 EXCHANGE 2건만(타 유형·타 user 제외)").isEqualTo(2L);
+        assertThat(page.getContent())
+                .as("결과는 모두 EXCHANGE 타입")
+                .extracting(Transaction::getType)
+                .containsOnly(TransactionType.EXCHANGE);
+        assertThat(page.getContent())
+                .as("최근순(2026-06-21 KRW → 2026-06-20 USD)")
+                .extracting(Transaction::getCurrencyCode)
+                .containsExactly(CurrencyType.KRW, CurrencyType.USD);
     }
 
     // ----- helpers -----

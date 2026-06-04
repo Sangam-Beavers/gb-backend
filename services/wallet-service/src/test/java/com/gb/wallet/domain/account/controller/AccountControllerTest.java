@@ -6,10 +6,13 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -23,6 +26,8 @@ import com.gb.wallet.domain.account.dto.response.AccountResponse;
 import com.gb.wallet.domain.account.dto.response.ChargeResponse;
 import com.gb.wallet.domain.account.dto.response.SupportedBankListResponse;
 import com.gb.wallet.domain.account.dto.response.VerifyAccountResponse;
+import com.gb.wallet.domain.account.entity.Bank;
+import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.service.BankAccountService;
 import com.gb.wallet.domain.account.service.ChargeService;
 import com.gb.wallet.domain.account.service.HolderService;
@@ -31,6 +36,7 @@ import com.gb.wallet.global.client.dto.AccountToken;
 import com.gb.wallet.global.config.WebConfig;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.security.CurrentUserPublicIdArgumentResolver;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -44,6 +50,7 @@ import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
@@ -256,7 +263,8 @@ class AccountControllerTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
                                 "account_number", "1234567890",
-                                "account_token", "tok-abcdef"))))
+                                "account_token", "tok-abcdef",
+                                "holder_name", "홍길동"))))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.bank_code").value("004"))
@@ -278,7 +286,8 @@ class AccountControllerTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
                                 "account_number", "1234567890",
-                                "account_token", "tok-abcdef"))))
+                                "account_token", "tok-abcdef",
+                                "holder_name", "홍길동"))))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("ACCOUNT4004"));
     }
@@ -307,7 +316,8 @@ class AccountControllerTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "0".repeat(21),
                                 "account_number", "1234567890",
-                                "account_token", "tok-abcdef"))))
+                                "account_token", "tok-abcdef",
+                                "holder_name", "홍길동"))))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("COMMON4001"));
 
@@ -371,6 +381,152 @@ class AccountControllerTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.accounts").isArray())
                 .andExpect(jsonPath("$.data.accounts.length()").value(0));
+    }
+
+    @Test
+    @DisplayName("GET /accounts 200: 비어있지 않은 목록을 snake_case로 직렬화(순서·마스킹·created_at 보존)")
+    void getMyAccounts_목록_직렬화() throws Exception {
+        BankAccount primary = accountEntity("acct-1", "004", "KB국민은행", "12345678901234",
+                true, true, LocalDateTime.of(2026, 5, 29, 10, 0, 0));
+        BankAccount second = accountEntity("acct-2", "088", "신한은행", "98765432109876",
+                false, false, LocalDateTime.of(2026, 5, 28, 9, 0, 0));
+        given(bankAccountService.getMyAccounts(USER_ID))
+                .willReturn(AccountListResponse.from(List.of(primary, second)));
+
+        mockMvc.perform(get("/api/v1/accounts").with(authedJwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.accounts.length()").value(2))
+                .andExpect(jsonPath("$.data.accounts[0].account_public_id").value("acct-1"))
+                .andExpect(jsonPath("$.data.accounts[0].bank_code").value("004"))
+                .andExpect(jsonPath("$.data.accounts[0].account_number_masked").value("123*********34"))
+                .andExpect(jsonPath("$.data.accounts[0].is_primary").value(true))
+                .andExpect(jsonPath("$.data.accounts[0].is_verified").value(true))
+                .andExpect(jsonPath("$.data.accounts[0].created_at").value("2026-05-29T10:00:00Z"))
+                .andExpect(jsonPath("$.data.accounts[1].account_public_id").value("acct-2"))
+                .andExpect(jsonPath("$.data.accounts[1].is_primary").value(false))
+                .andExpect(jsonPath("$.data.accounts[1].is_verified").value(false));
+    }
+
+    // --- PATCH /{id}/primary ---
+
+    @Test
+    @DisplayName("PATCH /{id}/primary 200: 정상 변경 → ApiResponse(success=true) + is_primary=true, service 호출")
+    void changePrimary_정상_200() throws Exception {
+        given(bankAccountService.changePrimary(USER_ID, ACCT_ID))
+                .willReturn(stubAccountResponse());
+
+        mockMvc.perform(patch("/api/v1/accounts/{id}/primary", ACCT_ID)
+                        .with(authedJwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.is_primary").value(true))
+                .andExpect(jsonPath("$.data.account_public_id").value("acct-uuid"));
+
+        verify(bankAccountService).changePrimary(USER_ID, ACCT_ID);
+    }
+
+    @Test
+    @DisplayName("PATCH /{id}/primary 200: 이미 주 계좌여도 멱등 성공(컨트롤러 관점) → 200 + is_primary=true")
+    void changePrimary_이미_주계좌_멱등_200() throws Exception {
+        // 멱등성은 service가 보장한다(이미 주 계좌면 부수효과 없이 성공). 컨트롤러는 동일하게 200 + 변경 결과를 래핑한다.
+        given(bankAccountService.changePrimary(USER_ID, ACCT_ID))
+                .willReturn(stubAccountResponse());
+
+        mockMvc.perform(patch("/api/v1/accounts/{id}/primary", ACCT_ID)
+                        .with(authedJwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.is_primary").value(true));
+
+        verify(bankAccountService).changePrimary(USER_ID, ACCT_ID);
+    }
+
+    @Test
+    @DisplayName("PATCH /{id}/primary 404: 없는/타인 계좌(ACCOUNT4001) → 404 + code")
+    void changePrimary_없는_계좌_404() throws Exception {
+        willThrow(new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND))
+                .given(bankAccountService).changePrimary(anyString(), anyString());
+
+        mockMvc.perform(patch("/api/v1/accounts/{id}/primary", ACCT_ID)
+                        .with(authedJwt()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("ACCOUNT4001"));
+    }
+
+    @Test
+    @DisplayName("PATCH /{id}/primary 503: 분산락 획득 실패(COMMON5031) → 503 + code")
+    void changePrimary_락_실패_503() throws Exception {
+        willThrow(new BusinessException(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE))
+                .given(bankAccountService).changePrimary(anyString(), anyString());
+
+        mockMvc.perform(patch("/api/v1/accounts/{id}/primary", ACCT_ID)
+                        .with(authedJwt()))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON5031"));
+    }
+
+    @Test
+    @DisplayName("PATCH /{id}/primary 401: 토큰 없음 → AUTH4011, service 미호출")
+    void changePrimary_토큰_없음_401() throws Exception {
+        mockMvc.perform(patch("/api/v1/accounts/{id}/primary", ACCT_ID))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verify(bankAccountService, never()).changePrimary(any(), any());
+    }
+
+    // --- DELETE /{id} ---
+
+    @Test
+    @DisplayName("DELETE /{id} 200: 정상 삭제(soft-delete) → 200 + data:null, service 호출")
+    void deleteAccount_정상_200() throws Exception {
+        // void 메서드라 스텁 없이 호출(기본 do-nothing).
+        mockMvc.perform(delete("/api/v1/accounts/{id}", ACCT_ID)
+                        .with(authedJwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                // ApiResponse는 @JsonInclude(ALWAYS)라 data:null이 키째 노출된다 — 삭제 응답에 payload 없음을 단언.
+                .andExpect(jsonPath("$.data").isEmpty());
+
+        verify(bankAccountService).deleteAccount(USER_ID, ACCT_ID);
+    }
+
+    @Test
+    @DisplayName("DELETE /{id} 404: 없는/타인/이미 비활성 계좌(ACCOUNT4001) → 404 + code")
+    void deleteAccount_없는_계좌_404() throws Exception {
+        willThrow(new BusinessException(AccountErrorCode.ACCOUNT_NOT_FOUND))
+                .given(bankAccountService).deleteAccount(anyString(), anyString());
+
+        mockMvc.perform(delete("/api/v1/accounts/{id}", ACCT_ID)
+                        .with(authedJwt()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("ACCOUNT4001"));
+    }
+
+    @Test
+    @DisplayName("DELETE /{id} 401: 토큰 없음 → AUTH4011, service 미호출")
+    void deleteAccount_토큰_없음_401() throws Exception {
+        mockMvc.perform(delete("/api/v1/accounts/{id}", ACCT_ID))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verify(bankAccountService, never()).deleteAccount(any(), any());
+    }
+
+    @Test
+    @DisplayName("DELETE /{id} 400: path id 36자 초과 → @Size 위반 → COMMON4001, service 미호출")
+    void deleteAccount_path_길이_초과_400() throws Exception {
+        String tooLong = "a".repeat(37); // @Size(max=36) 위반 → ConstraintViolationException → COMMON4001
+        mockMvc.perform(delete("/api/v1/accounts/{id}", tooLong)
+                        .with(authedJwt()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verify(bankAccountService, never()).deleteAccount(any(), any());
     }
 
     // --- POST /{id}/charge ---
@@ -554,6 +710,31 @@ class AccountControllerTest {
                 .status("COMPLETED")
                 .createdAt("2026-05-30T04:15:30Z")
                 .build();
+    }
+
+    /**
+     * 목록 직렬화 검증용 BankAccount 엔티티. AccountListResponse.from(엔티티)이 실제 변환(마스킹·is_verified·
+     * created_at)을 거치도록 실제 엔티티를 만든다. created_at은 비영속이라 auditing이 덮어쓰지 않으므로
+     * reflection으로 주입한다(@WebMvcTest 슬라이스, JPA 없음).
+     */
+    private BankAccount accountEntity(String publicId, String bankCode, String bankName,
+                                      String accountNumber, boolean primary, boolean verified,
+                                      LocalDateTime createdAt) {
+        Bank bank = Bank.builder()
+                .code(bankCode).name(bankName).country("KR").isDomestic(true).isActive(true).build();
+        BankAccount account = BankAccount.builder()
+                .publicId(publicId)
+                .userPublicId(USER_ID)
+                .bank(bank)
+                .accountNumber(accountNumber)
+                .holderName("홍길동")
+                .mockAccountToken(verified ? "tok" : null)
+                .isVirtual(false)
+                .isPrimary(primary)
+                .isActive(true)
+                .build();
+        ReflectionTestUtils.setField(account, "createdAt", createdAt);
+        return account;
     }
 
     private AccountResponse stubAccountResponse() {

@@ -9,7 +9,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.gb.common.exception.BusinessException;
+import com.gb.common.exception.CommonErrorCode;
+import com.gb.community.domain.comment.dto.request.CreateCommentRequest;
 import com.gb.community.domain.comment.dto.response.CommentListResponse;
+import com.gb.community.domain.comment.dto.response.CommentResponse;
 import com.gb.community.domain.comment.entity.Comment;
 import com.gb.community.domain.comment.repository.CommentRepository;
 import com.gb.community.domain.comment.service.impl.CommentServiceImpl;
@@ -21,6 +24,7 @@ import com.gb.community.global.client.MemberInfo;
 import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -53,9 +57,10 @@ class CommentServiceTest {
     private static final String USER = "00000000-0000-0000-0000-000000000001";
     private static final String OTHER = "00000000-0000-0000-0000-000000000002";
     private static final String PID = "post-uuid-1";
+    private static final String C_PID = "comment-uuid-1";
 
-    private static final MemberInfo MINH = new MemberInfo("Minh", true, "GREEN");
-    private static final MemberInfo SOKHA = new MemberInfo("Sokha", false, "YELLOW");
+    private static final MemberInfo MINH = new MemberInfo("Minh", true);
+    private static final MemberInfo SOKHA = new MemberInfo("Sokha", false);
 
     @Test
     @DisplayName("없거나 삭제된 게시글 → COMMUNITY4001, 댓글·작성자 조회 없음")
@@ -112,7 +117,7 @@ class CommentServiceTest {
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(commentRepository.findByPostAndDeletedAtIsNull(any(), any()))
                 .willReturn(new PageImpl<>(List.of(c1, c2), PageRequest.of(0, 20), 2));
-        given(memberClient.getMember(USER)).willReturn(MINH);
+        given(memberClient.getMembers(List.of(USER))).willReturn(Map.of(USER, MINH));
 
         CommentListResponse res = service.getComments(PID, 0, 20);
 
@@ -128,7 +133,7 @@ class CommentServiceTest {
         assertThat(first.getParentCommentPublicId()).isNull(); // 대댓글 미구현 — 항상 null
         assertThat(first.getCreatedAt()).isEqualTo("2026-05-26T04:15:30Z");
 
-        verify(memberClient, times(1)).getMember(USER); // 같은 작성자 2건이어도 1회
+        verify(memberClient, times(1)).getMembers(List.of(USER)); // 같은 작성자 2건 → distinct 1명 배치 1회
     }
 
     @Test
@@ -140,15 +145,164 @@ class CommentServiceTest {
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(commentRepository.findByPostAndDeletedAtIsNull(any(), any()))
                 .willReturn(new PageImpl<>(List.of(c1, c2), PageRequest.of(0, 20), 2));
-        given(memberClient.getMember(USER)).willReturn(MINH);
-        given(memberClient.getMember(OTHER)).willReturn(SOKHA);
+        given(memberClient.getMembers(List.of(USER, OTHER)))
+                .willReturn(Map.of(USER, MINH, OTHER, SOKHA));
 
         CommentListResponse res = service.getComments(PID, 0, 20);
 
         assertThat(res.getComments().get(1).getAuthorNickname()).isEqualTo("Sokha");
         assertThat(res.getComments().get(1).isAuthorIsVerified()).isFalse();
-        verify(memberClient).getMember(USER);
-        verify(memberClient).getMember(OTHER);
+        verify(memberClient).getMembers(List.of(USER, OTHER));
+    }
+
+    // ==========================================================================
+    // createComment(postPublicId, userPublicId, request) — 댓글 작성
+    // ==========================================================================
+
+    @Test
+    @DisplayName("createComment 정상: Comment INSERT + Post.commentCount +1 + 응답 매핑")
+    void createComment_정상() {
+        Post post = post(PID);
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(commentRepository.save(any(Comment.class))).willAnswer(inv -> {
+            Comment c = inv.getArgument(0);
+            ReflectionTestUtils.setField(c, "id", 100L);
+            ReflectionTestUtils.setField(c, "createdAt", LocalDateTime.of(2026, 5, 26, 4, 15, 30));
+            return c;
+        });
+        given(memberClient.getMember(USER)).willReturn(MINH);
+
+        CreateCommentRequest req = createRequest("좋은 정보 감사합니다!");
+        CommentResponse resp = service.createComment(PID, USER, req);
+
+        // 응답 매핑 확인
+        assertThat(resp.getPostPublicId()).isEqualTo(PID);
+        assertThat(resp.getContent()).isEqualTo("좋은 정보 감사합니다!");
+        assertThat(resp.getAuthorNickname()).isEqualTo("Minh");
+        assertThat(resp.isAuthorIsVerified()).isTrue();
+        assertThat(resp.getParentCommentPublicId()).as("대댓글 미지원 — 항상 null").isNull();
+
+        // comment_count 증가는 DB 원자 UPDATE(incrementCommentCount) 호출로 검증(like_count와 동일)
+        verify(postRepository).incrementCommentCount(post.getId());
+
+        // Comment INSERT 시 parentId는 null (최상위만)
+        ArgumentCaptor<Comment> commentCaptor = ArgumentCaptor.forClass(Comment.class);
+        verify(commentRepository).save(commentCaptor.capture());
+        assertThat(commentCaptor.getValue().getParentId()).isNull();
+        assertThat(commentCaptor.getValue().getUserPublicId()).isEqualTo(USER);
+        assertThat(commentCaptor.getValue().getContent()).isEqualTo("좋은 정보 감사합니다!");
+    }
+
+    @Test
+    @DisplayName("createComment: 없거나 삭제된 게시글 → COMMUNITY4001, 댓글 INSERT·작성자 조회 없음")
+    void createComment_게시글없음_COMMUNITY4001() {
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.createComment(PID, USER, createRequest("내용")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommunityErrorCode.POST_NOT_FOUND);
+
+        verifyNoInteractions(commentRepository, memberClient);
+    }
+
+    private CreateCommentRequest createRequest(String content) {
+        CreateCommentRequest req = new CreateCommentRequest();
+        ReflectionTestUtils.setField(req, "content", content);
+        return req;
+    }
+
+    // ==========================================================================
+    // deleteComment(postPublicId, commentPublicId, userPublicId) — 댓글 삭제
+    // ==========================================================================
+
+    @Test
+    @DisplayName("deleteComment 정상: softDelete + post.commentCount -1, MemberClient 호출 없음")
+    void deleteComment_정상() {
+        Post post = post(PID);
+        ReflectionTestUtils.setField(post, "commentCount", 5); // 시드값(원자 UPDATE 호출은 repo verify로 검증)
+        Comment c = comment(post, USER, "내용", LocalDateTime.of(2026, 5, 26, 4, 15, 30));
+        ReflectionTestUtils.setField(c, "publicId", C_PID);
+
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(commentRepository.findByPublicIdAndDeletedAtIsNull(C_PID)).willReturn(Optional.of(c));
+
+        service.deleteComment(PID, C_PID, USER);
+
+        assertThat(c.isDeleted()).as("softDelete로 deleted_at이 설정됨").isTrue();
+        verify(postRepository).decrementCommentCount(post.getId()); // comment_count -1 DB 원자 UPDATE
+        verifyNoInteractions(memberClient); // 삭제는 작성자 정보 조회 불필요
+    }
+
+    @Test
+    @DisplayName("deleteComment: 게시글 없거나 삭제됨 → COMMUNITY4001, 댓글 조회 없음")
+    void deleteComment_게시글없음_COMMUNITY4001() {
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.deleteComment(PID, C_PID, USER))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommunityErrorCode.POST_NOT_FOUND);
+
+        verifyNoInteractions(commentRepository, memberClient);
+    }
+
+    @Test
+    @DisplayName("deleteComment: 댓글 없거나 이미 삭제됨 → COMMUNITY4002")
+    void deleteComment_댓글없음_COMMUNITY4002() {
+        Post post = post(PID);
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(commentRepository.findByPublicIdAndDeletedAtIsNull(C_PID)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.deleteComment(PID, C_PID, USER))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommunityErrorCode.COMMENT_NOT_FOUND);
+
+        // 검증 단계라 commentCount는 변하지 않아야 함
+        assertThat(post.getCommentCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("deleteComment: URL 불일치 (댓글이 다른 게시글 소속) → COMMUNITY4002, softDelete 안 됨")
+    void deleteComment_URL불일치_COMMUNITY4002() {
+        // path의 게시글(id=1)과 댓글의 실제 게시글(id=2)이 다르다 — URL 일관성 위반.
+        Post pathPost = post(PID); // id=1
+        Post otherPost = post("other-post-pid");
+        ReflectionTestUtils.setField(otherPost, "id", 2L); // 다른 id 부여
+        Comment c = comment(otherPost, USER, "내용", LocalDateTime.of(2026, 5, 26, 5, 0, 0));
+        ReflectionTestUtils.setField(c, "publicId", C_PID);
+
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(pathPost));
+        given(commentRepository.findByPublicIdAndDeletedAtIsNull(C_PID)).willReturn(Optional.of(c));
+
+        assertThatThrownBy(() -> service.deleteComment(PID, C_PID, USER))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommunityErrorCode.COMMENT_NOT_FOUND);
+
+        assertThat(c.isDeleted()).as("URL 검증에서 막혀 softDelete 호출 안 됨").isFalse();
+    }
+
+    @Test
+    @DisplayName("deleteComment: 본인 아님 → COMMON4031, softDelete 안 됨")
+    void deleteComment_본인아님_COMMON4031() {
+        Post post = post(PID);
+        ReflectionTestUtils.setField(post, "commentCount", 3);
+        Comment c = comment(post, USER, "내용", LocalDateTime.of(2026, 5, 26, 5, 0, 0));
+        ReflectionTestUtils.setField(c, "publicId", C_PID);
+
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(commentRepository.findByPublicIdAndDeletedAtIsNull(C_PID)).willReturn(Optional.of(c));
+
+        // OTHER가 USER의 댓글을 삭제 시도
+        assertThatThrownBy(() -> service.deleteComment(PID, C_PID, OTHER))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.FORBIDDEN);
+
+        assertThat(c.isDeleted()).as("권한 검증에서 막혀 softDelete 호출 안 됨").isFalse();
+        assertThat(post.getCommentCount()).as("commentCount도 변하지 않음").isEqualTo(3);
     }
 
     // ----- helpers -----

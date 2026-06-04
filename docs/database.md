@@ -1,7 +1,7 @@
 # 데이터베이스 설계 (Database)
 
 > **DB:** MySQL 8.0 (Aurora MySQL = 운영/스테이징 · 온프렘 MySQL = 개발, 공통 스키마)
-> **총 테이블 수:** 14개
+> **총 테이블 수:** 15개
 > **AI 분석 결과:** MySQL `document_results`에 **직접 저장** — **DynamoDB 미사용**
 > Claude Code는 Entity/Repository를 만들 때 이 스키마와 참조 규칙을 그대로 따른다.
 
@@ -11,13 +11,13 @@
 
 ### (1) MSA 경계 참조 = `user_public_id` (UUID, 물리 FK 없음)
 
-- **member 도메인(`users`, `user_verifications`) 내부**에서는 `users.id`(BIGINT FK)를 쓴다.
+- **member 도메인(`members`, `user_verifications`) 내부**에서는 `members.id`(BIGINT FK)를 쓴다.
 - **member 도메인 밖**(wallet/document/community)에서 회원을 가리킬 때는 **`user_public_id`(VARCHAR(36), 물리 FK 없음, 논리 참조)** 만 쓴다.
-- `users.id`(BIGINT 순번)는 **member 도메인 경계를 절대 벗어나지 않는다.** → 순번 노출/추측 차단 + 향후 물리 DB 분리 대비.
+- `members.id`(BIGINT 순번)는 **member 도메인 경계를 절대 벗어나지 않는다.** → 순번 노출/추측 차단 + 향후 물리 DB 분리 대비.
 
 > 현재는 단일 Aurora 안에 스키마만 분리한 상태다. 이 규칙의 실효는 "지금 장애 격리"가 아니라 "미래에 wallet/community/document를 별도 물리 DB로 승급할 때 무비용 대비"다.
 
-대상(밖에서 `user_public_id`로 참조): `wallets`, `bank_accounts`, `transaction_audit_logs`, `document_submissions`, `posts`, `comments`, `likes`, `user_reviews(reviewer/reviewee)`.
+대상(밖에서 `user_public_id`로 참조): `wallets`, `bank_accounts`, `transaction_audit_logs`, `document_submissions`, `posts`, `comments`, `likes`.
 
 ### (2) 금융 무결성
 
@@ -33,20 +33,21 @@
 
 | # | 도메인 | 테이블 | 핵심 역할 |
 | --- | --- | --- | --- |
-| 1 | member | `users` | 회원 기본 정보 + 이웃 온도 등급 |
-| 2 | member | `user_verifications` | 신분증 인증 → 인증 배지 근거 |
+| 1 | member | `members` | 회원 기본 정보 |
+| 2 | member | `user_verifications` | 신분증 인증 → 인증 배지 근거 (엔티티 미구현·계획) |
 | 3 | wallet | `banks` | 은행 마스터 (Beaver/Quokka Bank 포함) |
 | 4 | wallet | `wallets` | 사용자 주머니 메타 |
 | 5 | wallet | `wallet_balances` | 통화별 잔액 (캐시 금지) |
 | 6 | wallet | `bank_accounts` | 타행 계좌 + 가상계좌 통합 |
 | 7 | wallet | `transactions` | 모든 금융 거래 마스터 |
 | 8 | wallet | `transaction_audit_logs` | 거래 감사 로그 + 상태 이력 (append-only) |
-| 9 | document | `document_submissions` | 문서 업로드 ~ 분석 전 메타 |
-| 10 | document | `document_results` | 분석 완료 결과 메타 **+ 분석 내용** |
-| 11 | community | `posts` | 게시글 + 번역 캐시 |
-| 12 | community | `comments` | 댓글 + 대댓글 |
-| 13 | community | `likes` | 게시글/댓글 좋아요 통합 |
-| 14 | community | `user_reviews` | 이웃 온도 평가 기록 |
+| 9 | wallet | `remittance_attempts` | REMITTANCE 외부 호출 시도 흔적 (운영 reconcile 입력, append-only) |
+| 10 | wallet | `scheduled_transfers` | 정기 송금 설정 (매주/매월 자동 실행 대상) |
+| 11 | document | `document_submissions` | 문서 업로드 ~ 분석 전 메타 |
+| 12 | document | `document_results` | 분석 완료 결과 메타 **+ 분석 내용** |
+| 13 | community | `posts` | 게시글 + 번역 캐시 |
+| 14 | community | `comments` | 댓글 + 대댓글 |
+| 15 | community | `likes` | 게시글/댓글 좋아요 통합 |
 
 > **통화 마스터 테이블 없음** — 지원 통화 4개(KRW/USD/PHP/VND) 고정. `currency_code`를 VARCHAR로 직접 저장.
 
@@ -54,8 +55,10 @@
 
 ## 2. member 도메인
 
-### `users`
+### `members`
 > 모든 도메인이 참조하는 기반 테이블. `public_id`가 회원의 유일한 대외 식별자.
+> 엔티티 `@Table(name = "members")`가 SSOT다(과거 표기 `users`에서 정정). `created_at`/`updated_at`은
+> `BaseEntity`(JPA Auditing), `deleted_at`은 엔티티가 직접 채운다(탈퇴 soft delete).
 
 | 컬럼 | 타입 | 제약 | 설명 |
 | --- | --- | --- | --- |
@@ -63,10 +66,12 @@
 | `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | 대외 UUID. 타 도메인은 이 값으로만 회원 참조 |
 | `auth_provider_id` | VARCHAR(255) | UNIQUE, NOT NULL | JWT sub. 개발(Authentik)/운영(Cognito) 공통 컬럼 |
 | `email` | VARCHAR(255) | UNIQUE, NOT NULL | 이메일 |
+| `name` | VARCHAR(100) | NOT NULL | 이름 |
 | `nickname` | VARCHAR(50) | NOT NULL | 닉네임 |
 | `nationality` | VARCHAR(10) | NOT NULL | 국적 코드 (KR, VN, PH 등) |
-| `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | 인증 배지 여부 |
-| `temperature_grade` | VARCHAR(10) | NOT NULL, DEFAULT 'GREEN' | 이웃 온도 (RED/YELLOW/GREEN/PURPLE/BLUE) |
+| `language` | VARCHAR(10) | NOT NULL | 주 사용 언어 (BCP 47 소문자, 예: "vi") |
+| `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | 인증 배지 여부. **(미구현 — 엔티티 미반영, `user_verifications` APPROVED 시 반영 예정. 현재 응답 false 고정)** |
+| `bio` | VARCHAR(200) | NULL | 자기소개(한 줄, 마이페이지 입력, 선택값) |
 | `created_at` | DATETIME | NOT NULL | |
 | `updated_at` | DATETIME | NOT NULL | |
 | `deleted_at` | DATETIME | NULL | soft delete |
@@ -74,12 +79,13 @@
 > 환경별 `auth_provider_id`: 개발 `"authentik|..."`, 운영 `"ap-northeast-2_...|..."`. Spring은 `issuer-uri` 설정만 다르게.
 
 ### `user_verifications`
-> 신분증 인증. APPROVED 시 `users.is_verified = TRUE`. **member 내부 테이블 → `user_id`는 BIGINT FK 유지.**
+> 신분증 인증. APPROVED 시 `members.is_verified = TRUE`. **member 내부 테이블 → `user_id`는 BIGINT FK 유지.**
+> ⚠️ **엔티티 미구현(계획 테이블)** — 신분증 인증 도메인 구현 시 추가한다. 총 15개 문서화 테이블 중 본 테이블만 JPA 엔티티 미반영(구현 14 + 계획 1).
 
 | 컬럼 | 타입 | 제약 | 설명 |
 | --- | --- | --- | --- |
 | `id` | BIGINT | PK, AI | |
-| `user_id` | BIGINT | FK → users.id, NOT NULL | member 내부 참조 → BIGINT FK |
+| `user_id` | BIGINT | FK → members.id, NOT NULL | member 내부 참조 → BIGINT FK |
 | `document_type` | VARCHAR(30) | NOT NULL | 신분증 유형 (ALIEN_REGISTRATION/PASSPORT/NATIONAL_ID) ※ API에선 `identity_document_type` |
 | `document_number` | VARCHAR(100) | NOT NULL | **AES-256 암호화 저장** |
 | `s3_key` | VARCHAR(500) | NOT NULL | 신분증 이미지 S3 경로 |
@@ -112,6 +118,8 @@
 | `id` | BIGINT | PK, AI | |
 | `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | 대외 UUID |
 | `user_public_id` | VARCHAR(36) | UNIQUE, NOT NULL | **회원 논리 참조 (물리 FK 없음)** |
+| `status` | VARCHAR(20) | NOT NULL | 지갑 상태(WalletStatus: ACTIVE / SUSPENDED / CLOSED). 생성 시 ACTIVE |
+| `transfer_pin_hash` | VARCHAR(72) | NULL | 송금 PIN(숫자 6자리) BCrypt 해시. null = 미설정 |
 | `created_at` | DATETIME | NOT NULL | |
 | `updated_at` | DATETIME | NOT NULL | |
 
@@ -139,6 +147,7 @@
 | `bank_id` | BIGINT | FK → banks.id, NOT NULL | 스키마 내부 참조 |
 | `account_number` | VARCHAR(100) | NOT NULL | 계좌번호 (암호화 권장) |
 | `mock_account_token` | VARCHAR(36) | NULL | **충전용 토큰.** 계좌 인증 시 Mock 은행(또는 실서비스 PG)이 발급한 토큰. 충전(출금) 호출 시 이 값으로 계좌를 지칭한다. 실서비스에서는 PG 빌링키에 해당 |
+| `holder_name` | VARCHAR(100) | NULL | **외부 계좌 예금주명.** 계좌 등록 시 verify 응답에서 받아 저장. REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot 복사. 송금 확인증 receiver_name 출처. 컬럼 추가 전 등록된 기존 계좌는 null. |
 | `is_virtual` | BOOLEAN | NOT NULL, DEFAULT FALSE | TRUE면 가상계좌(Beaver Bank 발급) |
 | `is_primary` | BOOLEAN | NOT NULL, DEFAULT FALSE | 주 계좌 여부 |
 | `is_active` | BOOLEAN | NOT NULL, DEFAULT TRUE | |
@@ -199,6 +208,57 @@
 | `reason` | VARCHAR(255) | NULL | 실패 시 에러 메시지 |
 | `ip_address` | VARCHAR(45) | NULL | 요청 IP(IPv6 포함) |
 | `created_at` | DATETIME | NOT NULL | |
+
+### `remittance_attempts`
+> REMITTANCE 외부 호출 시도 흔적. **append-only (INSERT만).**
+> 외부 Mock 은행 payout 호출 *직전* `REQUIRES_NEW`로 별도 커밋한다 — 메인 트랜잭션이 rollback돼도 흔적은 살아남아 timeout-but-success 시 운영 reconcile 입력 자료가 된다.
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| `id` | BIGINT | PK, AI | |
+| `idempotency_key` | VARCHAR(100) | UNIQUE, NOT NULL | 시도 1회당 1행. 같은 키 재시도/동시 race는 UNIQUE로 1행 유지 |
+| `user_public_id` | VARCHAR(36) | NOT NULL | **회원 논리 참조 (물리 FK 없음)**. reconcile 시 사용자별 조회용 인덱스 보유 |
+| `bank_account_id` | BIGINT | NOT NULL | 검증된 외부 계좌 id (스키마 내부 참조 — `transactions.bank_account_id`와 동일 raw 컬럼 패턴) |
+| `amount` | DECIMAL(18,4) | NOT NULL | 시도 차감액(amount + fee). "이만큼 보내려고 시도함" 의미 |
+| `currency_code` | VARCHAR(10) | NOT NULL | KRW/USD/PHP/VND. FK 없이 직접 저장 |
+| `attempted_at` | DATETIME | NOT NULL | 외부 호출 직전 기록 시각 |
+
+> **공통 컬럼 미적용**: `created_at`/`updated_at` 없음(§6 예외) — append-only라 `updated_at`이 무의미하고, `created_at`은 `attempted_at`과 의미가 사실상 동일해 중복 컬럼이 된다. `BaseEntity` 미상속.
+> **soft delete 없음**: 흔적이 사라지면 reconcile 입력이 사라지므로 영구 보존.
+> **transaction_audit_logs와의 분리**: audit log는 `transaction_id` NOT NULL이라 본 `transactions` INSERT 전엔 행을 만들 수 없고, "거래 1:1 흔적" 의미를 흐린다 → 별도 테이블로 분리해 충전·1단계 INTERNAL_TRANSFER엔 영향 없게.
+> **현 사이클(2단계 c1) 범위**: 테이블/엔티티/Repository/Writer 인프라만 도입. TransferServiceImpl 통합은 c2에서. reconcile 배치는 미구현 — 향후 운영 도입 시 본 테이블을 입력으로 사용한다.
+
+### `scheduled_transfers`
+> 정기 송금 설정. 매주/매월 자동 실행되는 송금의 메타. 실행 자체는 별도 스케줄러(KST 매일 새벽 1시)가 `status=ACTIVE` & `next_run_date <= today` 행을 가져와 `TransferService.execute`를 호출하고 `next_run_date`를 갱신한다.
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| `id` | BIGINT | PK, AI | |
+| `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | 대외 UUID |
+| `user_public_id` | VARCHAR(36) | NOT NULL | 송신자 회원 논리 참조 |
+| `transfer_type` | VARCHAR(30) | NOT NULL | `INTERNAL_TRANSFER` / `REMITTANCE` |
+| `receiver_public_id` | VARCHAR(36) | NULL | INTERNAL_TRANSFER일 때 수신자 회원. REMITTANCE면 null |
+| `bank_account_id` | BIGINT | NULL | REMITTANCE일 때 수신 계좌 내부 id (FK는 객체 매핑 안 함, Transaction.bankAccountId 패턴 동일). INTERNAL이면 null |
+| `receiver_name` | VARCHAR(100) | NULL | **설정 시점 snapshot** — INTERNAL은 MemberClient.name (fail-open), REMITTANCE는 bankAccount.holderName. 실행 회차마다 transactions.receiver_name으로 복사 |
+| `amount` | DECIMAL(18,4) | NOT NULL | 회차당 송금액 |
+| `currency_code` | VARCHAR(10) | NOT NULL | 출금 통화 |
+| `receive_currency_code` | VARCHAR(10) | NOT NULL | 수취 통화 (1·2단계 same-currency 강제) |
+| `frequency` | VARCHAR(20) | NOT NULL | `WEEKLY` / `MONTHLY` |
+| `schedule_day` | INT | NOT NULL | 실행 기준일 (MONTHLY=1~31, WEEKLY=1~7 ISO 요일) |
+| `next_run_date` | DATE | NOT NULL | 다음 실행 예정일 (KST 기준 LocalDate) |
+| `last_run_at` | DATETIME | NULL | 마지막 실행 시각. 최초 실행 전 null |
+| `status` | VARCHAR(20) | NOT NULL | `ACTIVE` / `PAUSED` / `CANCELLED` |
+| `memo` | VARCHAR(255) | NULL | 사용자 메모 |
+| `created_at` | DATETIME | NOT NULL | |
+| `updated_at` | DATETIME | NOT NULL | |
+
+> **인덱스**:
+> - `idx_scheduled_transfers_user (user_public_id)` — 사용자 내역 조회
+> - `idx_scheduled_transfers_status_next (status, next_run_date)` — 스케줄러가 ACTIVE & 도래 행 조회용 복합 인덱스
+>
+> **중복 허용**: 같은 사용자가 같은 (bank_account, frequency, schedule_day) 조합으로 여러 정기 송금 설정을 둘 수 있다 (의도된 다중 설정).
+>
+> **현 사이클 범위**: 설정 API(`POST /scheduled`)만. 내역 조회·취소·재개는 다음 사이클, 자동 실행 스케줄러는 그 다음.
 
 ---
 
@@ -279,6 +339,7 @@
 | 컬럼 | 타입 | 제약 | 설명 |
 | --- | --- | --- | --- |
 | `id` | BIGINT | PK, AI | |
+| `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | 대외 식별자(UUID) — 댓글 목록/작성/삭제 응답·URL은 public_id 사용(posts와 동일 규칙) |
 | `post_id` | BIGINT | FK → posts.id, NOT NULL | 스키마 내부 참조 |
 | `user_public_id` | VARCHAR(36) | NOT NULL | **회원 논리 참조** |
 | `parent_id` | BIGINT | FK → comments.id, NULL | NULL이면 최상위, 값 있으면 대댓글 |
@@ -301,26 +362,12 @@
 
 > `(user_public_id, target_type, target_id)` 복합 UNIQUE.
 
-### `user_reviews`
-> 이웃 온도 평가. 집계는 `users.temperature_grade`에 반영.
-
-| 컬럼 | 타입 | 제약 | 설명 |
-| --- | --- | --- | --- |
-| `id` | BIGINT | PK, AI | |
-| `reviewer_public_id` | VARCHAR(36) | NOT NULL | **평가자 논리 참조** |
-| `reviewee_public_id` | VARCHAR(36) | NOT NULL | **피평가자 논리 참조** |
-| `score` | INT | NOT NULL | 1~5 |
-| `comment` | VARCHAR(500) | NULL | |
-| `created_at` | DATETIME | NOT NULL | |
-
-> `(reviewer_public_id, reviewee_public_id)` 복합 UNIQUE.
-
 ---
 
 ## 6. 공통 컬럼 규약
 
 - `created_at` / `updated_at` 모든 테이블 공통 (DATETIME, NOT NULL)
-- soft delete 대상: `users`, `posts`, `comments` (`deleted_at` NULL이면 활성)
+- soft delete 대상: `members`, `posts`, `comments` (`deleted_at` NULL이면 활성)
 - 외부 노출 식별자: `public_id` (UUID, VARCHAR(36))
 
 ---
@@ -331,11 +378,18 @@
 | --- | --- | --- | --- |
 | 송금 분산 락 (wallet 단위, 두 개 MultiLock) | `lock:wallet:{walletId}` | Redisson MultiLock(ID 오름차순, waitTime=3s, leaseTime=5s) | 5초 |
 | 계좌 등록 직렬화 락 (user 단위, 단일 키) | `lock:account-register:{userPublicId}` | Redisson Lock(waitTime=3s, leaseTime=5s). 획득 실패 시 503(fail-closed) | 5초(lease) |
-| 멱등성 키 (송금) | `idempotency:{key}` | `SET ... <result> EX 86400` | 24시간 |
+| 정기송금 스케줄러 단일 실행 락 | `scheduler:scheduled-transfer` | Redisson Lock(tryLock, waitTime=3s, leaseTime=5s). 멀티 파드 중 1개만 실행 → 이중 송금 방지 | 5초(lease) |
+| 멱등성 키 (송금 REMITTANCE) | `idempotency:remittance:{key}:{userPublicId}:{bankAccountPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 계좌)로 스코프 → 교차 사용자/계좌는 캐시 미스 → DB(rebuildFromPrior)가 ACCOUNT4001로 차단 | 24시간 |
+| 멱등성 키 (송금 INTERNAL_TRANSFER) | `idempotency:internal_transfer:{key}:{userPublicId}:{receiverPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 수신자)로 스코프 → 교차 응답 노출 차단(rebuildFromPrior → WALLET4001) | 24시간 |
 | 멱등성 키 (충전, 요청자·계좌 스코프) | `idempotency:charge:{key}:{userPublicId}:{accountPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 계좌)로 스코프 → 교차 사용자/계좌는 캐시 미스 → DB(rebuildFromPrior)가 ACCOUNT4001로 차단 | 24시간 |
+| 멱등성 키 (환전 EXCHANGE, 요청자 스코프) | `idempotency:exchange:{key}:{userPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자)로 스코프 → 교차 사용자는 캐시 미스 → DB(rebuildFromPrior)가 차단 | 24시간 |
 | 계좌 인증(verify) rate-limit (IP 단위) | `ratelimit:account-verify:{clientIp}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 ACCOUNT4005(429), Redis 장애 시 fail-open | 윈도(기본 60초) |
+| 송금 rate-limit (user 단위) | `ratelimit:transfer:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 TRANSFER4006(429), Redis 장애 시 fail-open | 윈도(기본 60초, 30회) |
+| 송금 PIN 실패 카운터 (user 단위) | `pin:fail:{userPublicId}` | `INCR`(첫 실패 시 `EXPIRE 600`). 5회 도달 시 잠금 키 설정 후 카운트 삭제 | 10분(윈도) |
+| 송금 PIN 잠금 (user 단위) | `pin:lock:{userPublicId}` | `SET locked EX 600`(5회 연속 실패 시). 존재하면 PIN 검증 TRANSFER4008(429) | 10분 |
 | 토큰 블랙리스트 | `blacklist:{token}` | `SET ... 1 EX <남은만료>` | 토큰 만료까지 |
 | 로그인 실패 카운터 | `login:fail:user:{userPublicId}` | `INCR` + `EXPIRE 300` | 5분 |
+| 비밀번호 재설정 토큰 (member) | `pwreset:{token}` | `SET <email> EX 1800`. 검증 시 조회해 없으면 만료/무효(MEMBER4004), 사용 후 삭제(재사용 방지) | 30분 |
 | 게시글 조회수 | `view:post:{postPublicId}` | `INCR` (배치로 DB 동기화) | — |
 | 환율 캐시 | `rate:{from}-{to}` | `SET ... <rate> EX 60` | 60초 |
 | 세션 캐시 | `session:{id}` | TTL 30분 | 30분 |
@@ -344,6 +398,8 @@
 >
 > - `lock:account-register`·`ratelimit:account-verify` 윈도/임계값은 `wallet.account.verify-rate-limit.{window-seconds,limit}`(기본 60s/10회)로 외부 설정한다(wallet-service).
 > - 충전 멱등성은 `idempotency:charge:{key}:{user}:{account}`(Layer 1 캐시, 요청자·계좌 스코프) + `transactions.idempotency_key` UNIQUE(Layer 2·3, 전역)로 보장한다. 캐시는 동일 (요청자, 계좌, key)의 정상 재요청만 가속하고, 교차 요청은 캐시 미스 → DB의 보안 검증(rebuildFromPrior)이 ACCOUNT4001로 처리한다. 충전엔 분산 락을 두지 않는다(단일 wallet + 비관적 락 FOR UPDATE + key UNIQUE로 충분).
+> - 송금 멱등성도 충전과 동일하게 (도메인·요청자·스코프) 스코프된 캐시(Layer 1) + `transactions.idempotency_key` UNIQUE(Layer 2·3) 패턴을 따른다. 스코프 ID는 REMITTANCE면 `bank_account.public_id`, INTERNAL_TRANSFER면 수신자 `user_public_id`. 캐시·DB 모두 `rebuildFromPrior`로 (소유자/유형/스코프) 일치 검증해 cross-user 응답 노출을 차단한다. 락 경합(PessimisticLockingFailureException)은 최대 3회 재시도, 소진 시 COMMON5031.
+> - 송금 rate-limit은 user 단위(외부 자금 이동 폭주 차단). `wallet.transfer.rate-limit.{window-seconds,limit}`(기본 60s/30회)로 외부 설정한다.
 
 ---
 
