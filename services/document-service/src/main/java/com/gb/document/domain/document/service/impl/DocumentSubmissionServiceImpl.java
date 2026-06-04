@@ -57,7 +57,7 @@ public class DocumentSubmissionServiceImpl implements DocumentSubmissionService 
         documentRepository.save(document);
 
         String s3Key = buildS3Key(publicId, request.fileName());
-        Map<String, String> metadata = buildS3Metadata(publicId);
+        Map<String, String> metadata = buildS3Metadata(document);
         Duration ttl = Duration.ofSeconds(analysisProperties.uploadUrlExpiresSeconds());
 
         S3PresignedUrlClient.IssueUrlResult issued = s3PresignedUrlClient.issueUploadUrl(
@@ -78,7 +78,12 @@ public class DocumentSubmissionServiceImpl implements DocumentSubmissionService 
         loadOwned(userPublicId, publicId); // 존재(404) + 소유자(403) 검증 — 결과는 publicId로 조회한다.
         DocumentResult result = documentResultRepository.findBySubmission_PublicId(publicId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.UNPROCESSABLE_ENTITY));
-        return DocumentResultResponse.from(result);
+        // DB에는 키(s3_masked_key)만 저장 — 응답 masked_file_url은 조회 시점 Pre-signed GET URL(api-spec §3).
+        // TTL은 업로드 URL과 동일 설정을 재사용한다(기본 600초). 소유자 검증은 loadOwned가 이미 수행.
+        String maskedFileUrl = result.getS3MaskedKey() == null ? null
+                : s3PresignedUrlClient.issueDownloadUrl(result.getS3MaskedKey(),
+                        Duration.ofSeconds(analysisProperties.uploadUrlExpiresSeconds()));
+        return DocumentResultResponse.from(result, maskedFileUrl);
     }
 
     @Override
@@ -116,20 +121,30 @@ public class DocumentSubmissionServiceImpl implements DocumentSubmissionService 
         return document;
     }
 
-    /** S3 키 — 날짜 파티션 + publicId 디렉토리. 동일 파일명 충돌 회피 + Lambda 측 조회 편의. */
+    /**
+     * S3 키 — 날짜 파티션 + publicId 디렉토리. 동일 파일명 충돌 회피 + Lambda 측 조회 편의.
+     *
+     * <p>접두사는 반드시 {@code original/}이어야 한다. Lambda A의 S3 ObjectCreated 트리거가
+     * {@code original/} 접두사로 필터링돼 있어, 다른 접두사로 올리면 트리거가 걸리지 않는다(핸드오프 실패).
+     */
     private String buildS3Key(String publicId, String fileName) {
         String date = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
-        return "uploads/%s/%s/%s".formatted(date, publicId, fileName);
+        return "original/%s/%s/%s".formatted(date, publicId, fileName);
     }
 
     /**
      * S3 오브젝트 메타데이터 — Lambda A가 결과 경로 분기에 사용한다.
      * 키 이름은 docs/document-analysis/ai-pipeline.md SSOT. 어긋나면 파이프라인이 깨진다.
+     *
+     * <p>키 네이밍은 언더스코어로 통일(account-a-contract-notice.md 결정 1). {@code analysis_document_type}은
+     * Lambda B 입력으로 백엔드가 심기로 합의(동 §2, 결정 3) — 누락 시 Lambda는 UNKNOWN으로 처리.
+     * {@code user_lang}은 추후 과제로 보류(현재 프론트 하드코딩) — Lambda의 "ko" 기본값이 안전망.
      */
-    private Map<String, String> buildS3Metadata(String publicId) {
+    private Map<String, String> buildS3Metadata(Document document) {
         Map<String, String> metadata = new HashMap<>();
         metadata.put("source", analysisProperties.source());
-        metadata.put("document_id", publicId);
+        metadata.put("document_id", document.getPublicId());
+        metadata.put("analysis_document_type", document.getAnalysisDocumentType().name());
         if (analysisProperties.isProductionSource()
                 && analysisProperties.resultQueueArn() != null
                 && !analysisProperties.resultQueueArn().isBlank()) {

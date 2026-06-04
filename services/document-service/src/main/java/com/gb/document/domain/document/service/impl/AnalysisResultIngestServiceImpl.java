@@ -56,6 +56,8 @@ public class AnalysisResultIngestServiceImpl implements AnalysisResultIngestServ
 
         // 3) document_results UPSERT — submission_id UNIQUE이라 1건만 존재.
         LocalDateTime completedAt = LocalDateTime.ofInstant(msg.completedAt(), ZoneOffset.UTC);
+        // 와이어는 풀 URI(masked_file_url), 저장은 키만(s3_masked_key) — database.md 스키마 SSOT.
+        String s3MaskedKey = s3UriToKey(msg.maskedFileUrl());
 
         documentResultRepository.findBySubmission_Id(submission.getId())
                 .ifPresentOrElse(
@@ -68,7 +70,7 @@ public class AnalysisResultIngestServiceImpl implements AnalysisResultIngestServ
                                 msg.riskItems(),
                                 msg.translatedText(),
                                 msg.translatedLang(),
-                                msg.maskedFileUrl(),
+                                s3MaskedKey,
                                 msg.failedReason(),
                                 completedAt),
                         () -> documentResultRepository.save(DocumentResult.builder()
@@ -81,7 +83,7 @@ public class AnalysisResultIngestServiceImpl implements AnalysisResultIngestServ
                                 .riskItems(msg.riskItems())
                                 .translatedText(msg.translatedText())
                                 .translatedLang(msg.translatedLang())
-                                .maskedFileUrl(msg.maskedFileUrl())
+                                .s3MaskedKey(s3MaskedKey)
                                 .failedReason(msg.failedReason())
                                 .completedAt(completedAt)
                                 .build())
@@ -157,6 +159,25 @@ public class AnalysisResultIngestServiceImpl implements AnalysisResultIngestServ
                     "risk 연동 규칙 위반(§3-2) — overall_risk_level=" + overall + " 이지만 max(risk_items)="
                             + expected + " (document_public_id=" + msg.documentPublicId() + ")");
         }
+    }
+
+    /**
+     * 와이어 포맷 {@code masked_file_url}("s3://bucket/key")에서 키만 추출 — Lambda B의
+     * {@code _s3_uri_to_key()}와 대칭. s3:// 스킴이 아니면(이미 키 형태 등) 그대로 저장해
+     * 메시지를 버리지 않는다(비치명 필드). null이면 null(마스킹본 미생성 케이스).
+     * 키가 없는 malformed s3:// URI("s3://bucket" 등)는 null로 정규화 — 원문을 키로 저장하면
+     * 조회 시 존재하지 않는 키로 presigned URL이 발급되므로, "마스킹본 미보유"(masked_file_url=null)로 처리한다.
+     */
+    private String s3UriToKey(String maskedFileUrl) {
+        if (maskedFileUrl == null || !maskedFileUrl.startsWith("s3://")) {
+            return maskedFileUrl;
+        }
+        int keyStart = maskedFileUrl.indexOf('/', "s3://".length());
+        if (keyStart < 0 || keyStart == maskedFileUrl.length() - 1) {
+            log.warn("[sqs-consumer] masked_file_url 키 추출 실패 — null(마스킹본 미보유)로 저장: {}", maskedFileUrl);
+            return null;
+        }
+        return maskedFileUrl.substring(keyStart + 1);
     }
 
     /**

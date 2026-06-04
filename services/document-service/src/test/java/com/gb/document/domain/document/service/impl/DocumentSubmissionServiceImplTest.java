@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -71,7 +72,7 @@ class DocumentSubmissionServiceImplTest {
     }
 
     @Test
-    @DisplayName("submit: 신규 Document 저장 + Pre-signed URL 발급(메타데이터 키 source/document_id 포함)")
+    @DisplayName("submit: 신규 Document 저장 + Pre-signed URL 발급(메타데이터 키 source/document_id/analysis_document_type 포함)")
     void submit_정상() {
         SubmitRequest req = new SubmitRequest(AnalysisDocumentType.LABOR_CONTRACT, "contract.pdf");
         Instant exp = Instant.parse("2026-05-29T10:00:00Z");
@@ -88,8 +89,12 @@ class DocumentSubmissionServiceImplTest {
         verify(s3PresignedUrlClient).issueUploadUrl(anyString(), anyString(), metaCap.capture(), any(Duration.class));
         Map<String, String> metadata = metaCap.getValue();
         assertThat(metadata).containsKeys("source", "document_id");
+        // 백엔드가 analysis_document_type을 심는다(account-a-contract-notice.md 결정 3).
+        assertThat(metadata).containsEntry("analysis_document_type", "LABOR_CONTRACT");
         // dev source일 때는 result_queue_arn이 안 들어가야 한다.
         assertThat(metadata).doesNotContainKey("result_queue_arn");
+        // user_lang은 추후 과제로 보류 — 현재 백엔드는 심지 않는다.
+        assertThat(metadata).doesNotContainKey("user_lang");
         assertThat(res.getStatus()).isEqualTo("ANALYZING");
         assertThat(res.getUploadUrl()).isEqualTo("https://mock/url");
         // 업로더가 PUT 시 그대로 보내야 하는 서명 헤더가 응답에 그대로 실린다.
@@ -124,6 +129,7 @@ class DocumentSubmissionServiceImplTest {
         assertThat(metaCap.getValue())
                 .containsEntry("source", "production")
                 .containsEntry("result_queue_arn", "arn:aws:sqs:ap-northeast-2:123:gb-analysis-results-prod")
+                .containsEntry("analysis_document_type", "PAYSLIP")
                 .containsKey("document_id");
     }
 
@@ -193,6 +199,33 @@ class DocumentSubmissionServiceImplTest {
 
         assertThat(res.getProcessingStatus()).isEqualTo("COMPLETED");
         assertThat(res.getOverallRiskLevel()).isEqualTo("HIGH");
+        // s3_masked_key 미보유 → presign 호출 없이 masked_file_url=null (api-spec §3 "미생성 시 null")
+        assertThat(res.getMaskedFileUrl()).isNull();
+        verify(s3PresignedUrlClient, never()).issueDownloadUrl(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("getResult: s3_masked_key 보유 시 presigned GET URL을 생성해 masked_file_url로 응답")
+    void getResult_마스킹본_presigned_GET() {
+        Document doc = completedDoc();
+        DocumentResult result = DocumentResult.builder()
+                .submission(doc)
+                .analysisDocumentType(AnalysisDocumentType.LABOR_CONTRACT)
+                .processingStatus(ProcessingStatus.COMPLETED)
+                .overallRiskLevel(RiskLevel.HIGH)
+                .ocrConfidence(new BigDecimal("0.92"))
+                .s3MaskedKey("masked/doc-public-id-1.txt")
+                .completedAt(LocalDateTime.parse("2026-05-29T09:00:00"))
+                .build();
+        given(documentRepository.findByPublicId(PUBLIC_ID)).willReturn(Optional.of(doc));
+        given(documentResultRepository.findBySubmission_PublicId(PUBLIC_ID)).willReturn(Optional.of(result));
+        given(s3PresignedUrlClient.issueDownloadUrl(eq("masked/doc-public-id-1.txt"), any(Duration.class)))
+                .willReturn("https://s3.signed.example/masked/doc-public-id-1.txt?X-Amz-Signature=x");
+
+        DocumentResultResponse res = service.getResult(OWNER, PUBLIC_ID);
+
+        assertThat(res.getMaskedFileUrl())
+                .isEqualTo("https://s3.signed.example/masked/doc-public-id-1.txt?X-Amz-Signature=x");
     }
 
     @Test

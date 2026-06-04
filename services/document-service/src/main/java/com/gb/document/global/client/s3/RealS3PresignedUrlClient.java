@@ -8,8 +8,10 @@ import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
 
@@ -51,6 +53,21 @@ public class RealS3PresignedUrlClient implements S3PresignedUrlClient {
         PresignedPutObjectRequest presigned = s3Presigner.presignPutObject(presignRequest);
         return new IssueUrlResult(
                 presigned.url().toString(), toUploadHeaders(presigned.signedHeaders()), presigned.expiration());
+    }
+
+    @Override
+    public String issueDownloadUrl(String key, Duration ttl) {
+        GetObjectRequest getRequest = GetObjectRequest.builder()
+                .bucket(properties.uploadBucket())
+                .key(key)
+                .build();
+
+        GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
+                .signatureDuration(ttl)
+                .getObjectRequest(getRequest)
+                .build();
+
+        return s3Presigner.presignGetObject(presignRequest).url().toString();
     }
 
     /**

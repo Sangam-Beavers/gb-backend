@@ -53,7 +53,7 @@ class S3PresignMetadataSignatureTest {
 
         PutObjectRequest putRequest = PutObjectRequest.builder()
                 .bucket("gb-document-uploads-prod")
-                .key("uploads/2026-05-29/doc/contract.pdf")
+                .key("original/2026-05-29/doc/contract.pdf")
                 .contentType("application/octet-stream")
                 .metadata(metadata)
                 .build();
@@ -114,7 +114,7 @@ class S3PresignMetadataSignatureTest {
 
         // when
         S3PresignedUrlClient.IssueUrlResult issued = client.issueUploadUrl(
-                "uploads/2026-05-29/doc/contract.pdf", "application/octet-stream",
+                "original/2026-05-29/doc/contract.pdf", "application/octet-stream",
                 metadata, Duration.ofSeconds(600));
 
         // then — 업로더가 PUT 시 보낼 헤더에 메타데이터 + Content-Type은 있고 host는 없어야 한다.

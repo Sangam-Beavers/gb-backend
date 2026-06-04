@@ -41,6 +41,9 @@ public class DocumentResultResponse {
     private final List<RiskItemDto> riskItems;
     private final String translatedText;
     private final String translatedLang;
+
+    @Schema(description = "마스킹본 Pre-signed GET URL(api-spec §3). DB에는 s3_masked_key(키)만 저장하고 "
+            + "조회 시점에 생성한다. 미생성 시 null.", nullable = true)
     private final String maskedFileUrl;
     private final String failedReason;
     private final String completedAt;
@@ -70,7 +73,11 @@ public class DocumentResultResponse {
         this.updatedAt = updatedAt;
     }
 
-    public static DocumentResultResponse from(DocumentResult result) {
+    /**
+     * @param maskedFileUrl 호출 측(Service)이 s3_masked_key로 발급한 Pre-signed GET URL. 키 미보유 시 null.
+     *                      (presign은 외부 클라이언트 의존이라 정적 변환이 아닌 Service에서 수행)
+     */
+    public static DocumentResultResponse from(DocumentResult result, String maskedFileUrl) {
         return DocumentResultResponse.builder()
                 .documentPublicId(result.getSubmission().getPublicId())
                 .analysisDocumentType(result.getAnalysisDocumentType().name())
@@ -83,7 +90,7 @@ public class DocumentResultResponse {
                         : result.getRiskItems().stream().map(RiskItemDto::from).toList())
                 .translatedText(result.getTranslatedText())
                 .translatedLang(result.getTranslatedLang())
-                .maskedFileUrl(result.getMaskedFileUrl())
+                .maskedFileUrl(maskedFileUrl)
                 .failedReason(result.getFailedReason())
                 .completedAt(toUtcZ(result.getCompletedAt()))
                 .createdAt(toUtcZ(result.getCreatedAt()))
