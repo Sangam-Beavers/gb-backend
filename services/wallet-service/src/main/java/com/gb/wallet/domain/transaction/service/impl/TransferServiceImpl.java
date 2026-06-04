@@ -911,6 +911,14 @@ public class TransferServiceImpl implements TransferService {
 
         // (4) 송신자 잔액 행 FOR UPDATE — 단일 행이라 데드락 회피용 ordering 불필요.
         //     송신자는 자동 생성 안 함(돈을 보내려면 잔액 행이 이미 있어야 정상).
+        //
+        //     ⚠️ 알려진 한계(WTX-03): 이 FOR UPDATE 락은 아래 (7) 외부 Mock 은행 payout(HTTP)이 끝날 때까지
+        //        유지된다 — 외부 호출 동안 송신자 잔액 행이 잠겨 있어, 같은 송신자의 다른 송금/환전이 락 대기한다.
+        //        현재는 (a) 단일 행·단일 사용자라 락 경합 캐스케이드가 낮고, (b) BankClient에 타임아웃이 구현돼
+        //        무한 보유는 없어 위험이 낮다. payout을 락 밖 짧은 별도 tx로 빼면(reserve→payout→confirm Saga)
+        //        락 보유 시간은 줄지만, payout 성공 후 로컬 차감 실패 시 외부만 빠져나가는 정합성 창과 보상(환불)
+        //        로직이 새로 필요해 정합성 모델이 바뀐다. 이는 팀 합의 + 진짜 MySQL(Testcontainers) 검증을 선행해야
+        //        안전하므로 본 사이클 범위 밖으로 연기한다(외부 성공 흔적은 (6.5) remittance_attempts로 이미 보존).
         WalletBalance senderBalance = walletBalanceRepository
                 .findForUpdateByWalletAndCurrency(senderWallet, currency)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
