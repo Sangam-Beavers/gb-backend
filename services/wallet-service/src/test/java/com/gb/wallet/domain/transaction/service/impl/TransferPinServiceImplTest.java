@@ -86,6 +86,22 @@ class TransferPinServiceImplTest {
     }
 
     @Test
+    @DisplayName("schedule-pin-5(WTX-05): 동결(SUSPENDED) 지갑이면 WALLET4003, PIN 인코딩/저장하지 않는다")
+    void setPin_동결지갑_WALLET4003() {
+        Wallet suspended = Wallet.builder()
+                .publicId("wallet-pub").userPublicId(USER).status(WalletStatus.SUSPENDED).build();
+        when(walletRepository.findByUserPublicId(USER)).thenReturn(Optional.of(suspended));
+
+        assertThatThrownBy(() -> service.setPin(USER, PIN))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_INACTIVE);
+
+        verify(passwordEncoder, never()).encode(anyString()); // 비활성 지갑은 PIN을 인코딩조차 안 함
+        assertThat(suspended.hasTransferPin()).isFalse();
+    }
+
+    @Test
     @DisplayName("setPin: 지갑이 없으면 WALLET4001")
     void setPin_지갑없음_WALLET4001() {
         when(walletRepository.findByUserPublicId(USER)).thenReturn(Optional.empty());

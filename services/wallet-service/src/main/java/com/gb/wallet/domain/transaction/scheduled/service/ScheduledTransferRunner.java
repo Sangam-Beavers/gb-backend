@@ -31,6 +31,14 @@ import org.springframework.transaction.annotation.Transactional;
  * {@code next_run_date <= today}인 정기 송금을 일괄 실행한다. 각 회차는 {@link TransferService#execute}를
  * 그대로 호출 — 멱등성 3-layer·락 재시도·rate-limit·remittance_attempts 모두 송금 본업 로직이 처리한다.
  *
+ * <p><b>rate-limit 공유(schedule-pin-3, 의도):</b> 정기 송금도 수동 송금과 동일한 user 단위 rate-limit
+ * ({@code ratelimit:transfer:{userPublicId}}, 기본 30회/60초)을 공유한다 — 스케줄러 전용 우회 키를 두지 않는다.
+ * 우회하면 스케줄러 버그(같은 회차 반복 실행 등)가 일으킬 수 있는 폭주 송금을 막을 backstop이 사라지기
+ * 때문이다(rate-limit은 "외부 자금 이동 폭주 차단" 안전밸브). 한 유저의 같은 날 도래분이 30건을 넘으면
+ * 31번째부터는 {@code TRANSFER4006}(429)을 받고, 아래 회차 단위 catch가 로그만 남긴 채 {@code status=ACTIVE}로
+ * 두므로 초과분은 손실 없이 다음 트리거(익일)에 재시도된다. 동일 유저가 같은 날 30건 넘게 도래하는 경우는
+ * 드물어 한계로 수용한다.
+ *
  * <p><b>분산 락(Redisson):</b> K8s multi-replica 환경에서 모든 파드가 동시 트리거되더라도
  * {@code scheduler:scheduled-transfer} 락을 획득한 단 1개 파드만 실제 실행한다(이중 송금 방지).
  * 락 못 잡은 파드는 조용히 종료 — 다음 트리거에서 다시 경쟁.

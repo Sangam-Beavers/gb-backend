@@ -130,6 +130,8 @@ public class MemberServiceImpl implements MemberService {
         // saveAndFlush로 INSERT를 이 메서드 안에서 강제해, 위 existsBy를 통과한 동시 호출 race의 UNIQUE 위반
         // (publicId/email/nickname)을 contextual하게 잡는다(중앙 핸들러는 이제 DataIntegrityViolation을 500으로
         // 처리하므로 여기서 COMMON4091로 변환해야 race가 409로 유지된다 — 위 existsByPublicId 분기와 동일 코드).
+        // member-5: race는 어느 필드(email/nickname)인지 구분 없이 generic COMMON4091로 통일한다 — 도메인 코드
+        // (MEMBER4002/4003)는 순차 선검사(existsBy)에서만 주고, 드문 동시 race는 "이미 존재"로 충분하다(의도된 트레이드오프).
         Member savedMember;
         try {
             savedMember = memberRepository.saveAndFlush(member);
