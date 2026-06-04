@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -49,6 +50,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -437,6 +439,67 @@ class ExchangeServiceImplTest {
         assertThat(result).isSameAs(priorResponse);
         verify(self).readPrior(USER, "idem-1"); // 소유자 스코프로 재조회(EX-FIX)
         verify(quoteRedisRepository, never()).delete(any()); // best-effort delete 경로 폐기
+    }
+
+    // ───────────────────── EXB1: 락 경합 재시도(충전/송금과 대칭) ─────────────────────
+
+    @Test
+    @DisplayName("실행 락경합: executeInTransaction이 PessimisticLockingFailureException 1회 던지면 재시도해 성공 반환")
+    void execute_락경합_재시도_성공() throws Exception {
+        ReflectionTestUtils.setField(exchangeService, "self", self); // self-proxy 위임 검증용
+        ExchangeExecuteRequest request = new ExchangeExecuteRequest();
+        ReflectionTestUtils.setField(request, "quotePublicId", "quote-1");
+        String cacheKey = "exchange:idem-1:" + USER;
+        QuoteData quote = new QuoteData("quote-1", USER, ExchangeType.EXCHANGE,
+                CurrencyType.KRW, CurrencyType.USD, new BigDecimal("100000"),
+                new BigDecimal("1380"), new BigDecimal("500"), CurrencyType.KRW,
+                new BigDecimal("72.1014"), CurrencyType.USD);
+        ExchangeResponse response = ExchangeResponse.builder().publicId("ex-1").status("COMPLETED").build();
+        when(idempotencyCacheHelper.get(cacheKey)).thenReturn(Optional.empty());
+        when(transactionRepository.findByIdempotencyKey("idem-1")).thenReturn(Optional.empty());
+        when(quoteRedisRepository.find("quote-1")).thenReturn(Optional.of(quote));
+        when(quoteRedisRepository.getAndDelete("quote-1")).thenReturn(Optional.of(quote)); // 원자 소비는 1회만
+        // 1차: 락 경합으로 롤백(CannotAcquireLockException ⊂ PessimisticLockingFailureException) → 2차: 성공
+        when(self.executeInTransaction(USER, "idem-1", quote))
+                .thenThrow(new CannotAcquireLockException("lock timeout"))
+                .thenReturn(response);
+        when(objectMapper.writeValueAsString(response)).thenReturn("{\"json\":\"ok\"}");
+
+        ExchangeResponse result = exchangeService.execute(USER, "idem-1", request);
+
+        assertThat(result).isSameAs(response);
+        verify(self, times(2)).executeInTransaction(USER, "idem-1", quote); // 1회 실패 + 1회 성공
+        verify(self, never()).readPrior(any(), any());                      // 락경합은 readPrior가 아닌 재시도로 복구
+        verify(quoteRedisRepository, times(1)).getAndDelete("quote-1");      // 재시도해도 견적 재소비 없음(consumed 재사용)
+        verify(idempotencyCacheHelper).set(cacheKey, "{\"json\":\"ok\"}");   // 성공 응답은 캐시에 저장
+    }
+
+    @Test
+    @DisplayName("실행 락경합: 재시도(최대 3회) 모두 실패하면 COMMON5031(503), 캐시 미저장")
+    void execute_락경합_재시도소진_COMMON5031() {
+        ReflectionTestUtils.setField(exchangeService, "self", self);
+        ExchangeExecuteRequest request = new ExchangeExecuteRequest();
+        ReflectionTestUtils.setField(request, "quotePublicId", "quote-1");
+        String cacheKey = "exchange:idem-1:" + USER;
+        QuoteData quote = new QuoteData("quote-1", USER, ExchangeType.EXCHANGE,
+                CurrencyType.KRW, CurrencyType.USD, new BigDecimal("100000"),
+                new BigDecimal("1380"), new BigDecimal("500"), CurrencyType.KRW,
+                new BigDecimal("72.1014"), CurrencyType.USD);
+        when(idempotencyCacheHelper.get(cacheKey)).thenReturn(Optional.empty());
+        when(transactionRepository.findByIdempotencyKey("idem-1")).thenReturn(Optional.empty());
+        when(quoteRedisRepository.find("quote-1")).thenReturn(Optional.of(quote));
+        when(quoteRedisRepository.getAndDelete("quote-1")).thenReturn(Optional.of(quote));
+        when(self.executeInTransaction(USER, "idem-1", quote))
+                .thenThrow(new CannotAcquireLockException("deadlock"));
+
+        assertThatThrownBy(() -> exchangeService.execute(USER, "idem-1", request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
+
+        verify(self, times(3)).executeInTransaction(USER, "idem-1", quote); // MAX_EXCHANGE_ATTEMPTS
+        verify(self, never()).readPrior(any(), any());
+        verify(idempotencyCacheHelper, never()).set(any(), any()); // 에러 응답은 캐시에 넣지 않는다
     }
 
     // ───────────────────── WU-L1: 견적 원자 소비(이중 환전 차단) ─────────────────────

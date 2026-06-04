@@ -43,6 +43,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -62,6 +63,12 @@ public class ExchangeServiceImpl implements ExchangeService {
     /** 견적 유효 시간(분). Redis TTL과 응답 expires_at 계산에 함께 사용. */
     private static final long QUOTE_TTL_MINUTES = 5L;
     private static final String EXCHANGE_ACTION = "EXCHANGE";
+    /**
+     * 환전 락 경합(데드락·락 타임아웃)으로 트랜잭션이 롤백됐을 때 executeInTransaction 재시도 최대 횟수.
+     * 소진 시 COMMON5031(503). 충전 {@code ChargeServiceImpl.MAX_CHARGE_ATTEMPTS}·송금
+     * {@code TransferServiceImpl.MAX_TRANSFER_ATTEMPTS} 패턴 답습(EXB1 — 환전만 비대칭이라 정렬).
+     */
+    private static final int MAX_EXCHANGE_ATTEMPTS = 3;
 
     private final WalletRepository walletRepository;
     private final WalletBalanceRepository walletBalanceRepository;
@@ -185,16 +192,37 @@ public class ExchangeServiceImpl implements ExchangeService {
         // 견적 원자 소비(getAndDelete) — 같은 견적을 다른 idempotency_key로 동시 재사용하는 이중 환전을
         // 차단한다(WEXB-01). 경쟁에서 이긴 1건만 견적을 얻고, 진 쪽/이미 소비/만료는 empty → QUOTE_EXPIRED.
         // (커밋 후 best-effort delete는 트랜잭션 밖이라 두 동시 요청이 모두 견적을 보고 각자 실행할 수 있어 폐기.)
+        //
+        // TODO(EXB2 연기): 같은 idempotency_key로 '동시' 요청이 오면 패자는 Layer1/2를 모두 miss(승자 tx 미커밋)한
+        //   뒤 getAndDelete가 empty라 QUOTE_EXPIRED를 받는다(첫 결과 멱등 재반환이 아님). 견고한 멱등은 getAndDelete
+        //   소비를 FOR UPDATE(executeInTransaction) 안으로 옮겨 패자가 승자 커밋까지 block 후 첫 거래를 재조회하게
+        //   해야 하나, 이는 DB 비관락 보유 중 Redis IO(=WU-F1 'lock 안 외부호출' 안티패턴)를 들이고 critical section을
+        //   재구조화(데드락 위험)해야 해 별도 검토로 미룬다. 본 경로의 P3 한계이며, WEXB-01(다른 키 이중사용 차단)과
+        //   비동시(순차 재시도) 멱등(Layer1/2/3)은 그대로 유지된다.
         QuoteData consumed = quoteRedisRepository.getAndDelete(request.getQuotePublicId())
                 .orElseThrow(() -> new BusinessException(ExchangeErrorCode.QUOTE_EXPIRED));
 
         // 트랜잭션 내 실행 (self-proxy — 직접 호출 시 @Transactional 미적용).
-        try {
-            return self.executeInTransaction(userPublicId, idempotencyKey, consumed);
-        } catch (DataIntegrityViolationException race) {
-            // Layer 3 — 같은 idempotency_key(다른 견적)로 동시 race가 먼저 커밋됨 → 첫 거래 재조회
-            //   (소유자·유형 검증 포함). 이 경로의 견적은 이미 getAndDelete로 소비됐다.
-            return self.readPrior(userPublicId, idempotencyKey);
+        //   락 경합(PessimisticLockingFailureException)은 충전/송금과 동일하게 최대 MAX_EXCHANGE_ATTEMPTS회
+        //   재시도하고, 소진 시 COMMON5031(503)로 매핑한다(EXB1 — 환전만 비대칭이라 일시 경합이 generic 500으로
+        //   누출되던 것을 정렬). UNIQUE race(DataIntegrityViolation)는 재시도 없이 첫 거래를 재반환한다(Layer 3).
+        //   재시도 시 이미 소비한 consumed 견적을 그대로 재사용한다(롤백돼 idempotency_key 미커밋이라 재INSERT 안전).
+        int attempt = 0;
+        while (true) {
+            try {
+                return self.executeInTransaction(userPublicId, idempotencyKey, consumed);
+            } catch (DataIntegrityViolationException race) {
+                // Layer 3 — 같은 idempotency_key(다른 견적)로 동시 race가 먼저 커밋됨 → 첫 거래 재조회
+                //   (소유자·유형 검증 포함). 이 경로의 견적은 이미 getAndDelete로 소비됐다.
+                return self.readPrior(userPublicId, idempotencyKey);
+            } catch (PessimisticLockingFailureException lockContention) {
+                if (++attempt >= MAX_EXCHANGE_ATTEMPTS) {
+                    log.warn("환전 락 경합 재시도 소진({}회) — COMMON5031 매핑. user={}",
+                            MAX_EXCHANGE_ATTEMPTS, userPublicId, lockContention);
+                    throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE, lockContention);
+                }
+                log.debug("환전 락 경합 — 재시도 {}/{}. user={}", attempt, MAX_EXCHANGE_ATTEMPTS, userPublicId);
+            }
         }
     }
 
