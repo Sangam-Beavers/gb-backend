@@ -55,11 +55,28 @@ public interface TransferService {
      * Redis 캐시 저장 → 락 해제. 동시 race로 idempotency_key UNIQUE 위반이 나면
      * {@link #readPriorTransaction}(Layer 3)이 별도 트랜잭션에서 첫 결과를 재반환한다.
      *
+     * <p><b>송금 PIN 게이트(TX-PIN):</b> 사용자 직접 호출 경로라 rate-limit 통과 직후 {@code TransferPinGate}로
+     * pin-verify 성공 마커를 원자 소비한다 — 마커가 없으면 TRANSFER4010(428)/TRANSFER4009(400)로 차단한다.
+     * 멱등 재요청(Layer1/2 hit)은 게이트 이전에 반환돼 재검증을 요구하지 않는다. 스케줄러 등 사전 인가된
+     * 경로는 {@link #executePreAuthorized}를 쓴다.
+     *
      * @param userPublicId   요청자(인증 미구현 — 헤더 수신, CLAUDE.md §9)
      * @param idempotencyKey 멱등성 키(헤더)
      * @param request        송금 요청 본문
      */
     TransferExecuteResponse execute(String userPublicId, String idempotencyKey, TransferExecuteRequest request);
+
+    /**
+     * <b>사전 인가된(pre-authorized) 송금 실행</b> — PIN 게이트를 적용하지 않는 점만 {@link #execute}와 다르다.
+     * 그 외 멱등성 3-layer·rate-limit·락 재시도·자금 이동은 완전히 동일하다.
+     *
+     * <p><b>용도(스케줄러 전용):</b> 정기송금은 사람이 PIN을 입력할 주체가 없는 시스템 자동 실행이다. 대신
+     * 정기송금 <b>설정 시점</b>({@code ScheduledTransferServiceImpl.create})에 PIN을 1회 검증해 인가하는
+     * standing-order 모델을 쓰므로, 회차 실행은 per-run PIN을 면제한다. {@code ScheduledTransferRunner}만
+     * 호출하며 HTTP 컨트롤러에서 호출하지 말 것(PIN 우회 통로가 된다).
+     */
+    TransferExecuteResponse executePreAuthorized(
+            String userPublicId, String idempotencyKey, TransferExecuteRequest request);
 
     /**
      * 실제 송금 처리(쓰기 트랜잭션). 잔액 행 비관적 락(wallet_id 오름차순) → 잔액 검증 → 차감/증액 →

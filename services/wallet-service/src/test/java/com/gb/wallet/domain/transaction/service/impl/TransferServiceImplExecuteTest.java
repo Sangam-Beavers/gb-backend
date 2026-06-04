@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -25,6 +26,7 @@ import com.gb.wallet.domain.transaction.entity.TransactionAuditLog;
 import com.gb.wallet.domain.transaction.repository.TransactionAuditLogRepository;
 import com.gb.wallet.domain.transaction.repository.TransactionRepository;
 import com.gb.wallet.domain.transaction.service.RemittanceAttemptWriter;
+import com.gb.wallet.domain.transaction.service.TransferPinGate;
 import com.gb.wallet.domain.transaction.service.TransferService;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.entity.WalletBalance;
@@ -64,6 +66,7 @@ import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.redisson.api.RLock;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /**
@@ -91,6 +94,7 @@ class TransferServiceImplExecuteTest {
     @Mock private IdempotencyCacheHelper idempotencyCacheHelper;
     @Mock private RateLimitHelper rateLimitHelper;
     @Mock private TransferRateLimitProperties transferRateLimitProperties;
+    @Mock private TransferPinGate transferPinGate;
     @Mock private ObjectMapper objectMapper;
     @InjectMocks private TransferServiceImpl service;
 
@@ -173,6 +177,9 @@ class TransferServiceImplExecuteTest {
 
         // 회귀 가드: INTERNAL_TRANSFER 경로는 REMITTANCE 시도 흔적을 박지 않는다(분기 누수 방지).
         verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
+
+        // TX-PIN: 사용자 직접 호출은 자금 이동 전에 PIN 게이트를 통과해야 한다(마커 원자 소비).
+        verify(transferPinGate).requireVerified(SENDER_USER);
     }
 
     @Test
@@ -503,6 +510,8 @@ class TransferServiceImplExecuteTest {
         verifyNoInteractions(walletRepository, walletBalanceRepository, distributedLockHelper,
                 auditLogRepository, bankClient, memberClient, bankAccountRepository,
                 remittanceAttemptWriter);
+        // TX-PIN: 멱등 replay(캐시 hit)는 게이트 이전에 반환 — PIN 재검증을 요구하지 않는다(마커 미소비).
+        verifyNoInteractions(transferPinGate);
         verify(transactionRepository, never()).findByIdempotencyKey(anyString());
         // replay 경로는 executeInTransaction 미진입 — ensure도 호출되면 안 된다.
         verify(walletBalanceWriter, never()).ensureBalanceRow(any(), any());
@@ -526,6 +535,8 @@ class TransferServiceImplExecuteTest {
         assertThat(result.status()).isEqualTo("COMPLETED");
         // 락/외부 호출 미진입
         verifyNoInteractions(distributedLockHelper, walletBalanceRepository, auditLogRepository);
+        // TX-PIN: Layer 2 멱등 재반환도 게이트 이전에 반환 — PIN 재검증을 요구하지 않는다.
+        verifyNoInteractions(transferPinGate);
         verify(walletRepository, never()).findByUserPublicId(anyString());
         // 캐시 채움(다음 동일 키 요청은 Layer 1로 처리). 키는 스코프된 형태(anyString).
         verify(idempotencyCacheHelper).set(anyString(), anyString());
@@ -681,6 +692,9 @@ class TransferServiceImplExecuteTest {
         assertThat(remittanceCacheKeyCaptor.getValue())
                 .as("REMITTANCE 캐시 키는 4-튜플 스코프 형식: remittance:{key}:{user}:{bank_account_pub_id}")
                 .contains("remittance", KEY, SENDER_USER, BANK_ACCOUNT_PUB_ID);
+
+        // TX-PIN: REMITTANCE(외부 출금)도 자금 이동 전 PIN 게이트를 통과해야 한다(게이트는 유형 분기 이전 공용 코드).
+        verify(transferPinGate).requireVerified(SENDER_USER);
     }
 
     @Test
@@ -990,6 +1004,142 @@ class TransferServiceImplExecuteTest {
         // 검증 실패 → 캐시 set·신규 거래 INSERT 모두 미진입.
         verify(idempotencyCacheHelper, never()).set(anyString(), anyString());
         verify(transactionRepository, never()).save(any());
+    }
+
+    // ===== TX-PIN: 송금 PIN 서버측 게이트 =====
+
+    @Test
+    @DisplayName("TX-PIN: 게이트가 TRANSFER4010(미검증) throw → 자금 이동 0 (락/거래/감사/지갑조회 미진입)")
+    void execute_PIN미검증_TRANSFER4010_자금이동없음() {
+        stubCacheMiss();
+        stubDbMiss();
+        willThrow(new BusinessException(TransferErrorCode.PIN_VERIFICATION_REQUIRED))
+                .given(transferPinGate).requireVerified(SENDER_USER);
+
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.PIN_VERIFICATION_REQUIRED);
+
+        // 게이트는 executeWithRetry(지갑 조회·락·자금 이동) 앞 — 어떤 side effect도 일어나지 않는다.
+        verifyNoInteractions(distributedLockHelper, walletBalanceRepository, bankClient,
+                remittanceAttemptWriter);
+        verify(walletRepository, never()).findByUserPublicId(anyString());
+        verify(transactionRepository, never()).save(any());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("TX-PIN: 게이트가 TRANSFER4009(PIN 미설정) throw → 자금 이동 0")
+    void execute_PIN미설정_TRANSFER4009_자금이동없음() {
+        stubCacheMiss();
+        stubDbMiss();
+        willThrow(new BusinessException(TransferErrorCode.PIN_NOT_SET))
+                .given(transferPinGate).requireVerified(SENDER_USER);
+
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.PIN_NOT_SET);
+
+        verify(transactionRepository, never()).save(any());
+        verifyNoInteractions(distributedLockHelper);
+    }
+
+    @Test
+    @DisplayName("TX-PIN: rate-limit 초과(TRANSFER4006)면 게이트 미도달 — 검증 마커를 헛되이 소모하지 않는다(게이트는 rate-limit 뒤)")
+    void execute_rateLimit초과시_게이트_미도달() {
+        stubCacheMiss();
+        stubDbMiss();
+        given(rateLimitHelper.tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class)))
+                .willReturn(false);
+
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.RATE_LIMIT_EXCEEDED);
+
+        verifyNoInteractions(transferPinGate); // 게이트 미도달 → 마커 미소비(rate-limit 막힘 시 재검증 불필요)
+    }
+
+    @Test
+    @DisplayName("TX-PIN: executePreAuthorized(스케줄러)는 PIN 게이트를 건너뛰고 자금을 이동한다(standing order)")
+    void executePreAuthorized_게이트_우회_정상송금() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        WalletBalance receiverBalance = balance(receiver, BigDecimal.ZERO);
+        RLock lock = lock();
+
+        stubCacheMiss();
+        stubDbMiss();
+        stubWalletLookups(sender, receiver);
+        stubLockAcquired(lock);
+        stubBalanceLocks(sender, receiver, senderBalance, receiverBalance);
+        stubTransactionSaveAndAuditLog();
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+
+        TransferExecuteResponse response =
+                service.executePreAuthorized(SENDER_USER, KEY, request("10000.0000"));
+
+        assertThat(response.status()).isEqualTo("COMPLETED");
+        assertThat(senderBalance.getBalance()).isEqualByComparingTo("990000");
+        assertThat(receiverBalance.getBalance()).isEqualByComparingTo("10000");
+        // 핵심: 사전 인가 경로라 PIN 게이트를 호출하지 않는다(설정 시 1회 인가한 standing order).
+        verifyNoInteractions(transferPinGate);
+        verify(transactionRepository, times(1)).save(any(Transaction.class));
+        // schedule-pin-3: 단, rate-limit은 수동 송금과 동일하게 공유한다(스케줄러 폭주 backstop).
+        verify(rateLimitHelper).tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("TX-PIN: executePreAuthorized도 멱등 캐시 hit는 그대로 재반환(게이트 무관, 이중 송금 방지)")
+    void executePreAuthorized_캐시hit_재반환() throws Exception {
+        TransferExecuteResponse cached = stubCachedResponse();
+        given(idempotencyCacheHelper.get(anyString())).willReturn(Optional.of("{\"cached\":\"json\"}"));
+        given(objectMapper.readValue(anyString(), eq(TransferExecuteResponse.class))).willReturn(cached);
+
+        TransferExecuteResponse result =
+                service.executePreAuthorized(SENDER_USER, KEY, request("10000.0000"));
+
+        assertThat(result).isSameAs(cached);
+        verifyNoInteractions(transferPinGate, distributedLockHelper);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("TX-PIN: 락 경합 재시도(PessimisticLockingFailureException)가 일어나도 PIN 게이트는 1회만 — 마커는 재시도 바깥에서 1회 소비")
+    void execute_락경합재시도시_PIN게이트_정확히1회() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        WalletBalance receiverBalance = balance(receiver, BigDecimal.ZERO);
+
+        stubCacheMiss();
+        stubDbMiss();
+        stubWalletLookups(sender, receiver);
+        stubLockAcquired(lock());
+        given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
+        given(walletRepository.findById(RECEIVER_WALLET_ID)).willReturn(Optional.of(receiver));
+        // 1차 시도: 송신자 잔액 FOR UPDATE에서 락 경합 → 트랜잭션 롤백 → executeWithRetry가 재시도. 2차: 정상.
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(sender, CurrencyType.KRW))
+                .willThrow(new PessimisticLockingFailureException("lock wait timeout"))
+                .willReturn(Optional.of(senderBalance));
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(receiver, CurrencyType.KRW))
+                .willReturn(Optional.of(receiverBalance));
+        stubTransactionSaveAndAuditLog();
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+
+        TransferExecuteResponse response = service.execute(SENDER_USER, KEY, request("10000.0000"));
+
+        assertThat(response.status()).isEqualTo("COMPLETED");
+        // 핵심: 게이트는 executeWithRetry *바깥*(rate-limit 뒤·재시도 루프 앞)이라, 락 경합으로 회차가 2번
+        // 돌아도 마커는 정확히 1회만 소비된다 — 재시도가 PIN 재검증을 요구하지 않는다.
+        verify(transferPinGate, times(1)).requireVerified(SENDER_USER);
+        // 2차 시도에서 1회만 차감(중복 차감 없음).
+        assertThat(senderBalance.getBalance()).isEqualByComparingTo("990000");
+        assertThat(receiverBalance.getBalance()).isEqualByComparingTo("10000");
+        verify(transactionRepository, times(1)).save(any(Transaction.class));
     }
 
     // ===== helpers — stub blocks =====

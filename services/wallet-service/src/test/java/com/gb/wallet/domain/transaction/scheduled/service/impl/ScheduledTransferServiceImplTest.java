@@ -5,6 +5,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
@@ -17,6 +21,7 @@ import com.gb.wallet.domain.transaction.scheduled.dto.request.CreateScheduledTra
 import com.gb.wallet.domain.transaction.scheduled.entity.ScheduledTransfer;
 import com.gb.wallet.domain.transaction.scheduled.repository.ScheduledTransferRepository;
 import com.gb.wallet.domain.transaction.scheduled.service.NextRunDateCalculator;
+import com.gb.wallet.domain.transaction.service.TransferPinGate;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
@@ -53,6 +58,7 @@ class ScheduledTransferServiceImplTest {
     @Mock private TransactionRepository transactionRepository;
     @Mock private MemberClient memberClient;
     @Mock private NextRunDateCalculator nextRunDateCalculator;
+    @Mock private TransferPinGate transferPinGate;
     @InjectMocks private ScheduledTransferServiceImpl service;
 
     private static final String SENDER = "sender-uuid";
@@ -78,6 +84,26 @@ class ScheduledTransferServiceImplTest {
         assertThat(resp.status()).isEqualTo("ACTIVE");
         assertThat(resp.nextRunDate()).isEqualTo("2026-06-25");
         assertThat(resp.scheduleDay()).isEqualTo(25);
+        // TX-PIN: 정기송금 설정은 standing order라 설정 시 1회 PIN 게이트를 통과해야 한다.
+        verify(transferPinGate).requireVerified(SENDER);
+    }
+
+    @Test
+    @DisplayName("TX-PIN: PIN 미검증이면 TRANSFER4010 — ScheduledTransfer 저장 안 함(standing order 게이트)")
+    void create_PIN미검증_TRANSFER4010() {
+        BankAccount account = bankAccount(BANK_ACC_ID, "NGUYEN VAN A");
+        ReflectionTestUtils.setField(account, "mockAccountToken", "tok-abc");
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACC_PUB_ID, SENDER))
+                .willReturn(Optional.of(account));
+        willThrow(new BusinessException(TransferErrorCode.PIN_VERIFICATION_REQUIRED))
+                .given(transferPinGate).requireVerified(SENDER);
+
+        assertThatThrownBy(() -> service.create(SENDER, remittanceReq(TransferFrequency.MONTHLY.name(), 25)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.PIN_VERIFICATION_REQUIRED);
+
+        verify(scheduledTransferRepository, never()).save(any()); // 게이트 차단 시 영속화 없음
     }
 
     @Test
@@ -95,6 +121,8 @@ class ScheduledTransferServiceImplTest {
 
         assertThat(resp.transferType()).isEqualTo("INTERNAL_TRANSFER");
         assertThat(resp.frequency()).isEqualTo("WEEKLY");
+        // TX-PIN: INTERNAL 정기송금 설정도 standing-order 게이트를 통과해야 한다(게이트는 유형 분기 이후 공용 1회).
+        verify(transferPinGate).requireVerified(SENDER);
     }
 
     @Test
@@ -105,6 +133,9 @@ class ScheduledTransferServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(CommonErrorCode.UNPROCESSABLE_ENTITY);
+
+        // TX-PIN: 입력·대상 검증 실패는 게이트(step 4-2) 이전 — 1회용 PIN 마커를 헛되이 소비하지 않는다.
+        verifyNoInteractions(transferPinGate);
     }
 
     @Test

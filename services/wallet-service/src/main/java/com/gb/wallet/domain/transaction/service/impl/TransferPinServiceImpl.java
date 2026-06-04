@@ -8,6 +8,7 @@ import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
+import com.gb.wallet.global.redis.PinVerificationStore;
 import com.gb.wallet.global.redis.TransferPinAttemptStore;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -20,6 +21,7 @@ public class TransferPinServiceImpl implements TransferPinService {
 
     private final WalletRepository walletRepository;
     private final TransferPinAttemptStore attemptStore;
+    private final PinVerificationStore pinVerificationStore;
     private final PasswordEncoder passwordEncoder;
 
     @Override
@@ -42,6 +44,10 @@ public class TransferPinServiceImpl implements TransferPinService {
 
         // 평문 PIN은 저장하지 않고 BCrypt 해시만 저장. dirty checking으로 UPDATE.
         wallet.changeTransferPin(passwordEncoder.encode(pin));
+
+        // 새 PIN은 직전 검증을 물려받지 않는다 — 잔존 마커를 무효화(방어적 불변식, TX-PIN). 현재는 최초
+        // 설정만 허용해 마커가 있을 경로가 없지만, 향후 변경(change-PIN) 도입 대비.
+        pinVerificationStore.clearVerified(userPublicId);
     }
 
     @Override
@@ -66,7 +72,10 @@ public class TransferPinServiceImpl implements TransferPinService {
                     nowLocked ? TransferErrorCode.PIN_LOCKED : TransferErrorCode.PIN_MISMATCH);
         }
 
-        // 4) 성공 — 실패 카운트/잠금 초기화.
+        // 4) 성공 — 실패 카운트/잠금 초기화 + 단명 검증 마커 발급(TX-PIN). 마커는 송금/정기설정 게이트
+        //    (TransferPinGate)가 원자 소비(GETDEL)해 1회 검증이 1회 인가만 되게 한다. 마커 저장 실패는
+        //    fail-closed로 전파(검증 실패 처리 — PinVerificationStore.markVerified).
         attemptStore.reset(userPublicId);
+        pinVerificationStore.markVerified(userPublicId);
     }
 }

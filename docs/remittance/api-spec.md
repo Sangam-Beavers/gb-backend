@@ -173,7 +173,7 @@
 
 - 앱 사용자 검증: `GET /api/v1/transfers/validate-member?email={}` → `data: { receiver_public_id, nickname, is_verified }`
 - 송금 PIN 설정: `POST /api/v1/transfers/pin` (Body: `{ "pin": "123456" }`, 숫자 6자리) → 201. 형식 오류 `COMMON4001`, 이미 설정됨 `COMMON4091`. (방식 B라 계정 비밀번호는 IdP가 보유 → 송금 본인확인은 별도 송금 PIN 6자리로 한다.)
-- 송금 PIN 검증: `POST /api/v1/transfers/pin-verify` (Body: `{ "pin": "123456" }`) → 200. 불일치 `TRANSFER4007`, 미설정 `TRANSFER4009`, 5회 연속 실패 시 10분 잠금 `TRANSFER4008`(429). 성공해야 송금 실행(§6)으로 진행.
+- 송금 PIN 검증: `POST /api/v1/transfers/pin-verify` (Body: `{ "pin": "123456" }`) → 200. 불일치 `TRANSFER4007`, 미설정 `TRANSFER4009`, 5회 연속 실패 시 10분 잠금 `TRANSFER4008`(429). 성공해야 송금 실행(§6)으로 진행. **검증 성공 시 서버가 단명·단일사용 마커(`pin:verified:{userPublicId}`, TTL 180초)를 남기고, 송금 실행(§6)·정기송금 설정(§7-2-2)이 이를 원자 소비(GETDEL)해야 진행한다(TX-PIN, 서버측 강제). 1회 검증 = 1회 인가** — 송금 직전 다시 검증해야 한다. Redis 장애 시 fail-closed(송금 차단).
 
 ---
 
@@ -230,6 +230,8 @@
 | 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. (INTERNAL_TRANSFER 한정) |
 | 400 | TRANSFER4005 | 지원하지 않는 통화 조합입니다. (1·2단계는 같은 통화만) |
 | 429 | TRANSFER4006 | 송금 요청 횟수를 초과했습니다. (user 단위 rate-limit, 기본 60초 / 30회) |
+| 400 | TRANSFER4009 | 송금 PIN이 설정되지 않았습니다. (TX-PIN — PIN 미설정 사용자가 송금 실행 호출. 먼저 `POST /transfers/pin` 설정 필요) |
+| 428 | TRANSFER4010 | 송금 전 PIN 검증이 필요합니다. (TX-PIN — `pin-verify`(§5) 성공 마커 없이 본 API 직접 호출. 서버가 단명·단일사용 마커를 강제 확인) |
 | 400 | ACCOUNT4002 | 계좌 인증에 실패했습니다. (REMITTANCE — Mock 은행 BANK4003 매핑) |
 | 400 | ACCOUNT4003 | 연동 계좌의 잔액이 부족합니다. (REMITTANCE — Mock 은행 BANK4002 매핑) |
 | 401 | AUTH4011 | 인증이 필요합니다. |
@@ -319,7 +321,7 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 > 모든 행은 같은 `transaction_id` 참조. 같은 `@Transactional` 안에서 INSERT.
 > REMITTANCE 시도 흔적(외부 호출 직전)은 `transaction_audit_logs`가 아닌 별도 `remittance_attempts`에 박는다(§6-0 참조).
 
-> 사전 흐름: `POST /transfers/pin-verify`(송금 PIN 검증, §5) 성공 후 본 API 호출.
+> 사전 흐름(TX-PIN): `POST /transfers/pin-verify`(송금 PIN 검증, §5) 성공 후 본 API 호출. **서버측 강제** — 검증 성공 시 남는 단명·단일사용 마커(`pin:verified:{user}`)를 본 API가 rate-limit 직후 원자 소비(GETDEL)한다. 마커가 없으면 `TRANSFER4010`(428, 미검증) / PIN 미설정이면 `TRANSFER4009`(400). 멱등 재요청(Layer1/2 hit)은 마커를 재소비하지 않는다. 정기송금 회차(스케줄러)는 설정 시 1회 인가한 standing order라 면제(§7-2-2).
 ---
 
 ## 7. 송금 확인증 / 정기 송금
@@ -449,6 +451,8 @@ snapshot 방식이라 회원이 본명을 바꾸거나 외부 계좌의 명의�
 `POST /api/v1/transfers/scheduled` · Auth ✅
 
 매주/매월 자동 실행되는 정기 송금을 설정한다. 설정 즉시 `ACTIVE` 상태로 등록되며 다음 실행 예정일(`next_run_date`)이 **KST(`Asia/Seoul`) 기준**으로 계산된다.
+
+> **사전 흐름(TX-PIN, standing order):** 정기송금은 "미래의 자금 이동을 예약"하는 행위라 **설정 시 1회 PIN 검증이 필요**하다. `POST /transfers/pin-verify`(§5) 성공 후 본 API를 호출하면 서버가 검증 마커를 원자 소비해 인가한다 — 마커 없으면 `TRANSFER4010`(428, 미검증) / PIN 미설정이면 `TRANSFER4009`(400). 이렇게 설정 시점에 인가하므로 **회차 실행(스케줄러 §7-2-4)은 per-run PIN을 면제**한다(사람이 PIN을 입력할 주체가 없는 시스템 자동 실행). 게이트는 입력·대상 검증을 모두 통과한 뒤(영속화 직전) 소비한다. ※ 본 변경 이전에 생성된 기존 정기송금은 설정 시 PIN 기록이 없으나, 인증된 사용자가 생성한 것이라 회차 실행을 그대로 면제한다(grandfather).
 
 **대상 송금 유형**: `INTERNAL_TRANSFER` · `REMITTANCE` 둘 다 (송금 실행·validate와 동일하게 `transfer_type`으로 분기).
 

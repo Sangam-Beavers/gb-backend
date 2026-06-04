@@ -16,6 +16,7 @@ import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
+import com.gb.wallet.global.redis.PinVerificationStore;
 import com.gb.wallet.global.redis.TransferPinAttemptStore;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
@@ -41,6 +42,7 @@ class TransferPinServiceImplTest {
 
     @Mock private WalletRepository walletRepository;
     @Mock private TransferPinAttemptStore attemptStore;
+    @Mock private PinVerificationStore pinVerificationStore;
     @Mock private PasswordEncoder passwordEncoder;
 
     @InjectMocks private TransferPinServiceImpl service;
@@ -70,6 +72,7 @@ class TransferPinServiceImplTest {
 
         assertThat(w.getTransferPinHash()).isEqualTo("ENCODED");
         assertThat(w.hasTransferPin()).isTrue();
+        verify(pinVerificationStore).clearVerified(USER); // 새 PIN은 직전 검증을 물려받지 않는다(TX-PIN)
     }
 
     @Test
@@ -83,6 +86,7 @@ class TransferPinServiceImplTest {
                 .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
 
         verify(passwordEncoder, never()).encode(anyString());
+        verify(pinVerificationStore, never()).clearVerified(anyString()); // 실패 경로는 마커를 건드리지 않음
     }
 
     @Test
@@ -125,6 +129,7 @@ class TransferPinServiceImplTest {
 
         verify(attemptStore).reset(USER);
         verify(attemptStore, never()).recordFailure(anyString());
+        verify(pinVerificationStore).markVerified(USER); // 성공 시에만 단명 검증 마커 발급(TX-PIN)
     }
 
     @Test
@@ -142,6 +147,7 @@ class TransferPinServiceImplTest {
 
         verify(attemptStore).recordFailure(USER);
         verify(attemptStore, never()).reset(anyString());
+        verify(pinVerificationStore, never()).markVerified(anyString()); // 불일치는 인가 마커를 남기지 않음
     }
 
     @Test
@@ -170,6 +176,7 @@ class TransferPinServiceImplTest {
 
         verify(walletRepository, never()).findByUserPublicId(anyString());
         verifyNoInteractions(passwordEncoder);
+        verifyNoInteractions(pinVerificationStore); // 잠금 우선 차단 — 마커 발급 없음
     }
 
     @Test
@@ -185,5 +192,6 @@ class TransferPinServiceImplTest {
 
         verifyNoInteractions(passwordEncoder);
         verify(attemptStore, never()).recordFailure(anyString());
+        verify(pinVerificationStore, never()).markVerified(anyString()); // 미설정은 검증 성공이 아님 — 마커 없음
     }
 }

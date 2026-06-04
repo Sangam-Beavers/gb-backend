@@ -76,6 +76,10 @@ public class TransferController {
             "{\"success\":false,\"code\":\"TRANSFER4005\",\"message\":\"지원하지 않는 통화 조합입니다.\"}";
     private static final String EX_WALLET4002 =
             "{\"success\":false,\"code\":\"WALLET4002\",\"message\":\"지갑 잔액이 부족합니다.\"}";
+    private static final String EX_TRANSFER4009 =
+            "{\"success\":false,\"code\":\"TRANSFER4009\",\"message\":\"송금 PIN이 설정되지 않았습니다.\"}";
+    private static final String EX_TRANSFER4010 =
+            "{\"success\":false,\"code\":\"TRANSFER4010\",\"message\":\"송금 전 PIN 검증이 필요합니다.\"}";
 
     private final TransferService transferService;
 
@@ -269,7 +273,9 @@ public class TransferController {
                     + "currency_code != receive_currency_code면 TRANSFER4005. REMITTANCE는 후속 PR에서 추가. "
                     + "Idempotency-Key 헤더로 멱등성 보장(3-layer: Redis 캐시 → DB UNIQUE → race 시 첫 결과 재조회). "
                     + "두 wallet에 대한 분산 락(wallet_id 오름차순 MultiLock) + DB 비관적 락으로 동시성 보호. "
-                    + "사용자는 JWT의 public_id claim으로 식별한다.")
+                    + "사용자는 JWT의 public_id claim으로 식별한다. "
+                    + "사전 흐름(TX-PIN): POST /transfers/pin-verify(§5) 성공 후 호출 — 서버가 검증 마커를 강제 "
+                    + "확인한다. 마커 없으면 TRANSFER4010(428, 미검증)/TRANSFER4009(400, PIN 미설정).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -278,7 +284,8 @@ public class TransferController {
                     responseCode = "400",
                     description = "COMMON4001 - Body 검증 실패 / "
                             + "TRANSFER4002 - 미지원 통화 / TRANSFER4003 - 미지원 송금 유형 / "
-                            + "TRANSFER4004 - 자기 송금 / TRANSFER4005 - 미지원 통화 조합. "
+                            + "TRANSFER4004 - 자기 송금 / TRANSFER4005 - 미지원 통화 조합 / "
+                            + "TRANSFER4009 - 송금 PIN 미설정(TX-PIN). "
                             + "같은 400이지만 비즈니스 코드가 다르다 (examples 드롭다운 참고).",
                     content = @Content(
                             schema = @Schema(implementation = ErrorResponse.class),
@@ -287,7 +294,8 @@ public class TransferController {
                                     @ExampleObject(name = "TRANSFER4002", value = EX_TRANSFER4002),
                                     @ExampleObject(name = "TRANSFER4003", value = EX_TRANSFER4003),
                                     @ExampleObject(name = "TRANSFER4004", value = EX_TRANSFER4004),
-                                    @ExampleObject(name = "TRANSFER4005", value = EX_TRANSFER4005)
+                                    @ExampleObject(name = "TRANSFER4005", value = EX_TRANSFER4005),
+                                    @ExampleObject(name = "TRANSFER4009", value = EX_TRANSFER4009)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
@@ -307,6 +315,12 @@ public class TransferController {
                     content = @Content(
                             schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "WALLET4002", value = EX_WALLET4002))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "428",
+                    description = "TRANSFER4010 - 송금 전 PIN 검증이 필요합니다 (TX-PIN — pin-verify(§5) 성공 마커 없이 직접 호출).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "TRANSFER4010", value = EX_TRANSFER4010))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",

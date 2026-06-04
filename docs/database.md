@@ -417,6 +417,7 @@
 | 송금 rate-limit (user 단위) | `ratelimit:transfer:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 TRANSFER4006(429), Redis 장애 시 fail-open | 윈도(기본 60초, 30회) |
 | 송금 PIN 실패 카운터 (user 단위) | `pin:fail:{userPublicId}` | `INCR`(첫 실패 시 `EXPIRE 600`). 5회 도달 시 잠금 키 설정 후 카운트 삭제 | 10분(윈도) |
 | 송금 PIN 잠금 (user 단위) | `pin:lock:{userPublicId}` | `SET locked EX 600`(5회 연속 실패 시). 존재하면 PIN 검증 TRANSFER4008(429) | 10분 |
+| 송금 PIN 검증 마커 (user 단위, TX-PIN) | `pin:verified:{userPublicId}` | `SET verified EX 180`(pin-verify 성공 시). 송금 실행·정기송금 설정이 `GETDEL`로 **원자 소비(단일사용)** — 없으면 TRANSFER4010(428). 1회 검증=1회 인가. Redis 장애 시 **fail-closed**(송금 차단). PIN 재설정 시 무효화 | 180초 |
 | 토큰 블랙리스트 | `blacklist:{token}` | `SET ... 1 EX <남은만료>` | 토큰 만료까지 |
 | 로그인 실패 카운터 | `login:fail:user:{userPublicId}` | `INCR` + `EXPIRE 300` | 5분 |
 | 비밀번호 재설정 토큰 (member) | `pwreset:{token}` | `SET <email> EX 1800`. 검증 시 조회해 없으면 만료/무효(MEMBER4004), 사용 후 삭제(재사용 방지) | 30분 |

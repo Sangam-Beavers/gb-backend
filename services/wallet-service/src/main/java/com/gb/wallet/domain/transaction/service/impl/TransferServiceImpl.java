@@ -29,6 +29,7 @@ import com.gb.wallet.domain.transaction.repository.RemittanceAmountProjection;
 import com.gb.wallet.domain.transaction.repository.TransactionAuditLogRepository;
 import com.gb.wallet.domain.transaction.repository.TransactionRepository;
 import com.gb.wallet.domain.transaction.service.RemittanceAttemptWriter;
+import com.gb.wallet.domain.transaction.service.TransferPinGate;
 import com.gb.wallet.domain.transaction.service.TransferService;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.entity.WalletBalance;
@@ -123,6 +124,7 @@ public class TransferServiceImpl implements TransferService {
     private final IdempotencyCacheHelper idempotencyCacheHelper;
     private final RateLimitHelper rateLimitHelper;
     private final TransferRateLimitProperties transferRateLimitProperties;
+    private final TransferPinGate transferPinGate;
     private final ObjectMapper objectMapper;
 
     /**
@@ -336,6 +338,27 @@ public class TransferServiceImpl implements TransferService {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public TransferExecuteResponse execute(String userPublicId, String idempotencyKey,
                                            TransferExecuteRequest request) {
+        // 사용자 직접 호출(POST /transfers) — 송금 PIN 게이트 ON(TX-PIN).
+        return executeInternal(userPublicId, idempotencyKey, request, true);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public TransferExecuteResponse executePreAuthorized(String userPublicId, String idempotencyKey,
+                                                        TransferExecuteRequest request) {
+        // 사전 인가된 정기송금 회차 실행(스케줄러) — PIN은 설정 시 1회 검증한 standing order라 게이트 OFF(TX-PIN).
+        // NOT_SUPPORTED 유지 필수: 스케줄러 executeSingle(REQUIRES_NEW)의 트랜잭션을 suspend해 자금 이동을
+        // 독립 경계에서 커밋해야 한다(execute와 동일 사상).
+        return executeInternal(userPublicId, idempotencyKey, request, false);
+    }
+
+    /**
+     * 송금 실행 공통 본문. {@code requirePinGate}만 사용자 직접 호출({@link #execute}, true)과 사전 인가
+     * 스케줄러({@link #executePreAuthorized}, false)를 가른다 — 그 외 멱등성 3-layer·rate-limit·락 재시도·
+     * 자금 이동은 완전히 동일하다.
+     */
+    private TransferExecuteResponse executeInternal(String userPublicId, String idempotencyKey,
+                                                    TransferExecuteRequest request, boolean requirePinGate) {
         // 비-HTTP 경로(스케줄러·내부 직접 호출) 서비스단 가드(WTX-02): HTTP는 컨트롤러
         // @RequestHeader("Idempotency-Key") @NotBlank로 막지만(WTX-01), 빈 키가 멱등 3-layer 키 스코프
         // (cacheKey/findByIdempotencyKey)를 무력화하므로 모든 side effect(rate-limit/캐시/DB) 전에
@@ -389,6 +412,17 @@ public class TransferServiceImpl implements TransferService {
                 Duration.ofSeconds(transferRateLimitProperties.windowSeconds()));
         if (!allowed) {
             throw new BusinessException(TransferErrorCode.RATE_LIMIT_EXCEEDED);
+        }
+
+        // 5.7) 송금 PIN 서버측 게이트(TX-PIN) — 사용자 직접 호출만(requirePinGate). pin-verify 성공 마커를 원자
+        //      소비(GETDEL)해, 마커가 없으면 PIN 미설정 TRANSFER4009 / 미검증 TRANSFER4010(428)으로 차단한다.
+        //      위치: rate-limit 뒤·executeWithRetry 앞. ① 멱등 재요청(Layer1/2 hit)은 위에서 이미 반환돼 여기
+        //      도달하지 않으므로 재검증을 요구하지 않는다. ② rate-limit으로 막힌 요청은 마커를 소비하지 않아
+        //      (게이트 미도달) 검증을 헛되이 태우지 않는다. ③ 마커는 executeWithRetry의 락경합 재시도 *바깥*에서
+        //      1회만 소비된다(재시도가 마커를 다시 요구하지 않음). rate-limit(5.5)과 달리 Redis 장애 시 fail-closed.
+        //      정기송금 회차(executePreAuthorized)는 설정 시 1회 인가한 standing order라 이 게이트를 면제한다.
+        if (requirePinGate) {
+            transferPinGate.requireVerified(userPublicId);
         }
 
         // 6) 실 처리 + 락 경합 재시도 래퍼 — race(UNIQUE 위반)와 락 경합을 도메인별 분기에 공통 처리.
