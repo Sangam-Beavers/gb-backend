@@ -165,6 +165,8 @@ public class AnalysisResultIngestServiceImpl implements AnalysisResultIngestServ
      * 와이어 포맷 {@code masked_file_url}("s3://bucket/key")에서 키만 추출 — Lambda B의
      * {@code _s3_uri_to_key()}와 대칭. s3:// 스킴이 아니면(이미 키 형태 등) 그대로 저장해
      * 메시지를 버리지 않는다(비치명 필드). null이면 null(마스킹본 미생성 케이스).
+     * 키가 없는 malformed s3:// URI("s3://bucket" 등)는 null로 정규화 — 원문을 키로 저장하면
+     * 조회 시 존재하지 않는 키로 presigned URL이 발급되므로, "마스킹본 미보유"(masked_file_url=null)로 처리한다.
      */
     private String s3UriToKey(String maskedFileUrl) {
         if (maskedFileUrl == null || !maskedFileUrl.startsWith("s3://")) {
@@ -172,8 +174,8 @@ public class AnalysisResultIngestServiceImpl implements AnalysisResultIngestServ
         }
         int keyStart = maskedFileUrl.indexOf('/', "s3://".length());
         if (keyStart < 0 || keyStart == maskedFileUrl.length() - 1) {
-            log.warn("[sqs-consumer] masked_file_url 키 추출 실패 — 원문 그대로 저장: {}", maskedFileUrl);
-            return maskedFileUrl;
+            log.warn("[sqs-consumer] masked_file_url 키 추출 실패 — null(마스킹본 미보유)로 저장: {}", maskedFileUrl);
+            return null;
         }
         return maskedFileUrl.substring(keyStart + 1);
     }

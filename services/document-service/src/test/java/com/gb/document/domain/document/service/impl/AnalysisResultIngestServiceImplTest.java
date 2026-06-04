@@ -254,6 +254,25 @@ class AnalysisResultIngestServiceImplTest {
         assertThat(captor.getValue().getS3MaskedKey()).isEqualTo("2026-05-29/x.png");
     }
 
+    @Test
+    @DisplayName("키 없는 malformed s3:// URI는 null(마스킹본 미보유)로 정규화 저장 — 깨진 presigned URL 발급 방지")
+    void malformed_s3_URI는_null로_저장() {
+        Document submission = analyzingDoc();
+        given(documentRepository.findByPublicId(DOC_PUBLIC_ID)).willReturn(Optional.of(submission));
+        given(documentResultRepository.findBySubmission_Id(any())).willReturn(Optional.empty());
+
+        service.ingest(new AnalysisResultMessage(
+                "1.1", DOC_PUBLIC_ID, AnalysisDocumentType.LABOR_CONTRACT,
+                ProcessingStatus.COMPLETED, RiskLevel.HIGH, new BigDecimal("0.92"),
+                wage(), riskItems(), "번역 전문", "ko",
+                "s3://gb-document-masked-test", null,
+                Instant.parse("2026-05-29T09:00:00Z")));
+
+        ArgumentCaptor<DocumentResult> captor = ArgumentCaptor.forClass(DocumentResult.class);
+        verify(documentResultRepository).save(captor.capture());
+        assertThat(captor.getValue().getS3MaskedKey()).isNull();
+    }
+
     // ---- helpers ----
 
     private Document analyzingDoc() {
