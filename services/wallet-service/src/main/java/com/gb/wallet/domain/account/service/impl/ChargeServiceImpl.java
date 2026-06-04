@@ -24,6 +24,7 @@ import com.gb.wallet.global.client.dto.WithdrawalResult;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
+import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.config.ChargeProperties;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
@@ -182,6 +183,11 @@ public class ChargeServiceImpl implements ChargeService {
         // (5) 지갑 조회 — 없으면 WALLET4001.
         Wallet wallet = walletRepository.findByUserPublicId(userPublicId)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+
+        // (5.5) WTX-05 — 동결(SUSPENDED)/폐쇄(CLOSED) 지갑은 충전 차단(ACTIVE만 허용). WALLET4003(422).
+        if (wallet.getStatus() != WalletStatus.ACTIVE) {
+            throw new BusinessException(WalletErrorCode.WALLET_INACTIVE);
+        }
 
         // (6.5) 외부 호출 *직전* 시도 흔적을 REQUIRES_NEW로 별도 커밋(WACC-01) — withdraw가 외부 성공 후
         //       메인 tx가 (비재시도성) 롤백/타임아웃돼도 흔적은 남아 운영 reconcile 입력이 된다(송금 payout의

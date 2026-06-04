@@ -262,6 +262,65 @@ class TransferServiceImplExecuteTest {
     }
 
     @Test
+    @DisplayName("WTX-05: INTERNAL 송신자 지갑 SUSPENDED → WALLET4003, 분산 락/저장 미진입")
+    void execute_INTERNAL_송신자_비활성_WALLET4003() {
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER))
+                .willReturn(Optional.of(suspendedWallet(SENDER_WALLET_ID, SENDER_USER)));
+        given(walletRepository.findByUserPublicId(RECEIVER_USER))
+                .willReturn(Optional.of(wallet(RECEIVER_WALLET_ID, RECEIVER_USER)));
+
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_INACTIVE);
+
+        verifyNoInteractions(distributedLockHelper);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("WTX-05: INTERNAL 수신자 지갑 SUSPENDED → WALLET4003(비활성 지갑 입금 차단)")
+    void execute_INTERNAL_수신자_비활성_WALLET4003() {
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER))
+                .willReturn(Optional.of(wallet(SENDER_WALLET_ID, SENDER_USER)));
+        given(walletRepository.findByUserPublicId(RECEIVER_USER))
+                .willReturn(Optional.of(suspendedWallet(RECEIVER_WALLET_ID, RECEIVER_USER)));
+
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_INACTIVE);
+
+        verifyNoInteractions(distributedLockHelper);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("WTX-05: REMITTANCE 송신자 지갑 SUSPENDED → WALLET4003, payout/Writer 미호출")
+    void execute_REMITTANCE_송신자_비활성_WALLET4003() {
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER))
+                .willReturn(Optional.of(suspendedWallet(SENDER_WALLET_ID, SENDER_USER)));
+        given(walletRepository.findById(SENDER_WALLET_ID))
+                .willReturn(Optional.of(suspendedWallet(SENDER_WALLET_ID, SENDER_USER)));
+
+        assertThatThrownBy(() -> service.execute(
+                SENDER_USER, KEY, remittanceRequest("10000.0000", BANK_ACCOUNT_PUB_ID)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_INACTIVE);
+
+        verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
+        verifyNoInteractions(bankClient);
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("다른 통화 송금(currency != receive) → TRANSFER4005, wallet 조회 전 차단")
     void execute_다른통화_TRANSFER4005() {
         stubCacheMiss();
@@ -972,6 +1031,17 @@ class TransferServiceImplExecuteTest {
                 .publicId("wallet-pub-" + id)
                 .userPublicId(userPublicId)
                 .status(WalletStatus.ACTIVE)
+                .build();
+        ReflectionTestUtils.setField(w, "id", id);
+        return w;
+    }
+
+    /** WTX-05 테스트용 SUSPENDED(동결) 지갑. */
+    private Wallet suspendedWallet(long id, String userPublicId) {
+        Wallet w = Wallet.builder()
+                .publicId("wallet-pub-" + id)
+                .userPublicId(userPublicId)
+                .status(WalletStatus.SUSPENDED)
                 .build();
         ReflectionTestUtils.setField(w, "id", id);
         return w;

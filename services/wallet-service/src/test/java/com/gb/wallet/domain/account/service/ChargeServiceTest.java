@@ -224,6 +224,26 @@ class ChargeServiceTest {
     }
 
     @Test
+    @DisplayName("WTX-05: 충전 지갑이 SUSPENDED면 WALLET4003, Mock 출금/시도기록 전 차단(외부 차감 방지)")
+    void doCharge_지갑_비활성_WALLET4003() {
+        BigDecimal amount = new BigDecimal("100000");
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.empty());
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(ACCT, USER))
+                .willReturn(Optional.of(account(TOKEN)));
+        given(walletRepository.findByUserPublicId(USER)).willReturn(Optional.of(suspendedWallet(USER)));
+
+        assertThatThrownBy(() -> service.doCharge(USER, ACCT, KEY, request(amount), IP))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_INACTIVE);
+
+        // 지갑 상태 차단이 외부 출금·시도기록·잔액·저장 모두보다 먼저 (외부 차감 방지).
+        verifyNoInteractions(bankClient, chargeAttemptWriter, walletBalanceWriter);
+        verify(transactionRepository, never()).save(any());
+        verifyNoInteractions(auditLogRepository);
+    }
+
+    @Test
     @DisplayName("정상 충전: 기존 잔액 행이 있으면 그 행을 증액(신규 save 없음)")
     void doCharge_정상_기존잔액행_증액() {
         BigDecimal amount = new BigDecimal("300000");
@@ -696,6 +716,17 @@ class ChargeServiceTest {
                 .publicId("wallet-" + userPublicId)
                 .userPublicId(userPublicId)
                 .status(WalletStatus.ACTIVE)
+                .build();
+        ReflectionTestUtils.setField(w, "id", 7L);
+        return w;
+    }
+
+    /** WTX-05 테스트용 SUSPENDED(동결) 지갑. */
+    private Wallet suspendedWallet(String userPublicId) {
+        Wallet w = Wallet.builder()
+                .publicId("wallet-" + userPublicId)
+                .userPublicId(userPublicId)
+                .status(WalletStatus.SUSPENDED)
                 .build();
         ReflectionTestUtils.setField(w, "id", 7L);
         return w;

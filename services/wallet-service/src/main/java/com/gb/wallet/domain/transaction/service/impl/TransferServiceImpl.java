@@ -41,6 +41,7 @@ import com.gb.wallet.global.client.MemberInfo;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
+import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.client.dto.PayoutResult;
 import com.gb.wallet.global.common.util.AccountNumberMasker;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
@@ -308,6 +309,13 @@ public class TransferServiceImpl implements TransferService {
      * ({@link #executeInTransaction})이 같은 정책을 쓰도록 단일 헬퍼로 통일한다.
      * docs/remittance/api-spec.md §4 정책: INTERNAL_TRANSFER=0, REMITTANCE=amount×0.5%(HALF_UP 4자리).
      */
+    /** WTX-05 — 지갑이 ACTIVE가 아니면(동결 SUSPENDED·폐쇄 CLOSED) WALLET4003(422)으로 차단한다. */
+    private void requireActiveWallet(Wallet wallet) {
+        if (wallet.getStatus() != WalletStatus.ACTIVE) {
+            throw new BusinessException(WalletErrorCode.WALLET_INACTIVE);
+        }
+    }
+
     private BigDecimal calculateFee(TransactionType type, BigDecimal amount) {
         return switch (type) {
             case INTERNAL_TRANSFER -> BigDecimal.ZERO.setScale(FEE_SCALE, RoundingMode.HALF_UP);
@@ -437,6 +445,11 @@ public class TransferServiceImpl implements TransferService {
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
         Wallet receiverWallet = walletRepository.findByUserPublicId(request.receiverPublicId())
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+
+        // WTX-05 — 동결(SUSPENDED)/폐쇄(CLOSED) 지갑은 송신·수신 모두 차단(ACTIVE만 허용). 송신자뿐 아니라
+        // 수신자도 비활성이면 입금하지 않는다(비활성 지갑에 돈이 쌓이는 것 방지).
+        requireActiveWallet(senderWallet);
+        requireActiveWallet(receiverWallet);
 
         // 자기 자신에게 송금 차단 (이후 MultiLock에서 같은 키 2회 잠금 문제 회피도 겸함).
         if (senderWallet.getId().equals(receiverWallet.getId())) {
@@ -881,6 +894,9 @@ public class TransferServiceImpl implements TransferService {
         // (1) 송신자 wallet 재조회 — execute()의 엔티티는 이 트랜잭션 컨텍스트 밖에서 로드돼 detached.
         Wallet senderWallet = walletRepository.findById(senderWalletId)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+
+        // (1.5) WTX-05 — 동결/폐쇄 지갑은 송금 차단(ACTIVE만 허용). REMITTANCE는 수취가 외부 계좌라 송신자만 본다.
+        requireActiveWallet(senderWallet);
 
         // (2) 본인 소유 + 활성 계좌 조회 (충전과 동일 패턴). 사유 미구분 — 정보 누설 방지로 ACCOUNT4001 통일.
         BankAccount account = bankAccountRepository

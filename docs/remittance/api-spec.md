@@ -224,6 +224,7 @@
 | --- | --- | --- |
 | 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (Body 검증 실패, REMITTANCE 시 `bank_account_public_id` 누락 포함) |
 | 422 | WALLET4002 | 지갑 잔액이 부족합니다. (REMITTANCE는 amount + fee ≤ 송신자 잔액. 요청 형식은 정상이나 잔액 부족으로 처리 불가) |
+| 422 | WALLET4003 | 비활성 지갑입니다. (지갑 status≠ACTIVE — SUSPENDED/CLOSED. INTERNAL은 송신·수신 둘 다, REMITTANCE는 송신자 검증) |
 | 400 | TRANSFER4002 | 지원하지 않는 통화입니다. |
 | 400 | TRANSFER4003 | 지원하지 않는 송금 유형입니다. (INTERNAL_TRANSFER/REMITTANCE 외 — 예: CHARGE/EXCHANGE) |
 | 400 | TRANSFER4004 | 자기 자신에게 송금할 수 없습니다. (INTERNAL_TRANSFER 한정) |
@@ -767,6 +768,7 @@ wallet:
 | 404 | ACCOUNT4001 | 존재하지 않는 계좌입니다. |
 | 404 | WALLET4001 | 존재하지 않는 지갑입니다. (계좌는 있으나 해당 회원의 지갑이 없는 방어 케이스) |
 | 422 | ACCOUNT4007 | 충전 한도를 초과했습니다. |
+| 422 | WALLET4003 | 비활성 지갑입니다. (충전 지갑 status≠ACTIVE — SUSPENDED/CLOSED. Mock 출금 전 차단) |
 | 500 | COMMON5000 | 서버 오류가 발생했습니다. (멱등성 일관성 위반 등 정상 흐름에서 발생 불가 — 방어) |
 | 503 | COMMON5031 | 일시적으로 처리할 수 없습니다. |
 
