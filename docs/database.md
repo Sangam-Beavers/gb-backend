@@ -415,6 +415,7 @@
 | 계좌 인증(verify) rate-limit (user 단위, WACC-02) | `ratelimit:account-verify:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 ACCOUNT4005(429), Redis 장애 시 fail-open. 위조 가능한 IP(XFF) 대신 위조불가 userPublicId로 키잉 | 윈도(기본 60초) |
 | 예금주 조회(holder) rate-limit (user 단위, WACC-03) | `ratelimit:account-holder:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 COMMON4291(429), Redis 장애 시 fail-open. PII(예금주명) 조회 폭주 차단 | 윈도(기본 60초) |
 | 송금 rate-limit (user 단위) | `ratelimit:transfer:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 TRANSFER4006(429), Redis 장애 시 fail-open | 윈도(기본 60초, 30회) |
+| PIN 검증 rate-limit (user 단위, wallet-pin-redis-1) | `ratelimit:pin-verify:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 무차별 대입 버스트(isLocked→대조→record TOCTOU)를 윈도당 limit으로 캡. 초과 시 COMMON4291(429), Redis 장애 시 fail-open | 윈도(기본 60초, 10회) |
 | 송금 PIN 실패 카운터 (user 단위) | `pin:fail:{userPublicId}` | `INCR`(첫 실패 시 `EXPIRE 600`). 5회 도달 시 잠금 키 설정 후 카운트 삭제 | 10분(윈도) |
 | 송금 PIN 잠금 (user 단위) | `pin:lock:{userPublicId}` | `SET locked EX 600`(5회 연속 실패 시). 존재하면 PIN 검증 TRANSFER4008(429) | 10분 |
 | 송금 PIN 검증 마커 (user 단위, TX-PIN) | `pin:verified:{userPublicId}` | `SET verified EX 180`(pin-verify 성공 시). 송금 실행·정기송금 설정이 `GETDEL`로 **원자 소비(단일사용)** — 없으면 TRANSFER4010(428). 1회 검증=1회 인가. Redis 장애 시 **fail-closed**(송금 차단). PIN 재설정 시 무효화 | 180초 |

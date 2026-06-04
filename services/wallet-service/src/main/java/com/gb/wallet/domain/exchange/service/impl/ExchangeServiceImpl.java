@@ -27,6 +27,7 @@ import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.ExchangeType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
+import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.exception.code.ExchangeErrorCode;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
@@ -265,6 +266,13 @@ public class ExchangeServiceImpl implements ExchangeService {
         // (1) 지갑 조회.
         Wallet wallet = walletRepository.findByUserPublicId(userPublicId)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+
+        // (1.5) WTX-05 — 동결(SUSPENDED)/폐쇄(CLOSED) 지갑은 환전도 차단(ACTIVE만 허용). 충전/송금/PIN설정과
+        //       대칭(wallet-exchange-1). 동일 소유자 통화변환이라 외부 이탈은 없지만, 비활성 지갑이 자기 잔액을
+        //       통화 간 이동하는 것도 다른 자금이동과 같은 정책으로 막는다. 잔액 변경/락 전에 차단해 부작용 없음.
+        if (wallet.getStatus() != WalletStatus.ACTIVE) {
+            throw new BusinessException(WalletErrorCode.WALLET_INACTIVE);
+        }
 
         // (2) 받을 통화(to) 잔액 행 0원 보장 — 없으면 FOR UPDATE로 못 잠그므로 먼저 생성(REQUIRES_NEW).
         walletBalanceWriter.ensureBalanceRow(wallet, quote.toCurrencyCode());

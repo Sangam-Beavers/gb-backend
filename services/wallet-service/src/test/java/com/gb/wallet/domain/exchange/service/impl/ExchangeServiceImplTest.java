@@ -222,6 +222,30 @@ class ExchangeServiceImplTest {
     }
 
     @Test
+    @DisplayName("WTX-05(wallet-exchange-1): 비활성(SUSPENDED) 지갑이면 WALLET4003, 잔액보장/락/저장 미진입")
+    void executeInTransaction_비활성지갑_WALLET4003() {
+        QuoteData quote = new QuoteData("quote-1", USER, ExchangeType.EXCHANGE,
+                CurrencyType.KRW, CurrencyType.USD, new BigDecimal("100000"),
+                new BigDecimal("1380"), new BigDecimal("500"), CurrencyType.KRW,
+                new BigDecimal("72.1014"), CurrencyType.USD);
+
+        Wallet suspended = Wallet.builder()
+                .publicId("w-1").userPublicId(USER).status(WalletStatus.SUSPENDED).build();
+        when(walletRepository.findByUserPublicId(USER)).thenReturn(Optional.of(suspended));
+
+        assertThatThrownBy(() -> exchangeService.executeInTransaction(USER, "idem-1", quote))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_INACTIVE);
+
+        // 가드는 잔액 보장(ensureBalanceRow)·FOR UPDATE 락·거래 저장 이전 — 어떤 부작용도 없어야 한다.
+        verify(walletBalanceWriter, never()).ensureBalanceRow(any(), any());
+        verify(walletBalanceRepository, never()).findForUpdateByWalletAndCurrency(any(), any());
+        verify(transactionRepository, never()).save(any());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("실행: 정상 환전이면 from 차감·to 증가 후 거래를 저장한다")
     void executeInTransaction_성공() {
         QuoteData quote = new QuoteData("quote-1", USER, ExchangeType.EXCHANGE,

@@ -173,7 +173,7 @@
 
 - 앱 사용자 검증: `GET /api/v1/transfers/validate-member?email={}` → `data: { receiver_public_id, nickname, is_verified }`
 - 송금 PIN 설정: `POST /api/v1/transfers/pin` (Body: `{ "pin": "123456" }`, 숫자 6자리) → 201. 형식 오류 `COMMON4001`, 이미 설정됨 `COMMON4091`. (방식 B라 계정 비밀번호는 IdP가 보유 → 송금 본인확인은 별도 송금 PIN 6자리로 한다.)
-- 송금 PIN 검증: `POST /api/v1/transfers/pin-verify` (Body: `{ "pin": "123456" }`) → 200. 불일치 `TRANSFER4007`, 미설정 `TRANSFER4009`, 5회 연속 실패 시 10분 잠금 `TRANSFER4008`(429). 성공해야 송금 실행(§6)으로 진행. **검증 성공 시 서버가 단명·단일사용 마커(`pin:verified:{userPublicId}`, TTL 180초)를 남기고, 송금 실행(§6)·정기송금 설정(§7-2-2)이 이를 원자 소비(GETDEL)해야 진행한다(TX-PIN, 서버측 강제). 1회 검증 = 1회 인가** — 송금 직전 다시 검증해야 한다. Redis 장애 시 fail-closed(송금 차단).
+- 송금 PIN 검증: `POST /api/v1/transfers/pin-verify` (Body: `{ "pin": "123456" }`) → 200. 불일치 `TRANSFER4007`, 미설정 `TRANSFER4009`, 5회 연속 실패 시 10분 잠금 `TRANSFER4008`(429). **요청 빈도 초과 시 `COMMON4291`(429) — 사용자 단위 rate-limit(`ratelimit:pin-verify:{user}`, 기본 60초/10회)로 무차별 대입 버스트를 캡한다(wallet-pin-redis-1). 잠금(TRANSFER4008)과 별개 장치.** 성공해야 송금 실행(§6)으로 진행. **검증 성공 시 서버가 단명·단일사용 마커(`pin:verified:{userPublicId}`, TTL 180초)를 남기고, 송금 실행(§6)·정기송금 설정(§7-2-2)이 이를 원자 소비(GETDEL)해야 진행한다(TX-PIN, 서버측 강제). 1회 검증 = 1회 인가** — 송금 직전 다시 검증해야 한다. Redis 장애 시 fail-closed(송금 차단).
 
 ---
 
@@ -715,6 +715,7 @@ wallet:
 | 401 | AUTH4011 | 인증이 필요합니다. |
 | 404 | EXCHANGE4001 | 존재하지 않는 환전 내역입니다. |
 | 422 | WALLET4002 | 지갑 잔액이 부족합니다. |
+| 422 | WALLET4003 | 비활성 지갑입니다. (지갑 status≠ACTIVE — SUSPENDED/CLOSED. 잔액 변경 전 차단 — 충전/송금과 대칭) |
 
 ---
 
