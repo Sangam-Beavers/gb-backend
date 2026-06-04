@@ -18,6 +18,7 @@ import com.gb.member.domain.member.service.MemberService;
 import com.gb.member.global.client.IdpUserClient;
 import com.gb.member.global.exception.code.MemberErrorCode;
 import com.gb.member.global.mail.EmailSender;
+import com.gb.member.global.redis.PasswordResetRateLimiter;
 import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +33,7 @@ public class MemberServiceImpl implements MemberService {
     private final MemberRepository memberRepository;
     private final IdpUserClient idpUserClient;
     private final PasswordResetTokenStore passwordResetTokenStore;
+    private final PasswordResetRateLimiter passwordResetRateLimiter;
     private final EmailSender emailSender;
 
     /** 재설정 링크 베이스 URL(프론트 비번재설정 페이지). yml app.password-reset.base-url로 주입. */
@@ -140,6 +142,13 @@ public class MemberServiceImpl implements MemberService {
     public void sendPasswordResetEmail(PasswordResetEmailRequest request) {
         String email = request.getEmail();
 
+        // MEM-04 — 이메일 단위 rate-limit으로 메일 폭탄을 막는다. 가입 여부 확인 *전*에 적용해 가입/미가입
+        // 사이의 처리 시간 차이도 일부 줄인다(타이밍 enumeration 완화 — 완전 상수시간은 아님). 초과 시
+        // COMMON4291(429). Redis 장애 시 fail-open(통과).
+        if (!passwordResetRateLimiter.tryAcquire(email)) {
+            throw new BusinessException(CommonErrorCode.TOO_MANY_REQUESTS);
+        }
+
         // 가입 여부 노출 방지(보안): 미가입 이메일이어도 예외/다른 응답 없이 조용히 종료한다.
         // (공격자가 응답 차이로 "이 이메일 가입돼 있나"를 알아내지 못하게 — 호출 측은 항상 200을 받는다.)
         if (!memberRepository.existsByEmail(email)) {
@@ -151,11 +160,13 @@ public class MemberServiceImpl implements MemberService {
         passwordResetTokenStore.save(token, email);
 
         // 재설정 링크를 메일로 발송. 링크는 프론트 비번재설정 페이지로 향한다(토큰을 쿼리로 전달).
+        // 유효 시간 문구는 토큰 TTL 단일 출처에서 가져온다(MEM-08 — 리터럴 분리로 인한 불일치 방지).
         String link = passwordResetBaseUrl + "?token=" + token;
         emailSender.send(
                 email,
                 "[Global Bridge] 비밀번호 재설정 안내",
-                "아래 링크에서 비밀번호를 재설정해주세요(30분 내 유효):\n\n" + link
+                "아래 링크에서 비밀번호를 재설정해주세요(" + passwordResetTokenStore.ttlMinutes()
+                        + "분 내 유효):\n\n" + link
                         + "\n\n본인이 요청하지 않았다면 이 메일을 무시하세요.");
     }
 

@@ -29,6 +29,7 @@ import com.gb.member.domain.member.repository.MemberRepository;
 import com.gb.member.global.client.IdpUserClient;
 import com.gb.member.global.exception.code.MemberErrorCode;
 import com.gb.member.global.mail.EmailSender;
+import com.gb.member.global.redis.PasswordResetRateLimiter;
 import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -62,6 +63,7 @@ class MemberServiceImplTest {
     @Mock private MemberRepository memberRepository;
     @Mock private IdpUserClient idpUserClient;
     @Mock private PasswordResetTokenStore passwordResetTokenStore;
+    @Mock private PasswordResetRateLimiter passwordResetRateLimiter;
     @Mock private EmailSender emailSender;
 
     @InjectMocks private MemberServiceImpl memberService;
@@ -302,16 +304,21 @@ class MemberServiceImplTest {
     // ──────────────────── 비밀번호 재설정 ────────────────────
 
     @Test
-    @DisplayName("재설정 메일: 가입된 이메일이면 토큰 저장 + 메일 발송한다")
+    @DisplayName("재설정 메일: 가입된 이메일이면 토큰 저장 + 메일 발송(MEM-08: 본문 유효시간이 TTL 단일출처와 일치)")
     void sendPasswordResetEmail_가입됨_발송() {
         PasswordResetEmailRequest request = new PasswordResetEmailRequest();
         ReflectionTestUtils.setField(request, "email", "user@example.com");
+        when(passwordResetRateLimiter.tryAcquire("user@example.com")).thenReturn(true);
         when(memberRepository.existsByEmail("user@example.com")).thenReturn(true);
+        when(passwordResetTokenStore.ttlMinutes()).thenReturn(30L);
 
         memberService.sendPasswordResetEmail(request);
 
         verify(passwordResetTokenStore).save(anyString(), eq("user@example.com"));
-        verify(emailSender).send(eq("user@example.com"), anyString(), anyString());
+        // MEM-08: 본문 "N분 내 유효"의 N이 TTL 단일출처(ttlMinutes)에서 와야 한다(리터럴 분리 방지).
+        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(emailSender).send(eq("user@example.com"), anyString(), bodyCaptor.capture());
+        assertThat(bodyCaptor.getValue()).contains("30분 내 유효");
     }
 
     @Test
@@ -319,11 +326,30 @@ class MemberServiceImplTest {
     void sendPasswordResetEmail_미가입_조용히종료() {
         PasswordResetEmailRequest request = new PasswordResetEmailRequest();
         ReflectionTestUtils.setField(request, "email", "nobody@example.com");
+        when(passwordResetRateLimiter.tryAcquire("nobody@example.com")).thenReturn(true);
         when(memberRepository.existsByEmail("nobody@example.com")).thenReturn(false);
 
         memberService.sendPasswordResetEmail(request);
 
         // 미가입이어도 예외 없이 끝나고, 토큰 저장·메일 발송은 하지 않는다.
+        verify(passwordResetTokenStore, never()).save(anyString(), anyString());
+        verifyNoInteractions(emailSender, idpUserClient);
+    }
+
+    @Test
+    @DisplayName("MEM-04: 재설정 메일 rate-limit 초과 → COMMON4291, 가입조회/토큰/메일 모두 미진입(메일폭탄 차단)")
+    void sendPasswordResetEmail_rateLimit_초과_COMMON4291() {
+        PasswordResetEmailRequest request = new PasswordResetEmailRequest();
+        ReflectionTestUtils.setField(request, "email", "victim@example.com");
+        when(passwordResetRateLimiter.tryAcquire("victim@example.com")).thenReturn(false);
+
+        assertThatThrownBy(() -> memberService.sendPasswordResetEmail(request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.TOO_MANY_REQUESTS);
+
+        // rate-limit이 가입 여부 확인 *전*에 차단 — 가입조회/토큰/메일 모두 미진입.
+        verify(memberRepository, never()).existsByEmail(anyString());
         verify(passwordResetTokenStore, never()).save(anyString(), anyString());
         verifyNoInteractions(emailSender, idpUserClient);
     }
