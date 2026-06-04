@@ -148,7 +148,7 @@
 | `bank_id` | BIGINT | FK → banks.id, NOT NULL | 스키마 내부 참조 |
 | `account_number` | VARCHAR(100) | NOT NULL | 계좌번호 (암호화 권장) |
 | `mock_account_token` | VARCHAR(36) | NULL | **충전용 토큰.** 계좌 인증 시 Mock 은행(또는 실서비스 PG)이 발급한 토큰. 충전(출금) 호출 시 이 값으로 계좌를 지칭한다. 실서비스에서는 PG 빌링키에 해당 |
-| `holder_name` | VARCHAR(100) | NULL | **외부 계좌 예금주명.** 계좌 등록 시 verify 응답에서 받아 저장. REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot 복사. 송금 확인증 receiver_name 출처. 컬럼 추가 전 등록된 기존 계좌는 null. |
+| `holder_name` | VARCHAR(100) | NULL | **외부 계좌 예금주명.** 계좌 등록 시 은행 `inquiry` 권위 값으로 저장한다(WACC-05 — 클라이언트 입력 불신, 송금 확인증 receiver_name 위조 방지). REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot 복사. 컬럼 추가 전 등록된 기존 계좌는 null. |
 | `is_virtual` | BOOLEAN | NOT NULL, DEFAULT FALSE | TRUE면 가상계좌(Beaver Bank 발급) |
 | `is_primary` | BOOLEAN | NOT NULL, DEFAULT FALSE | 주 계좌 여부 |
 | `is_active` | BOOLEAN | NOT NULL, DEFAULT TRUE | |
@@ -156,6 +156,15 @@
 | `updated_at` | DATETIME | NOT NULL | |
 
 > `mock_account_token`은 계좌 등록(`POST /accounts`) 시 Mock 은행 `verify` 응답의 `account_token`을 저장한다. 충전(`POST /accounts/{id}/charge`) 시 이 토큰으로 Mock 은행 `withdrawal`을 호출한다. 미인증 계좌(`is_active`/토큰 없음)는 충전 불가. 상세 연동: [`remittance/api-spec.md`](./remittance/api-spec.md)의 "Mock 은행 연동" 섹션.
+>
+> **중복 등록 부분 UNIQUE (WACC-06, prod 수동 DDL):** 활성 계좌의 `(user_public_id, bank_id, account_number)` 중복을 DB 레벨에서 막는다. soft-delete(비활성 행 잔존) 재등록을 허용해야 하므로 **활성 행에만** 적용하는 부분 유니크가 필요한데, MySQL은 부분 유니크 인덱스를 직접 지원하지 않아 **생성 컬럼**으로 우회한다(활성일 때만 키가 채워지고 비활성이면 NULL → NULL은 유니크에서 다중 허용):
+> ```sql
+> ALTER TABLE bank_accounts
+>   ADD COLUMN active_acct_key VARCHAR(120)
+>     GENERATED ALWAYS AS (IF(is_active, CONCAT(user_public_id,':',bank_id,':',account_number), NULL)) STORED,
+>   ADD CONSTRAINT uk_bank_accounts_active_acct UNIQUE (active_acct_key);
+> ```
+> 분산락(`lock:account-register:{user}`)이 1차 직렬화이고, 본 제약은 lease 만료/split-brain로 락이 뚫린 동시 등록의 **최종 안전망**이다(위반 시 `BankAccountServiceImpl`이 `DataIntegrityViolationException`→ACCOUNT4004 매핑). **dev는 `ddl-auto=update`/H2가 이 생성 컬럼을 자동 생성하지 않으므로(JPA 미매핑) stage/prod에 위 DDL을 수동 적용**한다. 적용 전 기존 중복 활성 행은 사전 정리 필요.
 
 ### `transactions`
 > 모든 금융 거래 마스터. `type`으로 유형 구분, 유형별 상세 컬럼 보유.

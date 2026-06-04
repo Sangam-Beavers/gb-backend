@@ -24,6 +24,7 @@ import com.gb.wallet.domain.account.repository.BankAccountRepository;
 import com.gb.wallet.domain.account.repository.BankRepository;
 import com.gb.wallet.domain.account.service.impl.BankAccountServiceImpl;
 import com.gb.wallet.global.client.BankClient;
+import com.gb.wallet.global.client.dto.AccountHolder;
 import com.gb.wallet.global.client.dto.AccountToken;
 import com.gb.wallet.global.config.VerifyRateLimitProperties;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
@@ -41,6 +42,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.redisson.api.RLock;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /**
@@ -220,19 +222,22 @@ class BankAccountServiceTest {
         given(bankAccountRepository.existsByUserPublicIdAndBank_CodeAndAccountNumberAndIsActiveTrue(
                 USER_PUBLIC_ID, "004", "1234567890")).willReturn(false);
         given(bankRepository.findByCode("004")).willReturn(Optional.of(bank));
+        // WACC-05: 예금주명은 은행 권위(inquiry) 값을 쓴다.
+        given(bankClient.inquiry("004", "1234567890")).willReturn(new AccountHolder("홍길동"));
         given(bankAccountRepository.countByUserPublicIdAndIsActiveTrue(USER_PUBLIC_ID))
                 .willReturn(0L);
-        given(bankAccountRepository.save(any(BankAccount.class)))
+        given(bankAccountRepository.saveAndFlush(any(BankAccount.class)))
                 .willAnswer(invocation -> invocation.getArgument(0));
 
         AccountResponse response = service.registerAccountLocked(USER_PUBLIC_ID, request);
 
         ArgumentCaptor<BankAccount> captor = ArgumentCaptor.forClass(BankAccount.class);
-        verify(bankAccountRepository).save(captor.capture());
+        verify(bankAccountRepository).saveAndFlush(captor.capture());
         BankAccount saved = captor.getValue();
         assertThat(saved.getUserPublicId()).isEqualTo(USER_PUBLIC_ID);
         assertThat(saved.getAccountNumber()).isEqualTo("1234567890");
         assertThat(saved.getMockAccountToken()).isEqualTo("tok-abc");
+        assertThat(saved.getHolderName()).as("WACC-05: 은행 권위 예금주명 저장").isEqualTo("홍길동");
         assertThat(saved.isPrimary()).as("첫 계좌면 자동 true").isTrue();
         assertThat(saved.isActive()).isTrue();
         assertThat(saved.isVirtual()).isFalse();
@@ -253,15 +258,16 @@ class BankAccountServiceTest {
         given(bankAccountRepository.existsByUserPublicIdAndBank_CodeAndAccountNumberAndIsActiveTrue(
                 USER_PUBLIC_ID, "004", "1234567890")).willReturn(false);
         given(bankRepository.findByCode("004")).willReturn(Optional.of(bank("004", "KB국민은행")));
+        given(bankClient.inquiry("004", "1234567890")).willReturn(new AccountHolder("홍길동"));
         given(bankAccountRepository.countByUserPublicIdAndIsActiveTrue(USER_PUBLIC_ID))
                 .willReturn(2L);
-        given(bankAccountRepository.save(any(BankAccount.class)))
+        given(bankAccountRepository.saveAndFlush(any(BankAccount.class)))
                 .willAnswer(invocation -> invocation.getArgument(0));
 
         service.registerAccountLocked(USER_PUBLIC_ID, request);
 
         ArgumentCaptor<BankAccount> captor = ArgumentCaptor.forClass(BankAccount.class);
-        verify(bankAccountRepository).save(captor.capture());
+        verify(bankAccountRepository).saveAndFlush(captor.capture());
         assertThat(captor.getValue().isPrimary())
                 .as("등록 흐름에서 다중 주 계좌가 만들어지면 안 됨")
                 .isFalse();
@@ -280,8 +286,50 @@ class BankAccountServiceTest {
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(AccountErrorCode.ACCOUNT_ALREADY_REGISTERED);
 
-        verify(bankAccountRepository, never()).save(any());
-        verifyNoInteractions(bankClient);
+        verify(bankAccountRepository, never()).saveAndFlush(any());
+        verifyNoInteractions(bankClient); // 활성 중복 선검사에서 차단 → inquiry 미호출
+    }
+
+    @Test
+    @DisplayName("WACC-05: 예금주명은 클라 입력이 아니라 은행 inquiry 권위 값을 저장(위조 차단)")
+    void registerAccountLocked_holderName_은행권위명_사용() {
+        // 클라가 register에 위조 예금주명을 보내도 무시하고 은행 inquiry 결과를 저장한다.
+        RegisterAccountRequest request = registerRequest("004", "1234567890", "tok-abc");
+        ReflectionTestUtils.setField(request, "holderName", "위조된이름"); // 클라 입력 — 무시돼야 함
+
+        given(bankAccountRepository.existsByUserPublicIdAndBank_CodeAndAccountNumberAndIsActiveTrue(
+                USER_PUBLIC_ID, "004", "1234567890")).willReturn(false);
+        given(bankRepository.findByCode("004")).willReturn(Optional.of(bank("004", "KB국민은행")));
+        given(bankClient.inquiry("004", "1234567890")).willReturn(new AccountHolder("진짜예금주"));
+        given(bankAccountRepository.countByUserPublicIdAndIsActiveTrue(USER_PUBLIC_ID)).willReturn(0L);
+        given(bankAccountRepository.saveAndFlush(any(BankAccount.class)))
+                .willAnswer(invocation -> invocation.getArgument(0));
+
+        service.registerAccountLocked(USER_PUBLIC_ID, request);
+
+        ArgumentCaptor<BankAccount> captor = ArgumentCaptor.forClass(BankAccount.class);
+        verify(bankAccountRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getHolderName())
+                .as("클라 입력(위조된이름) 무시, 은행 권위 예금주명 저장")
+                .isEqualTo("진짜예금주");
+    }
+
+    @Test
+    @DisplayName("WACC-06: saveAndFlush가 부분 UNIQUE 위반(DataIntegrityViolation)을 던지면 ACCOUNT4004로 매핑(락 우회 백스톱)")
+    void registerAccountLocked_UNIQUE위반_백스톱_ACCOUNT4004() {
+        RegisterAccountRequest request = registerRequest("004", "1234567890", "tok-abc");
+        given(bankAccountRepository.existsByUserPublicIdAndBank_CodeAndAccountNumberAndIsActiveTrue(
+                USER_PUBLIC_ID, "004", "1234567890")).willReturn(false); // 선검사는 통과(락 만료/split-brain)
+        given(bankRepository.findByCode("004")).willReturn(Optional.of(bank("004", "KB국민은행")));
+        given(bankClient.inquiry("004", "1234567890")).willReturn(new AccountHolder("홍길동"));
+        given(bankAccountRepository.countByUserPublicIdAndIsActiveTrue(USER_PUBLIC_ID)).willReturn(0L);
+        given(bankAccountRepository.saveAndFlush(any(BankAccount.class)))
+                .willThrow(new DataIntegrityViolationException("uk_bank_accounts_user_bank_acct_active"));
+
+        assertThatThrownBy(() -> service.registerAccountLocked(USER_PUBLIC_ID, request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.ACCOUNT_ALREADY_REGISTERED);
     }
 
     @Test
@@ -298,7 +346,7 @@ class BankAccountServiceTest {
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
 
-        verify(bankAccountRepository, never()).save(any());
+        verify(bankAccountRepository, never()).saveAndFlush(any());
     }
 
     // --- changePrimary (분산락 래퍼) ---

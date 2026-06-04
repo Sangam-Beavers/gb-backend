@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RLock;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
@@ -109,12 +110,8 @@ public class BankAccountServiceImpl implements BankAccountService {
     @Override
     @Transactional
     public AccountResponse registerAccountLocked(String userPublicId, RegisterAccountRequest request) {
-        // TODO: DB UNIQUE 최종 안전망은 별도 마이그레이션 이슈로 연기. 현재는 lock:account-register:{user}
-        //       분산락이 user 단위 직렬화로 중복 계좌·다중 주계좌를 막는다.
-        //       후속: bank_accounts에 (user_public_id, bank_id, account_number) UNIQUE 제약 추가(중복 등록의
-        //       최종 안전망) — MySQL은 부분 유니크 인덱스 미지원이라 is_primary 단일성은 제약만으론 못 막고
-        //       락이 담당한다. database.md UNIQUE 정의 합의 + dev DB 중복 정리 + soft-delete 재등록 정책이
-        //       얽혀 있어 Redis 작업과 분리해 마이그레이션 이슈에서 도입한다.
+        // 1차 방어: 활성 중복 계좌 선검사(흔한 경로를 깔끔히 ACCOUNT4004로). 동시성 최종 안전망은 아래 (user,
+        //   bank, account_number) 부분 UNIQUE(prod, WACC-06)와 분산락이 함께 담당한다.
         if (bankAccountRepository.existsByUserPublicIdAndBank_CodeAndAccountNumberAndIsActiveTrue(
                 userPublicId, request.getBankCode(), request.getAccountNumber())) {
             throw new BusinessException(AccountErrorCode.ACCOUNT_ALREADY_REGISTERED);
@@ -122,6 +119,12 @@ public class BankAccountServiceImpl implements BankAccountService {
 
         Bank bank = bankRepository.findByCode(request.getBankCode())
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.INVALID_REQUEST));
+
+        // WACC-05 — 예금주명은 클라이언트 입력(request.getHolderName())이 아니라 은행 권위 값(inquiry)을 쓴다.
+        //   클라가 verify는 진짜 이름으로 통과시키고 register엔 다른 이름을 보내 송금 확인증(receiver_name)을
+        //   위조하는 것을 막는다. (request.holderName 필드는 호환 위해 남기되 신뢰하지 않는다 — vestigial.)
+        String holderName = bankClient.inquiry(request.getBankCode(), request.getAccountNumber())
+                .accountHolderName();
 
         // 사용자의 첫 활성 계좌면 자동으로 주 계좌. 그 외에는 항상 false로 둔다 — 등록 흐름에서 다중
         // 주 계좌(같은 사용자에 활성 is_primary=true 둘 이상)가 발생하면 충전 시 어느 계좌가 기본인지
@@ -134,15 +137,23 @@ public class BankAccountServiceImpl implements BankAccountService {
                 .userPublicId(userPublicId)
                 .bank(bank)
                 .accountNumber(request.getAccountNumber())
-                .holderName(request.getHolderName())
+                .holderName(holderName)
                 .mockAccountToken(request.getAccountToken())
                 .isVirtual(false)
                 .isPrimary(isPrimary)
                 .isActive(true)
                 .build();
 
-        BankAccount saved = bankAccountRepository.save(account);
-        return AccountResponse.from(saved);
+        // WACC-06 — saveAndFlush로 prod의 (user_public_id, bank_id, account_number) 부분 UNIQUE 위반을 이 메서드
+        //   안에서 잡는다. 분산락 lease 만료/split-brain로 선검사를 통과한 동시 등록이 빠져나가도 DB 제약이
+        //   최종 안전망이며, 위반은 ACCOUNT4004로 매핑한다(부분 UNIQUE는 active 행만 — 삭제 계좌 재등록 허용.
+        //   DDL은 database.md 참조. dev/H2는 생성컬럼 미생성이라 본 catch는 prod에서만 실효).
+        try {
+            BankAccount saved = bankAccountRepository.saveAndFlush(account);
+            return AccountResponse.from(saved);
+        } catch (DataIntegrityViolationException duplicate) {
+            throw new BusinessException(AccountErrorCode.ACCOUNT_ALREADY_REGISTERED);
+        }
     }
 
     @Override
