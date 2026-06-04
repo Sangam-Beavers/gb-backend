@@ -91,7 +91,10 @@ public class MemberProfileController {
         String authProviderId = jwt.getSubject(); // sub
 
         // 회원 생성에 필요한 식별/필수 claim이 비면 진행 불가 → AUTH4011 fail-fast.
-        if (!StringUtils.hasText(publicId) || !StringUtils.hasText(email) || !StringUtils.hasText(name)) {
+        //  authProviderId(jwt sub)도 포함한다(MEM-06): blank sub로 회원이 생성되면 이후 탈퇴 시
+        //  deactivateUser(blank)가 COMMON5000으로 실패해 탈퇴 불가가 되는 연쇄를 입구에서 차단한다.
+        if (!StringUtils.hasText(publicId) || !StringUtils.hasText(email)
+                || !StringUtils.hasText(name) || !StringUtils.hasText(authProviderId)) {
             throw new BusinessException(AuthErrorCode.UNAUTHORIZED);
         }
 

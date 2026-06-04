@@ -53,23 +53,28 @@ public class MemberServiceImpl implements MemberService {
         // 토큰 custom claim(public_id)과 우리 회원이 일치한다(토큰 sub ↔ publicId 매핑).
         String publicId = UUID.randomUUID().toString();
 
-        // 방식 B: 비밀번호는 우리 DB에 저장하지 않는다. IdP가 보유·검증한다.
-        // 먼저 IdP에 사용자를 등록(비번 + publicId attribute 포함)하고, IdP가 부여한 식별자(sub)를 받아 authProviderId에 채운다.
-        // IdP 등록이 실패하면 여기서 예외가 나 트랜잭션이 롤백되므로 로컬 회원도 생성되지 않는다(정합성).
-        String authProviderId = idpUserClient.provisionUser(
-                request.getEmail(), request.getName(), request.getPassword(), publicId);
-
-        Member member = Member.builder()
+        // MEM-02 — 로컬 row 선점(save) → IdP provision → sub 채우기 순서로 IdP 고아계정을 막는다.
+        //  ① authProviderId 없이 먼저 saveAndFlush: IdP 호출 전에 email/nickname/publicId UNIQUE 경합을
+        //     이 시점에 확정한다(위 existsBy를 통과한 동시 가입 race 백스톱). 여기서 깨지면 IdP를 아직
+        //     안 건드렸으므로 고아가 생기지 않는다(UNIQUE 위반은 GlobalExceptionHandler가 COMMON4091/409로).
+        //     authProviderId는 provision 후에야 정해지므로 지금은 비운다(컬럼 nullable — Member 상단 TODO 참조).
+        Member savedMember = memberRepository.saveAndFlush(Member.builder()
                 .publicId(publicId)
                 .email(request.getEmail())
                 .name(request.getName())
                 .nickname(request.getNickname())
                 .nationality(request.getNationality())
                 .language(request.getLanguage())
-                .authProviderId(authProviderId)
-                .build();
+                .build());
 
-        Member savedMember = memberRepository.save(member);
+        // ② 방식 B: 비밀번호는 우리 DB에 저장하지 않고 IdP가 보유·검증한다. IdP에 사용자를 등록(비번 +
+        //    publicId attribute 포함)하고 IdP가 부여한 식별자(sub)를 받는다. provision 실패 시 예외가 올라와
+        //    @Transactional이 롤백되므로 ①에서 선점한 로컬 row도 사라진다(로컬·IdP 모두 없음 → 정합성).
+        String authProviderId = idpUserClient.provisionUser(
+                request.getEmail(), request.getName(), request.getPassword(), publicId);
+
+        // ③ provision 결과(sub)를 같은 트랜잭션에서 채운다(커밋 시 UPDATE → 커밋된 상태는 항상 non-null).
+        savedMember.assignAuthProviderId(authProviderId);
 
         return SignupResponse.from(savedMember);
     }

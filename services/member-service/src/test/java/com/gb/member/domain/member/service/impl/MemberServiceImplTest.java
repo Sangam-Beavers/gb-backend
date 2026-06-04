@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -35,6 +36,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -80,11 +82,11 @@ class MemberServiceImplTest {
 
         when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
+        // MEM-02 — 로컬 row를 IdP 호출 전에 먼저 선점(saveAndFlush). publicId는 Service가 채워 넘기므로 그대로 돌려준다.
+        when(memberRepository.saveAndFlush(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
         // IdP가 사용자를 만들고 식별자(sub=uuid)를 돌려준다. publicId는 Service가 만들어 4번째 인자로 넘긴다.
         when(idpUserClient.provisionUser(eq("new@example.com"), eq("홍길동"), eq("P@ssw0rd!"), anyString()))
                 .thenReturn("idp-sub-uuid-9999");
-        // 저장 시 publicId는 Service가 이미 채워 넘기므로 그대로 돌려준다(덮어쓰지 않는다).
-        when(memberRepository.save(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // when
         SignupResponse response = memberService.signup(request);
@@ -98,12 +100,44 @@ class MemberServiceImplTest {
         verify(idpUserClient).provisionUser(eq("new@example.com"), eq("홍길동"), eq("P@ssw0rd!"), idpPublicId.capture());
 
         ArgumentCaptor<Member> saved = ArgumentCaptor.forClass(Member.class);
-        verify(memberRepository).save(saved.capture());
+        verify(memberRepository).saveAndFlush(saved.capture());
         assertThat(saved.getValue().getPublicId()).isEqualTo(idpPublicId.getValue());
         // 응답 publicId도 동일해야 한다.
         assertThat(response.getPublicId()).isEqualTo(idpPublicId.getValue());
-        // IdP가 준 sub가 회원의 authProviderId로 저장돼야 한다.
+        // IdP가 준 sub가 assignAuthProviderId로 회원에 채워져야 한다(같은 인스턴스라 캡처 후에도 반영됨).
         assertThat(saved.getValue().getAuthProviderId()).isEqualTo("idp-sub-uuid-9999");
+
+        // MEM-02 회귀: 로컬 선점(saveAndFlush)이 IdP provision보다 *먼저* 실행돼야 한다(IdP 고아계정 방지의 핵심).
+        InOrder order = inOrder(memberRepository, idpUserClient);
+        order.verify(memberRepository).saveAndFlush(any(Member.class));
+        order.verify(idpUserClient).provisionUser(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("MEM-02: provision 실패 시 예외 전파 + 로컬 선점(saveAndFlush)이 provision보다 먼저(실패 시 tx 롤백으로 로컬도 제거 → 고아 방지)")
+    void signup_provision실패_고아방지_순서() {
+        SignupRequest request = new SignupRequest();
+        ReflectionTestUtils.setField(request, "email", "new@example.com");
+        ReflectionTestUtils.setField(request, "password", "P@ssw0rd!");
+        ReflectionTestUtils.setField(request, "name", "홍길동");
+        ReflectionTestUtils.setField(request, "nickname", "gildong");
+        ReflectionTestUtils.setField(request, "nationality", "VN");
+        ReflectionTestUtils.setField(request, "language", "vi");
+
+        when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
+        when(memberRepository.existsByNickname("gildong")).thenReturn(false);
+        when(memberRepository.saveAndFlush(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(idpUserClient.provisionUser(any(), any(), any(), any()))
+                .thenThrow(new RuntimeException("IdP unavailable"));
+
+        assertThatThrownBy(() -> memberService.signup(request))
+                .isInstanceOf(RuntimeException.class);
+
+        // 로컬 선점이 provision보다 먼저였음을 보장한다 — provision 실패 시 @Transactional 롤백으로 ①에서 만든
+        // 로컬 row도 사라진다(로컬·IdP 모두 없음). 단위 테스트는 tx 경계 밖이라 "순서"를 회귀로 고정한다.
+        InOrder order = inOrder(memberRepository, idpUserClient);
+        order.verify(memberRepository).saveAndFlush(any(Member.class));
+        order.verify(idpUserClient).provisionUser(any(), any(), any(), any());
     }
 
     @Test
@@ -121,7 +155,7 @@ class MemberServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(MemberErrorCode.EMAIL_ALREADY_EXISTS);
 
-        verify(memberRepository, never()).save(any());
+        verify(memberRepository, never()).saveAndFlush(any());
         // 중복이면 IdP에도 사용자를 만들지 않는다(로컬 검증이 먼저).
         verify(idpUserClient, never()).provisionUser(any(), any(), any(), any());
     }
