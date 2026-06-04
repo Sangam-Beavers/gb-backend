@@ -386,6 +386,23 @@ class TransferServiceImplExecuteTest {
     }
 
     @Test
+    @DisplayName("TX1: INTERNAL_TRANSFER receiver_public_id 누락 → COMMON4001 (@NotBlank 제거 후 도메인 검증으로 차단)")
+    void execute_INTERNAL_receiverPublicId_누락_COMMON4001() {
+        // TX1: DTO 무조건 @NotBlank를 제거했으므로 receiver 누락이 @Valid를 통과해 서비스에 도달한다.
+        //      resolveScopeId의 INTERNAL 분기(REMITTANCE 대칭)가 COMMON4001로 차단한다.
+        stubCacheMiss();
+        stubDbMiss();
+
+        TransferExecuteRequest req = new TransferExecuteRequest(
+                "INTERNAL_TRANSFER", "10000.0000", "KRW", "KRW", null, null, null); // receiverPublicId=null
+
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+    }
+
+    @Test
     @DisplayName("송신자 wallet 없음 → WALLET4001")
     void execute_송신자_wallet_없음_WALLET4001() {
         stubCacheMiss();

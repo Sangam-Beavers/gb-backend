@@ -478,10 +478,12 @@ public class TransferServiceImpl implements TransferService {
     // ----- 멱등성 캐시 키 + race 응답 검증 헬퍼 -----
 
     /**
-     * 도메인별 스코프 ID 추출. 캐시 키와 race 검증의 양쪽 기준.
+     * 도메인별 스코프 ID 추출. 캐시 키와 race 검증의 양쪽 기준이자, 도메인별 <b>조건부 필수 필드</b> 검증
+     * 지점이다(조건부 필수는 Bean Validation으로 표현이 까다로워 Service에서 — validateScheduled와 동일).
      * <ul>
-     *   <li>REMITTANCE → bank_account.public_id (없으면 COMMON4001 — DTO @NotBlank 부재 보완)</li>
-     *   <li>INTERNAL_TRANSFER → receiver_public_id (DTO @NotBlank로 이미 강제됨)</li>
+     *   <li>REMITTANCE → bank_account.public_id (없으면 COMMON4001)</li>
+     *   <li>INTERNAL_TRANSFER → receiver_public_id (없으면 COMMON4001 — TX1: DTO @NotBlank 제거로 이리 이동.
+     *       무조건 @NotBlank면 REMITTANCE가 @Valid에서 거부돼 HTTP 도달 불가였다)</li>
      * </ul>
      */
     private static String resolveScopeId(TransactionType transferType, TransferExecuteRequest request) {
@@ -493,7 +495,13 @@ public class TransferServiceImpl implements TransferService {
                 }
                 yield bankAccountPublicId;
             }
-            case INTERNAL_TRANSFER -> request.receiverPublicId();
+            case INTERNAL_TRANSFER -> {
+                String receiverPublicId = request.receiverPublicId();
+                if (receiverPublicId == null || receiverPublicId.isBlank()) {
+                    throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+                }
+                yield receiverPublicId;
+            }
             default -> throw new BusinessException(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE);
         };
     }

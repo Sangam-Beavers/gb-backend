@@ -13,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
+import com.gb.common.exception.CommonErrorCode;
 import com.gb.common.security.RestAuthenticationEntryPoint;
 import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
 import com.gb.wallet.domain.transaction.service.TransferService;
@@ -111,10 +112,14 @@ class TransferControllerTest {
     }
 
     @Test
-    @DisplayName("POST /transfers 400: 필수 필드 누락(receiver_public_id) → COMMON4001")
+    @DisplayName("POST /transfers 400: INTERNAL receiver_public_id 누락 → COMMON4001 (TX1: 검증이 @Valid→도메인으로 이동, 서비스 도달 후 차단)")
     void executeTransfer_receiverPublicId_누락_COMMON4001() throws Exception {
         Map<String, Object> body = validBody("10000.0000");
         body.remove("receiver_public_id");
+        // TX1: 무조건 @NotBlank를 제거했으므로 @Valid는 통과하고, 서비스(resolveScopeId)가 INTERNAL 필수
+        //      검증으로 COMMON4001을 던진다. 웹 계층은 그 예외가 400으로 매핑되는지를 검증한다.
+        given(transferService.execute(eq(USER), eq(KEY), any()))
+                .willThrow(new BusinessException(CommonErrorCode.INVALID_REQUEST));
 
         mockMvc.perform(post("/api/v1/transfers")
                         .with(authedJwt())
@@ -125,7 +130,33 @@ class TransferControllerTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.code").value("COMMON4001"));
 
-        verify(transferService, never()).execute(any(), any(), any());
+        verify(transferService).execute(eq(USER), eq(KEY), any()); // 이제 @Valid를 통과해 서비스로 도달한다
+    }
+
+    @Test
+    @DisplayName("TX1: POST /transfers 201 — REMITTANCE 바디(receiver 없음, bank_account 설정)가 @Valid 통과해 서비스에 도달")
+    void executeTransfer_REMITTANCE_정상_201() throws Exception {
+        // 무조건 @NotBlank였다면 receiver_public_id 부재로 @Valid에서 COMMON4001 거부돼 서비스에 도달조차
+        // 못 했다(TX1). 이제 통과해 서비스가 호출되는지를 검증한다.
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("transfer_type", "REMITTANCE");
+        body.put("amount", "10000.0000");
+        body.put("currency_code", "KRW");
+        body.put("receive_currency_code", "KRW");
+        body.put("memo", "해외송금");
+        body.put("bank_account_public_id", "22222222-2222-2222-2222-222222222222");
+        // receiver_public_id 없음
+        given(transferService.execute(eq(USER), eq(KEY), any())).willReturn(stubResponse());
+
+        mockMvc.perform(post("/api/v1/transfers")
+                        .with(authedJwt())
+                        .header("Idempotency-Key", KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.success").value(true));
+
+        verify(transferService).execute(eq(USER), eq(KEY), any()); // @Valid 통과 → 서비스 도달(TX1 핵심)
     }
 
     @Test
