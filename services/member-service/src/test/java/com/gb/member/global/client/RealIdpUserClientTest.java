@@ -14,11 +14,11 @@ import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
 /**
- * {@link RealIdpUserClient#deactivateUser} 입력 가드 단위 테스트.
+ * {@link RealIdpUserClient} 단위 테스트 — 입력 가드 + IdP HTTP 응답 분기 매핑(MEM-10).
  *
- * <p>authProviderId가 null/공백이면 {@code "?uuid="} 빈 요청을 보내지 않고 HTTP 호출 전에
- * fail-fast 하는지 검증한다. 가드가 먼저 throw하므로 실제 HTTP는 타지 않아 더미 base URI/토큰으로 구성한다
- * (스프링 컨텍스트 불필요 — 순수 단위 테스트).
+ * <p>deactivateUser는 authProviderId null/공백 시 HTTP 전에 fail-fast 하는지, provisionUser/changePassword는
+ * IdP가 4xx(입력 문제)→COMMON4001 / 5xx(연동 장애)→COMMON5000으로 매핑하는지 검증한다. HTTP 분기는
+ * {@link MockRestServiceServer}로 IdP 응답을 흉내 내며, 스프링 컨텍스트는 띄우지 않는다(순수 단위 테스트).
  */
 class RealIdpUserClientTest {
 
@@ -69,6 +69,37 @@ class RealIdpUserClientTest {
         server.expect(anything()).andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
 
         assertThatThrownBy(() -> c.changePassword("a@example.com", "NewP@ss1"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INTERNAL_SERVER_ERROR);
+    }
+
+    @Test
+    @DisplayName("MEM-10 — provisionUser: IdP 사용자 생성이 4xx(이메일/username 충돌 등)면 COMMON4001로 매핑")
+    void provisionUser_4xx_COMMON4001() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        RealIdpUserClient c = new RealIdpUserClient(
+                builder, new ObjectMapper(), "http://localhost/dummy/api/v3", "test-admin-token");
+        // 첫 호출(POST /core/users/)이 4xx → 입력 문제로 매핑되고 이후 set_password는 호출되지 않는다.
+        server.expect(anything()).andRespond(withStatus(HttpStatus.BAD_REQUEST));
+
+        assertThatThrownBy(() -> c.provisionUser("a@example.com", "홍길동", "P@ss1", "pub-1"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+    }
+
+    @Test
+    @DisplayName("MEM-10 — provisionUser: IdP 사용자 생성이 5xx면 COMMON5000으로 매핑(연동 장애)")
+    void provisionUser_5xx_COMMON5000() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        RealIdpUserClient c = new RealIdpUserClient(
+                builder, new ObjectMapper(), "http://localhost/dummy/api/v3", "test-admin-token");
+        server.expect(anything()).andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
+
+        assertThatThrownBy(() -> c.provisionUser("a@example.com", "홍길동", "P@ss1", "pub-1"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INTERNAL_SERVER_ERROR);
