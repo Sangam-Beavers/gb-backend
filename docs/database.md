@@ -160,10 +160,11 @@
 > **중복 등록 부분 UNIQUE (WACC-06, prod 수동 DDL):** 활성 계좌의 `(user_public_id, bank_id, account_number)` 중복을 DB 레벨에서 막는다. soft-delete(비활성 행 잔존) 재등록을 허용해야 하므로 **활성 행에만** 적용하는 부분 유니크가 필요한데, MySQL은 부분 유니크 인덱스를 직접 지원하지 않아 **생성 컬럼**으로 우회한다(활성일 때만 키가 채워지고 비활성이면 NULL → NULL은 유니크에서 다중 허용):
 > ```sql
 > ALTER TABLE bank_accounts
->   ADD COLUMN active_acct_key VARCHAR(120)
+>   ADD COLUMN active_acct_key VARCHAR(160)
 >     GENERATED ALWAYS AS (IF(is_active, CONCAT(user_public_id,':',bank_id,':',account_number), NULL)) STORED,
 >   ADD CONSTRAINT uk_bank_accounts_active_acct UNIQUE (active_acct_key);
 > ```
+> > 길이: 생성 키 최대 = `user_public_id`(36) + `:`(1) + `bank_id`(BIGINT 최대 19자리) + `:`(1) + `account_number`(VARCHAR 100) = **157자**. 이전 `VARCHAR(120)`은 이보다 짧아 긴 키가 잘려 유니크 판정이 어긋날 수 있어 **160**으로 둔다(여유 포함).
 > 분산락(`lock:account-register:{user}`)이 1차 직렬화이고, 본 제약은 lease 만료/split-brain로 락이 뚫린 동시 등록의 **최종 안전망**이다(위반 시 `BankAccountServiceImpl`이 `DataIntegrityViolationException`→ACCOUNT4004 매핑). **dev는 `ddl-auto=update`/H2가 이 생성 컬럼을 자동 생성하지 않으므로(JPA 미매핑) stage/prod에 위 DDL을 수동 적용**한다. 적용 전 기존 중복 활성 행은 사전 정리 필요.
 
 ### `transactions`
@@ -411,7 +412,8 @@
 | 멱등성 키 (송금 INTERNAL_TRANSFER) | `idempotency:internal_transfer:{key}:{userPublicId}:{receiverPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 수신자)로 스코프 → 교차 응답 노출 차단(rebuildFromPrior → WALLET4001) | 24시간 |
 | 멱등성 키 (충전, 요청자·계좌 스코프) | `idempotency:charge:{key}:{userPublicId}:{accountPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자, 계좌)로 스코프 → 교차 사용자/계좌는 캐시 미스 → DB(rebuildFromPrior)가 ACCOUNT4001로 차단 | 24시간 |
 | 멱등성 키 (환전 EXCHANGE, 요청자 스코프) | `idempotency:exchange:{key}:{userPublicId}` | `SET ... <result> EX 86400`. 키를 (요청자)로 스코프 → 교차 사용자는 캐시 미스 → DB(rebuildFromPrior)가 차단 | 24시간 |
-| 계좌 인증(verify) rate-limit (IP 단위) | `ratelimit:account-verify:{clientIp}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 ACCOUNT4005(429), Redis 장애 시 fail-open | 윈도(기본 60초) |
+| 계좌 인증(verify) rate-limit (user 단위, WACC-02) | `ratelimit:account-verify:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 ACCOUNT4005(429), Redis 장애 시 fail-open. 위조 가능한 IP(XFF) 대신 위조불가 userPublicId로 키잉 | 윈도(기본 60초) |
+| 예금주 조회(holder) rate-limit (user 단위, WACC-03) | `ratelimit:account-holder:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 COMMON4291(429), Redis 장애 시 fail-open. PII(예금주명) 조회 폭주 차단 | 윈도(기본 60초) |
 | 송금 rate-limit (user 단위) | `ratelimit:transfer:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 TRANSFER4006(429), Redis 장애 시 fail-open | 윈도(기본 60초, 30회) |
 | 송금 PIN 실패 카운터 (user 단위) | `pin:fail:{userPublicId}` | `INCR`(첫 실패 시 `EXPIRE 600`). 5회 도달 시 잠금 키 설정 후 카운트 삭제 | 10분(윈도) |
 | 송금 PIN 잠금 (user 단위) | `pin:lock:{userPublicId}` | `SET locked EX 600`(5회 연속 실패 시). 존재하면 PIN 검증 TRANSFER4008(429) | 10분 |

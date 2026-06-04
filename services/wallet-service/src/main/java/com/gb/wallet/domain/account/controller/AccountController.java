@@ -127,6 +127,10 @@ public class AccountController {
                     description = "ACCOUNT4001 - 존재하지 않는 계좌입니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "429",
+                    description = "COMMON4291 - 조회 횟수를 초과했습니다(예금주 조회 rate-limit, WACC-03).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),

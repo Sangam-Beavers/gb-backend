@@ -725,7 +725,7 @@ wallet:
 
 - 목록: `GET /api/v1/accounts` → `data: { accounts: [...] }`
 - 지원 은행: `GET /api/v1/accounts/supported-banks`
-- 예금주 실명 조회: `GET /api/v1/accounts/holder?bankCode={}&accountNumber={}`
+- 예금주 실명 조회: `GET /api/v1/accounts/holder?bankCode={}&accountNumber={}` (user 단위 rate-limit — 초과 시 `COMMON4291`(429), PII(예금주명) 조회 폭주 차단·WACC-03)
 - 계좌 연결+자동이체 인증 요청: `POST /api/v1/accounts/verify` (※ Mock/화면용. 실제 인증 미구현). 응답으로 `account_token`만 반환한다(§13 은행 연동·`VerifyAccountResponse` 정본). 예금주 실명은 위 `GET /api/v1/accounts/holder`로 받는다.
 - 계좌 등록 최종 완료: `POST /api/v1/accounts` → 201, `bank_accounts` INSERT
     - **Body 필수 필드**: `bank_code`, `account_number`, `account_token`(verify 응답), **`holder_name`(`GET /accounts/holder` 응답의 `account_holder_name`을 그대로 전달, 최대 100자)**.
@@ -735,7 +735,7 @@ wallet:
     - **자동 승격 정책**: 주 계좌를 삭제하면 남은 활성 계좌 중 **가장 최근 등록 1건**이 자동으로 주 계좌로 승격된다(마지막 1개를 삭제하면 주 계좌 없는 상태 허용).
 - 위 변경/삭제는 "사용자당 주 계좌 1개" 불변식을 user 단위 분산락으로 직렬화한다 — 락 획득 실패 시 503 `COMMON5031`.
 
-**계좌 에러 코드**: ACCOUNT4001(없음) / ACCOUNT4002(인증 실패) / ACCOUNT4004(이미 등록, 409) / ACCOUNT4005(인증 요청 초과, 429) / ACCOUNT4006(미인증 계좌, 403)
+**계좌 에러 코드**: ACCOUNT4001(없음) / ACCOUNT4002(인증 실패) / ACCOUNT4004(이미 등록, 409) / ACCOUNT4005(인증 요청 초과, 429) / ACCOUNT4006(미인증 계좌, 403) / COMMON4291(예금주 조회 횟수 초과, 429 — `GET /accounts/holder` rate-limit, WACC-03)
 
 ---
 
