@@ -1,0 +1,213 @@
+package com.gb.member.domain.verification.service.impl;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+import com.gb.common.exception.BusinessException;
+import com.gb.common.exception.CommonErrorCode;
+import com.gb.member.domain.member.entity.Member;
+import com.gb.member.domain.member.repository.MemberRepository;
+import com.gb.member.domain.verification.dto.request.VerificationRequest;
+import com.gb.member.domain.verification.dto.response.VerificationStatusResponse;
+import com.gb.member.domain.verification.dto.response.VerificationSubmitResponse;
+import com.gb.member.domain.verification.entity.IdentityDocumentType;
+import com.gb.member.domain.verification.entity.UserVerification;
+import com.gb.member.domain.verification.entity.VerificationStatus;
+import com.gb.member.domain.verification.repository.UserVerificationRepository;
+import com.gb.member.global.exception.code.MemberErrorCode;
+import java.time.LocalDateTime;
+import java.util.Optional;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
+
+/**
+ * VerificationServiceImpl 단위 테스트.
+ *
+ * <p>실 신원확인 대신 유형별 번호 형식(정규식) 검증으로 처리한다. 주 신분증인 외국인등록증의 형식 통과 시
+ * 즉시 승인 + 인증 배지 부여, 형식 불일치/잘못된 유형은 COMMON4001, 중복 제출은 COMMON4091,
+ * 없는 회원/이력 없음은 MEMBER4001임을 검증한다.
+ */
+@ExtendWith(MockitoExtension.class)
+class VerificationServiceImplTest {
+
+    @Mock private MemberRepository memberRepository;
+    @Mock private UserVerificationRepository verificationRepository;
+
+    @InjectMocks private VerificationServiceImpl verificationService;
+
+    private static final String PUBLIC_ID = "11111111-1111-1111-1111-111111111111";
+    private static final String VALID_ARC = "990101-5678901";   // 외국인등록번호: 뒤 첫자리 5(외국인 5~8)
+
+    private Member activeMember() {
+        return Member.builder()
+                .publicId(PUBLIC_ID)
+                .email("nguyen@example.com")
+                .name("Nguyen")
+                .nickname("하노이댁")
+                .nationality("VN")
+                .language("vi")
+                .authProviderId("idp-sub")
+                .build();
+    }
+
+    private VerificationRequest request(String type, String number, String s3Key) {
+        VerificationRequest request = new VerificationRequest();
+        ReflectionTestUtils.setField(request, "identityDocumentType", type);
+        ReflectionTestUtils.setField(request, "documentNumber", number);
+        ReflectionTestUtils.setField(request, "s3Key", s3Key);
+        return request;
+    }
+
+    // ───────────────────────── 상태 조회 ─────────────────────────
+
+    @Test
+    @DisplayName("인증 상태 조회는 회원의 최근 인증 1건을 반환한다")
+    void getMyVerification_성공() {
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+
+        UserVerification verification = UserVerification.approved(
+                member, IdentityDocumentType.ALIEN_REGISTRATION, VALID_ARC, "verifications/x/front.jpg");
+        ReflectionTestUtils.setField(verification, "createdAt", LocalDateTime.of(2026, 5, 20, 9, 0, 0));
+        when(verificationRepository.findTopByMemberOrderByIdDesc(member)).thenReturn(Optional.of(verification));
+
+        VerificationStatusResponse response = verificationService.getMyVerification(PUBLIC_ID);
+
+        assertThat(response.getIdentityDocumentType()).isEqualTo("ALIEN_REGISTRATION");
+        assertThat(response.getStatus()).isEqualTo("APPROVED");
+        assertThat(response.getReviewedAt()).isNotNull();
+        assertThat(response.getCreatedAt()).isEqualTo("2026-05-20T09:00:00Z");
+    }
+
+    @Test
+    @DisplayName("없는(탈퇴 포함) 회원이면 MEMBER4001, 인증 테이블은 보지 않는다")
+    void getMyVerification_회원없음_MEMBER4001() {
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> verificationService.getMyVerification(PUBLIC_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
+
+        verifyNoInteractions(verificationRepository);
+    }
+
+    @Test
+    @DisplayName("인증 이력이 없으면 MEMBER4001로 처리한다")
+    void getMyVerification_이력없음_MEMBER4001() {
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.findTopByMemberOrderByIdDesc(member)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> verificationService.getMyVerification(PUBLIC_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
+    }
+
+    // ───────────────────────── 인증 요청 ─────────────────────────
+
+    @Test
+    @DisplayName("외국인등록번호 형식이 맞으면 즉시 승인하고 인증 배지를 부여한다")
+    void submit_외국인등록증_성공_즉시승인_배지부여() {
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(false);
+
+        VerificationRequest request = request("ALIEN_REGISTRATION", VALID_ARC, "verifications/x/front.jpg");
+
+        VerificationSubmitResponse response = verificationService.submitVerification(PUBLIC_ID, request);
+
+        assertThat(response.getStatus()).isEqualTo("APPROVED");
+        assertThat(member.isVerified()).isTrue();   // 배지 부여(dirty checking 대상)
+
+        ArgumentCaptor<UserVerification> saved = ArgumentCaptor.forClass(UserVerification.class);
+        verify(verificationRepository).save(saved.capture());
+        assertThat(saved.getValue().getDocumentType()).isEqualTo(IdentityDocumentType.ALIEN_REGISTRATION);
+        assertThat(saved.getValue().getStatus()).isEqualTo(VerificationStatus.APPROVED);
+        assertThat(saved.getValue().getReviewedAt()).isNotNull();
+        assertThat(saved.getValue().getDocumentNumber()).isEqualTo(VALID_ARC);
+    }
+
+    @Test
+    @DisplayName("외국인등록번호 형식이 틀리면 COMMON4001, 저장·배지부여 없음")
+    void submit_형식불일치_COMMON4001() {
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(false);
+
+        // 뒤 첫자리가 1 → 외국인(5~8) 아님 → 형식 불일치
+        VerificationRequest request = request("ALIEN_REGISTRATION", "990101-1234567", "verifications/x/front.jpg");
+
+        assertThatThrownBy(() -> verificationService.submitVerification(PUBLIC_ID, request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+
+        verify(verificationRepository, never()).save(any());
+        assertThat(member.isVerified()).isFalse();
+    }
+
+    @Test
+    @DisplayName("지원하지 않는 신분증 유형이면 COMMON4001")
+    void submit_잘못된유형_COMMON4001() {
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(false);
+
+        VerificationRequest request = request("DRIVER_LICENSE", VALID_ARC, "verifications/x/front.jpg");
+
+        assertThatThrownBy(() -> verificationService.submitVerification(PUBLIC_ID, request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+
+        verify(verificationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("이미 진행중/승인된 인증이 있으면 COMMON4091로 중복 거절")
+    void submit_중복_COMMON4091() {
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(true);
+
+        VerificationRequest request = request("ALIEN_REGISTRATION", VALID_ARC, "verifications/x/front.jpg");
+
+        assertThatThrownBy(() -> verificationService.submitVerification(PUBLIC_ID, request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
+
+        verify(verificationRepository, never()).save(any());
+        assertThat(member.isVerified()).isFalse();
+    }
+
+    @Test
+    @DisplayName("제출 시 없는 회원이면 MEMBER4001, 인증 테이블은 보지 않는다")
+    void submit_회원없음_MEMBER4001() {
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.empty());
+
+        VerificationRequest request = request("ALIEN_REGISTRATION", VALID_ARC, "verifications/x/front.jpg");
+
+        assertThatThrownBy(() -> verificationService.submitVerification(PUBLIC_ID, request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
+
+        verifyNoInteractions(verificationRepository);
+    }
+}

@@ -46,6 +46,11 @@ public class Member extends BaseEntity {
     @Column(nullable = false)
     private String language;    // 주 사용 언어
 
+    // 신분증 인증 배지 여부. user_verifications가 APPROVED 되면 true로 반영(database.md §members).
+    // 기본 false(가입 직후 미인증). @Builder에는 포함하지 않아 inline 기본값이 유지된다.
+    @Column(name = "is_verified", nullable = false)
+    private boolean isVerified = false;
+
     // 자기소개(한 줄 소개). 마이페이지 프로필 수정 화면에서 입력. 선택값(미입력 시 null).
     @Column(name = "bio", length = 200)
     private String bio;
@@ -91,6 +96,11 @@ public class Member extends BaseEntity {
         this.nickname = nickname;
         this.language = language;
         this.bio = bio;
+    }
+
+    /** 신분증 인증 승인 시 인증 배지를 부여한다. (verification 도메인 서비스에서 호출) */
+    public void markVerified() {
+        this.isVerified = true;
     }
 
     /** 탈퇴(soft delete): deleted_at만 세팅하고 실제 row는 보존한다. (community softDelete 패턴) */
