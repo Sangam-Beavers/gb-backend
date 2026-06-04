@@ -285,7 +285,8 @@ class ExchangeServiceImplTest {
         ExchangeResponse response = ExchangeResponse.builder().publicId("ex-1").status("COMPLETED").build();
         when(idempotencyCacheHelper.get(cacheKey)).thenReturn(Optional.empty());
         when(transactionRepository.findByIdempotencyKey("idem-1")).thenReturn(Optional.empty());
-        when(quoteRedisRepository.find("quote-1")).thenReturn(Optional.of(quote));
+        when(quoteRedisRepository.find("quote-1")).thenReturn(Optional.of(quote));            // 소유자 확인(비파괴)
+        when(quoteRedisRepository.getAndDelete("quote-1")).thenReturn(Optional.of(quote));    // 원자 소비
         when(self.executeInTransaction(USER, "idem-1", quote)).thenReturn(response);
         when(objectMapper.writeValueAsString(response)).thenReturn("{\"json\":\"ok\"}");
 
@@ -293,7 +294,8 @@ class ExchangeServiceImplTest {
 
         assertThat(result).isSameAs(response);
         verify(idempotencyCacheHelper).set(cacheKey, "{\"json\":\"ok\"}");
-        verify(quoteRedisRepository).delete("quote-1"); // 성공 시 견적 삭제(재사용 방지)
+        verify(quoteRedisRepository).getAndDelete("quote-1"); // 실행 전 원자 소비(이중 환전 차단, WEXB-01)
+        verify(quoteRedisRepository, never()).delete(any());  // best-effort delete 경로 폐기
     }
 
     // ───────────────────── 내역 목록 ─────────────────────
@@ -424,7 +426,8 @@ class ExchangeServiceImplTest {
         ExchangeResponse priorResponse = ExchangeResponse.builder().publicId("ex-prior").status("COMPLETED").build();
         when(idempotencyCacheHelper.get(cacheKey)).thenReturn(Optional.empty());
         when(transactionRepository.findByIdempotencyKey("idem-1")).thenReturn(Optional.empty());
-        when(quoteRedisRepository.find("quote-1")).thenReturn(Optional.of(quote));
+        when(quoteRedisRepository.find("quote-1")).thenReturn(Optional.of(quote));            // 소유자 확인
+        when(quoteRedisRepository.getAndDelete("quote-1")).thenReturn(Optional.of(quote));    // 원자 소비 성공
         when(self.executeInTransaction(USER, "idem-1", quote))
                 .thenThrow(new DataIntegrityViolationException("duplicate idempotency_key"));
         when(self.readPrior(USER, "idem-1")).thenReturn(priorResponse);
@@ -433,8 +436,35 @@ class ExchangeServiceImplTest {
 
         assertThat(result).isSameAs(priorResponse);
         verify(self).readPrior(USER, "idem-1"); // 소유자 스코프로 재조회(EX-FIX)
-        // race로 빠졌으므로 성공 경로의 견적 삭제(delete)는 일어나지 않는다.
-        verify(quoteRedisRepository, never()).delete(any());
+        verify(quoteRedisRepository, never()).delete(any()); // best-effort delete 경로 폐기
+    }
+
+    // ───────────────────── WU-L1: 견적 원자 소비(이중 환전 차단) ─────────────────────
+
+    @Test
+    @DisplayName("WEXB-01: 견적 원자 소비 경쟁에서 진 쪽(getAndDelete empty) → QUOTE_EXPIRED, 실행/거래저장 0(이중 환전 차단)")
+    void execute_견적_원자소비_경쟁_진쪽_차단() {
+        ReflectionTestUtils.setField(exchangeService, "self", self);
+        ExchangeExecuteRequest request = new ExchangeExecuteRequest();
+        ReflectionTestUtils.setField(request, "quotePublicId", "quote-1");
+        QuoteData quote = new QuoteData("quote-1", USER, ExchangeType.EXCHANGE,
+                CurrencyType.KRW, CurrencyType.USD, new BigDecimal("100000"),
+                new BigDecimal("1380"), new BigDecimal("500"), CurrencyType.KRW,
+                new BigDecimal("72.1014"), CurrencyType.USD);
+        // 같은 견적을 다른 idempotency_key로 동시 요청한 상황: 소유자 확인 시점(find)엔 견적이 보이지만,
+        // 다른 요청이 먼저 원자 소비(getAndDelete)해 이 요청은 empty를 받는다 → 실행 진입 불가.
+        when(transactionRepository.findByIdempotencyKey("idem-2")).thenReturn(Optional.empty());
+        when(quoteRedisRepository.find("quote-1")).thenReturn(Optional.of(quote));
+        when(quoteRedisRepository.getAndDelete("quote-1")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> exchangeService.execute(USER, "idem-2", request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(ExchangeErrorCode.QUOTE_EXPIRED);
+
+        // 견적을 획득 못 했으니 실행·거래 저장이 일어나지 않는다(두 번째 환전 차단).
+        verify(self, never()).executeInTransaction(any(), any(), any());
+        verify(transactionRepository, never()).save(any());
     }
 
     // ───────────────────── EX-T2: 멱등 재반환 cross-user/cross-type 차단(EX-FIX 회귀) ─────────────────────

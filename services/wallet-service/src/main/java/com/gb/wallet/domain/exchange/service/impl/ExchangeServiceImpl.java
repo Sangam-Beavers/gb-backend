@@ -171,7 +171,9 @@ public class ExchangeServiceImpl implements ExchangeService {
             return rebuildPrior(prior.get(), userPublicId);
         }
 
-        // 견적 조회 — 없으면(TTL 만료/미존재) 만료 처리.
+        // 견적 조회(소유자 확인용 — 비파괴적 read). 없으면(TTL 만료/미존재) 만료 처리.
+        //   소비(getAndDelete) 전에 소유자를 먼저 확인해, 타인이 견적 id를 탈취해 실행하려다 남의 견적을
+        //   삭제(소비)해 버리는 DoS도 막는다(소비는 소유자 검증 통과 후에만).
         QuoteData quote = quoteRedisRepository.find(request.getQuotePublicId())
                 .orElseThrow(() -> new BusinessException(ExchangeErrorCode.QUOTE_EXPIRED));
 
@@ -180,13 +182,18 @@ public class ExchangeServiceImpl implements ExchangeService {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
 
+        // 견적 원자 소비(getAndDelete) — 같은 견적을 다른 idempotency_key로 동시 재사용하는 이중 환전을
+        // 차단한다(WEXB-01). 경쟁에서 이긴 1건만 견적을 얻고, 진 쪽/이미 소비/만료는 empty → QUOTE_EXPIRED.
+        // (커밋 후 best-effort delete는 트랜잭션 밖이라 두 동시 요청이 모두 견적을 보고 각자 실행할 수 있어 폐기.)
+        QuoteData consumed = quoteRedisRepository.getAndDelete(request.getQuotePublicId())
+                .orElseThrow(() -> new BusinessException(ExchangeErrorCode.QUOTE_EXPIRED));
+
         // 트랜잭션 내 실행 (self-proxy — 직접 호출 시 @Transactional 미적용).
         try {
-            ExchangeResponse response = self.executeInTransaction(userPublicId, idempotencyKey, quote);
-            quoteRedisRepository.delete(quote.quotePublicId()); // 성공 시 견적 삭제(재사용 방지)
-            return response;
+            return self.executeInTransaction(userPublicId, idempotencyKey, consumed);
         } catch (DataIntegrityViolationException race) {
-            // Layer 3 — 동시 race로 같은 키가 먼저 커밋됨 → 첫 거래 재조회(소유자·유형 검증 포함).
+            // Layer 3 — 같은 idempotency_key(다른 견적)로 동시 race가 먼저 커밋됨 → 첫 거래 재조회
+            //   (소유자·유형 검증 포함). 이 경로의 견적은 이미 getAndDelete로 소비됐다.
             return self.readPrior(userPublicId, idempotencyKey);
         }
     }
