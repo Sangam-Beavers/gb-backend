@@ -42,7 +42,7 @@
 
 **신분증 유형** (`identity_document_type`): `ALIEN_REGISTRATION`(외국인등록증) / `PASSPORT`(여권) / `NATIONAL_ID`(본국 신분증)
 
-- 신분증 번호는 **AES-256 암호화 저장**(또는 해시), 원본 최소 보관.
+- 신분증 번호는 **AES-256-GCM 암호화 저장** (`EncryptedStringConverter`가 영속/조회 시점에 자동 변환), 원본 최소 보관. 운영 키는 환경변수 `GB_CRYPTO_KEY`로 주입(평문 yml 금지). 운영 전환 시 AWS KMS Envelope Encryption으로 교체 예정.
 - 인증 승인(APPROVED) 시 `members.is_verified = TRUE` 업데이트 → 커뮤니티/송금에서 신뢰도 표시.
 
 ---
