@@ -38,7 +38,7 @@ public class RateLimitHelper {
      * {@code key}의 고정 윈도 카운터를 1 증가시키고, 윈도 내 호출이 {@code limit} 이하인지 반환한다.
      * 첫 증가(=1) 시점에만 {@code window} TTL을 건다(이후 증가는 TTL을 갱신하지 않아 윈도가 미끄러지지 않는다).
      *
-     * @param key    전체 카운터 키(네임스페이스 포함, 예: {@code ratelimit:account-verify:{clientIp}})
+     * @param key    전체 카운터 키(네임스페이스 포함, 예: {@code ratelimit:account-verify:{userPublicId}})
      * @param limit  윈도 내 허용 호출 수
      * @param window 카운터 만료 윈도
      * @return 허용되면 {@code true}, 초과하면 {@code false}. Redis 장애 시 fail-open으로 {@code true}.

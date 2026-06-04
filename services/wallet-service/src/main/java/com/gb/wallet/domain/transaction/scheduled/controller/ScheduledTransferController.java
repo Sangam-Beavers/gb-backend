@@ -63,7 +63,8 @@ public class ScheduledTransferController {
                     responseCode = "400",
                     description = "COMMON4001 - 요청 값이 올바르지 않습니다(필수 필드 누락·형식 오류·미지원 frequency) "
                             + "/ TRANSFER4002 - 지원하지 않는 통화 / TRANSFER4003 - 지원하지 않는 송금 유형 "
-                            + "/ TRANSFER4004 - 자기 자신에게 송금할 수 없습니다.",
+                            + "/ TRANSFER4004 - 자기 자신에게 송금할 수 없습니다 "
+                            + "/ TRANSFER4009 - 송금 PIN이 설정되지 않았습니다(TX-PIN — standing order 설정 시 PIN 필요).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
@@ -81,6 +82,10 @@ public class ScheduledTransferController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "422",
                     description = "COMMON4221 - 처리할 수 없는 요청입니다 (schedule_day 범위 초과 또는 currency != receive_currency).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "428",
+                    description = "TRANSFER4010 - 송금 전 PIN 검증이 필요합니다 (TX-PIN — standing order: pin-verify(§5) 성공 마커 없이 설정 호출).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",

@@ -8,8 +8,8 @@ import org.springframework.validation.annotation.Validated;
  * 송금(transfer.execute) rate-limit 정책. {@code wallet.transfer.rate-limit.*} 프로퍼티를 바인딩한다.
  *
  * <p>외부 자금 이동(REMITTANCE)·내부 송금(INTERNAL_TRANSFER) 공통 진입 시 사용자(public_id) 단위
- * 고정 윈도 rate-limit. 계좌 인증({@link VerifyRateLimitProperties}, IP 단위)과 달리 송금은 인증된
- * 사용자가 호출하므로 user 단위 카운터가 더 적합하다(같은 사용자의 폭주 차단).
+ * 고정 윈도 rate-limit. 계좌 인증({@link VerifyRateLimitProperties})과 동일하게 송금도 인증된
+ * 사용자가 호출하므로 user(public_id) 단위 카운터를 쓴다(같은 사용자의 폭주 차단).
  *
  * <p>{@code @ConfigurationPropertiesScan}으로 자동 등록되므로 별도 {@code @EnableConfigurationProperties}
  * 가 필요 없다. 미지정 시 canonical 생성자에서 기본값(60초 윈도 / 30회)을 채운다 — 송금은 verify보다

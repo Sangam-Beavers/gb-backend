@@ -89,7 +89,9 @@ public class TransferPinController {
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "429", description = "TRANSFER4008 - 입력 횟수 초과로 잠김(단기 10분 또는 24h 누적 시 24시간).",
+                    responseCode = "429",
+                    description = "TRANSFER4008 - 입력 횟수 초과로 잠김(단기 10분 또는 24h 누적 시 24시간) / "
+                            + "COMMON4291 - 요청 횟수 초과(per-user rate-limit, 무차별 대입 버스트 차단, wallet-pin-redis-1).",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class)))
     })

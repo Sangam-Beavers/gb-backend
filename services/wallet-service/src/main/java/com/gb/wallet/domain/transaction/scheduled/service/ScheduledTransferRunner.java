@@ -28,8 +28,13 @@ import org.springframework.transaction.annotation.Transactional;
  * 정기 송금 자동 실행 스케줄러.
  *
  * <p><b>동작:</b> 매일 KST 새벽 1시(운영 기본)에 트리거되어 {@code status=ACTIVE}이고
- * {@code next_run_date <= today}인 정기 송금을 일괄 실행한다. 각 회차는 {@link TransferService#execute}를
- * 그대로 호출 — 멱등성 3-layer·락 재시도·rate-limit·remittance_attempts 모두 송금 본업 로직이 처리한다.
+ * {@code next_run_date <= today}인 정기 송금을 일괄 실행한다. 각 회차는 {@link TransferService#executePreAuthorized}를
+ * 호출 — 멱등성 3-layer·락 재시도·rate-limit·remittance_attempts 모두 송금 본업 로직이 처리한다.
+ *
+ * <p><b>송금 PIN 면제(TX-PIN, standing order):</b> 정기송금은 사람이 PIN을 입력할 주체가 없는 시스템 자동
+ * 실행이라 회차마다 PIN 검증을 할 수 없다. 대신 정기송금 <b>설정 시점</b>에 PIN을 1회 검증해 인가하므로
+ * (standing-order 모델), 회차 실행은 PIN 게이트를 면제하는 {@code executePreAuthorized}를 쓴다. 일반
+ * {@code execute}(PIN 게이트 ON)를 쓰면 마커가 없어 모든 회차가 TRANSFER4010으로 실패한다.
  *
  * <p><b>rate-limit 공유(schedule-pin-3, 의도):</b> 정기 송금도 수동 송금과 동일한 user 단위 rate-limit
  * ({@code ratelimit:transfer:{userPublicId}}, 기본 30회/60초)을 공유한다 — 스케줄러 전용 우회 키를 두지 않는다.
@@ -169,7 +174,8 @@ public class ScheduledTransferRunner {
         //   nextRunDate 키는 회차 고정값이라 layer 1/2/3 멱등으로 1차 결과만 재구성된다.
         String idempotencyKey = "scheduled:" + s.getPublicId() + ":" + s.getNextRunDate();
         TransferExecuteRequest request = toExecuteRequest(s);
-        transferService.execute(s.getUserPublicId(), idempotencyKey, request);
+        // 사전 인가 경로(executePreAuthorized) — PIN은 설정 시 1회 검증한 standing order라 회차는 면제(TX-PIN).
+        transferService.executePreAuthorized(s.getUserPublicId(), idempotencyKey, request);
 
         // 다음 회차 계산 — today 기준 다음 주기. "오늘 이미 지났음" 정책으로 자연스럽게 다음 주/달로.
         LocalDate next = nextRunDateCalculator.calculateFrom(

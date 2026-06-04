@@ -87,18 +87,20 @@ class ScheduledTransferRunnerTest {
                 .willReturn(List.of(st));
         given(scheduledTransferRepository.findById(10L)).willReturn(Optional.of(st));
         given(bankAccountRepository.findById(99L)).willReturn(Optional.of(account));
-        given(transferService.execute(anyString(), anyString(), any(TransferExecuteRequest.class)))
+        given(transferService.executePreAuthorized(anyString(), anyString(), any(TransferExecuteRequest.class)))
                 .willReturn(Mockito.mock(TransferExecuteResponse.class));
         given(nextRunDateCalculator.calculateFrom(any(), Mockito.anyInt(), any(LocalDate.class)))
                 .willReturn(LocalDate.of(2026, 7, 25));
 
         runner.runDueTransfers();
 
-        // TransferService.execute가 변환된 request로 호출됨 (REMITTANCE + bank_account_public_id 채움)
+        // TransferService.executePreAuthorized가 변환된 request로 호출됨 (REMITTANCE + bank_account_public_id 채움)
         ArgumentCaptor<TransferExecuteRequest> reqCaptor =
                 ArgumentCaptor.forClass(TransferExecuteRequest.class);
         ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(transferService).execute(eq("user-uuid"), keyCaptor.capture(), reqCaptor.capture());
+        verify(transferService).executePreAuthorized(eq("user-uuid"), keyCaptor.capture(), reqCaptor.capture());
+        // TX-PIN: 정기송금 회차는 사전 인가 경로만 쓴다 — PIN 게이트가 걸린 execute()는 호출하지 않는다(standing order).
+        verify(transferService, never()).execute(anyString(), anyString(), any(TransferExecuteRequest.class));
         assertThat(reqCaptor.getValue().transferType()).isEqualTo("REMITTANCE");
         assertThat(reqCaptor.getValue().bankAccountPublicId()).isEqualTo("bank-pub-uuid");
         assertThat(reqCaptor.getValue().receiverPublicId()).isNull();
@@ -122,7 +124,7 @@ class ScheduledTransferRunnerTest {
         given(scheduledTransferRepository.findAllByStatusAndNextRunDateLessThanEqual(any(), any()))
                 .willReturn(List.of(st));
         given(scheduledTransferRepository.findById(11L)).willReturn(Optional.of(st));
-        given(transferService.execute(anyString(), anyString(), any(TransferExecuteRequest.class)))
+        given(transferService.executePreAuthorized(anyString(), anyString(), any(TransferExecuteRequest.class)))
                 .willReturn(Mockito.mock(TransferExecuteResponse.class));
         given(nextRunDateCalculator.calculateFrom(any(), Mockito.anyInt(), any(LocalDate.class)))
                 .willReturn(LocalDate.of(2026, 7, 25));
@@ -131,7 +133,7 @@ class ScheduledTransferRunnerTest {
 
         ArgumentCaptor<TransferExecuteRequest> reqCaptor =
                 ArgumentCaptor.forClass(TransferExecuteRequest.class);
-        verify(transferService).execute(anyString(), anyString(), reqCaptor.capture());
+        verify(transferService).executePreAuthorized(anyString(), anyString(), reqCaptor.capture());
         assertThat(reqCaptor.getValue().transferType()).isEqualTo("INTERNAL_TRANSFER");
         assertThat(reqCaptor.getValue().receiverPublicId()).isEqualTo("receiver-uuid");
         assertThat(reqCaptor.getValue().bankAccountPublicId()).isNull();
@@ -156,9 +158,9 @@ class ScheduledTransferRunnerTest {
         given(scheduledTransferRepository.findById(21L)).willReturn(Optional.of(st2));
         // 첫 회차 실패(잔액 부족 등), 두 번째는 정상
         willThrow(new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE))
-                .given(transferService).execute(anyString(), Mockito.contains(st1.getPublicId()),
+                .given(transferService).executePreAuthorized(anyString(), Mockito.contains(st1.getPublicId()),
                         any(TransferExecuteRequest.class));
-        given(transferService.execute(anyString(), Mockito.contains(st2.getPublicId()),
+        given(transferService.executePreAuthorized(anyString(), Mockito.contains(st2.getPublicId()),
                 any(TransferExecuteRequest.class)))
                 .willReturn(Mockito.mock(TransferExecuteResponse.class));
         given(nextRunDateCalculator.calculateFrom(any(), Mockito.anyInt(), any(LocalDate.class)))
@@ -167,7 +169,7 @@ class ScheduledTransferRunnerTest {
         runner.runDueTransfers();
 
         // 두 번 다 시도됨 (첫 실패가 두 번째 건너뛰지 않음)
-        verify(transferService, times(2)).execute(anyString(), anyString(), any(TransferExecuteRequest.class));
+        verify(transferService, times(2)).executePreAuthorized(anyString(), anyString(), any(TransferExecuteRequest.class));
         verify(lock).unlock();
     }
 
@@ -181,7 +183,7 @@ class ScheduledTransferRunnerTest {
 
         runner.executeSingle(30L, LocalDate.of(2026, 6, 25));
 
-        verify(transferService, never()).execute(anyString(), anyString(), any());
+        verify(transferService, never()).executePreAuthorized(anyString(), anyString(), any());
     }
 
     @Test
@@ -193,7 +195,7 @@ class ScheduledTransferRunnerTest {
 
         runner.executeSingle(31L, LocalDate.of(2026, 6, 25));
 
-        verify(transferService, never()).execute(anyString(), anyString(), any());
+        verify(transferService, never()).executePreAuthorized(anyString(), anyString(), any());
     }
 
     // ===== helpers =====

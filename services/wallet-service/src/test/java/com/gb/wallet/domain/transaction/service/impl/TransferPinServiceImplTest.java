@@ -3,6 +3,7 @@ package com.gb.wallet.domain.transaction.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -14,15 +15,21 @@ import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.global.common.enums.WalletStatus;
+import com.gb.wallet.global.config.PinVerifyRateLimitProperties;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
+import com.gb.wallet.global.redis.PinVerificationStore;
+import com.gb.wallet.global.redis.RateLimitHelper;
 import com.gb.wallet.global.redis.TransferPinAttemptStore;
+import java.time.Duration;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -41,9 +48,22 @@ class TransferPinServiceImplTest {
 
     @Mock private WalletRepository walletRepository;
     @Mock private TransferPinAttemptStore attemptStore;
+    @Mock private PinVerificationStore pinVerificationStore;
+    @Mock private RateLimitHelper rateLimitHelper;
+    @Mock private PinVerifyRateLimitProperties rateLimitProperties;
     @Mock private PasswordEncoder passwordEncoder;
 
     @InjectMocks private TransferPinServiceImpl service;
+
+    @BeforeEach
+    void rateLimitAllowedByDefault() {
+        // verifyPin 진입 rate-limit은 기본 통과 — 개별 throttle 테스트에서 false로 덮어쓴다(execute 테스트와 동일 사상).
+        // setPin 테스트는 verifyPin을 타지 않으므로 lenient로 미사용 stub 허용.
+        Mockito.lenient().when(rateLimitHelper.tryAcquire(anyString(), anyLong(), any(Duration.class)))
+                .thenReturn(true);
+        Mockito.lenient().when(rateLimitProperties.limit()).thenReturn(10);
+        Mockito.lenient().when(rateLimitProperties.windowSeconds()).thenReturn(60);
+    }
 
     private Wallet wallet(boolean withPin) {
         Wallet w = Wallet.builder()
@@ -70,6 +90,7 @@ class TransferPinServiceImplTest {
 
         assertThat(w.getTransferPinHash()).isEqualTo("ENCODED");
         assertThat(w.hasTransferPin()).isTrue();
+        verify(pinVerificationStore).clearVerified(USER); // 새 PIN은 직전 검증을 물려받지 않는다(TX-PIN)
     }
 
     @Test
@@ -83,6 +104,7 @@ class TransferPinServiceImplTest {
                 .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
 
         verify(passwordEncoder, never()).encode(anyString());
+        verify(pinVerificationStore, never()).clearVerified(anyString()); // 실패 경로는 마커를 건드리지 않음
     }
 
     @Test
@@ -125,6 +147,7 @@ class TransferPinServiceImplTest {
 
         verify(attemptStore).reset(USER);
         verify(attemptStore, never()).recordFailure(anyString());
+        verify(pinVerificationStore).markVerified(USER); // 성공 시에만 단명 검증 마커 발급(TX-PIN)
     }
 
     @Test
@@ -142,6 +165,7 @@ class TransferPinServiceImplTest {
 
         verify(attemptStore).recordFailure(USER);
         verify(attemptStore, never()).reset(anyString());
+        verify(pinVerificationStore, never()).markVerified(anyString()); // 불일치는 인가 마커를 남기지 않음
     }
 
     @Test
@@ -170,6 +194,7 @@ class TransferPinServiceImplTest {
 
         verify(walletRepository, never()).findByUserPublicId(anyString());
         verifyNoInteractions(passwordEncoder);
+        verifyNoInteractions(pinVerificationStore); // 잠금 우선 차단 — 마커 발급 없음
     }
 
     @Test
@@ -185,5 +210,22 @@ class TransferPinServiceImplTest {
 
         verifyNoInteractions(passwordEncoder);
         verify(attemptStore, never()).recordFailure(anyString());
+        verify(pinVerificationStore, never()).markVerified(anyString()); // 미설정은 검증 성공이 아님 — 마커 없음
+    }
+
+    @Test
+    @DisplayName("wallet-pin-redis-1: rate-limit 초과면 COMMON4291 — 잠금조회·BCrypt 대조·마커 전부 미진입(throttle bypass 차단)")
+    void verifyPin_rate초과_COMMON4291() {
+        when(rateLimitHelper.tryAcquire(anyString(), anyLong(), any(Duration.class))).thenReturn(false);
+
+        assertThatThrownBy(() -> service.verifyPin(USER, PIN))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.TOO_MANY_REQUESTS);
+
+        // 차단된 요청은 어떤 비싼/민감 작업도 하지 않는다 — 버스트가 잠금 게이트를 우회해 추측하는 것을 막는다.
+        verifyNoInteractions(walletRepository, passwordEncoder, pinVerificationStore, attemptStore);
+        // 위조불가 userPublicId 키 + 정책 윈도/임계값으로 호출됨을 확정.
+        verify(rateLimitHelper).tryAcquire("ratelimit:pin-verify:" + USER, 10L, Duration.ofSeconds(60));
     }
 }

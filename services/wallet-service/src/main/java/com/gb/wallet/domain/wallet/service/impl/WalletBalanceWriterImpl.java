@@ -24,6 +24,10 @@ import org.springframework.transaction.annotation.Transactional;
  * 위반이 나는데, 행은 이미 존재하므로 무시(흡수)한다. 이렇게 분리하지 않고 메인 트랜잭션에서 직접 INSERT하면
  * 위반이 메인 트랜잭션을 rollback-only로 오염시키고 {@code charge()} 래퍼의
  * {@code DataIntegrityViolationException} catch(멱등성 race 복구 경로)로 잘못 흘러간다.
+ *
+ * <p><b>주의(wallet-account-charge-2):</b> 위 race에서 본 REQUIRES_NEW 트랜잭션은 flush 실패로 rollback-only가
+ * 돼 커밋 시 {@code UnexpectedRollbackException}이 호출자(충전/송금/환전)로 전파되므로, 모든 호출 측은
+ * {@link com.gb.wallet.global.common.util.BestEffortRequiresNew}로 감싸 흡수한다(행은 이미 존재).
  */
 @Service
 @RequiredArgsConstructor

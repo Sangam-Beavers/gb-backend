@@ -67,6 +67,12 @@ public class DistributedLockHelper {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return null;
+        } catch (RuntimeException e) {
+            // Redis 장애(RedisException/RedissonShutdownException 등)도 "획득 실패"로 정규화한다(wallet-lock-1) —
+            // 호출자(executeInternalTransferPath)는 null을 기대해 COMMON5031(503)로 매핑하므로, 여기서 새어 나가면
+            // generic 500이 된다. 분산락 fail-closed(못 잡으면 거부) — tryLock과 동일 방어. 형제 메서드와 대칭.
+            log.warn("두-wallet 분산 락 획득 실패 — null 반환(호출 측 503 매핑). walletIds={},{}", walletIdA, walletIdB, e);
+            return null;
         }
     }
 

@@ -24,7 +24,10 @@ public enum TransferErrorCode implements ErrorCode {
     // 단기(10분)·24h 장기 잠금이 같은 코드를 공유한다. "잠시 후"는 24h 잠금엔 오해 소지라 잠금 시간에
     // 무관하게 정확한 메시지로 일반화한다(WSCH-06 후속 — 별도 코드 분기는 명세 §12 등록 후로 보류).
     PIN_LOCKED(HttpStatus.TOO_MANY_REQUESTS, "TRANSFER4008", "송금 PIN 입력 횟수를 초과해 일시적으로 잠겨 있습니다."),
-    PIN_NOT_SET(HttpStatus.BAD_REQUEST, "TRANSFER4009", "송금 PIN이 설정되지 않았습니다.");
+    PIN_NOT_SET(HttpStatus.BAD_REQUEST, "TRANSFER4009", "송금 PIN이 설정되지 않았습니다."),
+    // TX-PIN — pin-verify 성공 증표(단명 마커) 없이 송금 실행/정기설정을 호출한 경우. 명세 §5/§6: 송금 전 PIN 검증 필수.
+    // 428 Precondition Required = "본 요청 전에 충족해야 할 선결 조건(pin-verify)이 미충족"의 표준 의미.
+    PIN_VERIFICATION_REQUIRED(HttpStatus.PRECONDITION_REQUIRED, "TRANSFER4010", "송금 전 PIN 검증이 필요합니다.");
 
     private final HttpStatus httpStatus; // @Getter가 getHttpStatus/getCode/getMessage 생성 → ErrorCode 충족
     private final String code;

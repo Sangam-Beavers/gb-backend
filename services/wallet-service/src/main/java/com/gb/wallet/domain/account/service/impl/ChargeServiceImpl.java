@@ -25,6 +25,7 @@ import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.common.enums.WalletStatus;
+import com.gb.wallet.global.common.util.BestEffortRequiresNew;
 import com.gb.wallet.global.config.ChargeProperties;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
@@ -192,10 +193,23 @@ public class ChargeServiceImpl implements ChargeService {
         // (6.5) 외부 호출 *직전* 시도 흔적을 REQUIRES_NEW로 별도 커밋(WACC-01) — withdraw가 외부 성공 후
         //       메인 tx가 (비재시도성) 롤백/타임아웃돼도 흔적은 남아 운영 reconcile 입력이 된다(송금 payout의
         //       RemittanceAttemptWriter와 대칭). 같은 idempotency_key 재시도/race는 Writer 내부 UNIQUE 흡수로 1행 유지.
-        chargeAttemptWriter.record(idempotencyKey, userPublicId, account.getId(), amount, CHARGE_CURRENCY);
+        // 동시 같은 키 race로 REQUIRES_NEW가 rollback-only가 되면 UnexpectedRollbackException이 전파되는데,
+        // 흔적은 이미 존재하므로 흡수하고 진행한다(charge-2 — 정상 충전이 generic 500으로 깨지지 않게).
+        BestEffortRequiresNew.run(() ->
+                chargeAttemptWriter.record(idempotencyKey, userPublicId, account.getId(), amount, CHARGE_CURRENCY));
 
         // (6) Mock 은행 출금. 실패는 BankErrorMapper가 BusinessException으로 변환해 던지므로 그대로 전파한다.
         //     idempotencyKey를 그대로 forward — Mock도 같은 키로 첫 응답을 재반환한다.
+        //
+        //     ⚠️ 알려진 한계(WTX-03, wallet-account-charge-1 — REMITTANCE payout과 동일 사상): 이 withdraw(HTTP)는
+        //        본 doCharge @Transactional *안*에서 호출되므로, 외부 호출이 끝날 때(최대 bank.api.read-timeout,
+        //        기본 10s)까지 DB 커넥션을 점유한다. 동시 첫 충전이 많고 Mock 은행이 느리면 HikariCP 풀이 소진돼
+        //        충전 외 쿼리까지 막힐 수 있다. payout을 tx 밖 짧은 별도 tx로 빼면(reserve→withdraw→confirm Saga)
+        //        점유는 줄지만, 외부 성공 후 로컬 증액 실패 시 외부만 빠져나가는 정합성 창과 보상(환불) 로직이
+        //        새로 필요해 정합성 모델이 바뀐다 — 팀 합의 + 진짜 MySQL(Testcontainers) 검증 선행이라 본 사이클
+        //        범위 밖으로 연기한다(REMITTANCE WTX-03와 함께 가야 charge≡remittance 대칭 유지). 외부 성공 흔적은
+        //        (6.5) charge_attempts로 이미 보존(reconcile 입력). prod 운영 권고: bank read-timeout 하향 +
+        //        spring.datasource.hikari.maximum-pool-size 명시로 blast radius를 환경별로 캡할 것.
         WithdrawalResult mockResult = bankClient.withdraw(
                 account.getMockAccountToken(), amount, CHARGE_CURRENCY.name(), idempotencyKey);
         // 방어 — 응답이 null이거나 COMPLETED가 아닌 비정상 케이스는 일시 장애(503)로 본다. 현재 구현체
@@ -221,7 +235,7 @@ public class ChargeServiceImpl implements ChargeService {
         //     테스트에서 안 드러남). 그래서 행을 먼저 독립 커밋(REQUIRES_NEW)해 만들어 두고 — 동시 첫 충전의
         //     uk_wallet_balances_wallet_currency 위반은 WalletBalanceWriter가 흡수 — 항상 존재하는 행을
         //     FOR UPDATE로 record lock한다. 환전(ExchangeServiceImpl)도 동일하게 ensure→FOR UPDATE 순서다.
-        walletBalanceWriter.ensureBalanceRow(wallet, CHARGE_CURRENCY);
+        BestEffortRequiresNew.run(() -> walletBalanceWriter.ensureBalanceRow(wallet, CHARGE_CURRENCY)); // charge-2
         WalletBalance balance = walletBalanceRepository
                 .findForUpdateByWalletAndCurrency(wallet, CHARGE_CURRENCY)
                 // 행 보장 직후라 비어 있을 수 없다 — 비면 정합성이 깨진 비정상 상태.

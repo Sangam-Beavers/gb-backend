@@ -11,6 +11,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import org.springframework.transaction.UnexpectedRollbackException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
@@ -176,6 +177,41 @@ class ChargeServiceTest {
         InOrder order = inOrder(chargeAttemptWriter, bankClient);
         order.verify(chargeAttemptWriter).record(KEY, USER, 1L, amount, CurrencyType.KRW);
         order.verify(bankClient).withdraw(TOKEN, amount, "KRW", KEY);
+    }
+
+    @Test
+    @DisplayName("charge-2: chargeAttemptWriter.record가 UnexpectedRollbackException(동시 race)여도 흡수하고 충전을 완료한다")
+    void doCharge_record_UnexpectedRollback_흡수_충전계속() {
+        BigDecimal amount = new BigDecimal("500000");
+        Wallet wallet = wallet(USER);
+        BankAccount account = account(TOKEN);
+        WalletBalance created = balance(wallet, BigDecimal.ZERO);
+
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.empty());
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(ACCT, USER))
+                .willReturn(Optional.of(account));
+        given(walletRepository.findByUserPublicId(USER)).willReturn(Optional.of(wallet));
+        // 동시 같은 키 race로 REQUIRES_NEW가 rollback-only → 커밋 시 UnexpectedRollbackException(흔적은 이미 존재).
+        willThrow(new UnexpectedRollbackException("rollback-only"))
+                .given(chargeAttemptWriter).record(KEY, USER, 1L, amount, CurrencyType.KRW);
+        given(bankClient.withdraw(TOKEN, amount, "KRW", KEY)).willReturn(completed(amount));
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(wallet, CurrencyType.KRW))
+                .willReturn(Optional.of(created));
+        given(transactionRepository.save(any(Transaction.class))).willAnswer(inv -> {
+            Transaction t = inv.getArgument(0);
+            ReflectionTestUtils.setField(t, "id", 100L);
+            ReflectionTestUtils.setField(t, "createdAt", FIXED);
+            return t;
+        });
+        given(auditLogRepository.save(any(TransactionAuditLog.class))).willAnswer(inv -> inv.getArgument(0));
+
+        ChargeResponse response = service.doCharge(USER, ACCT, KEY, request(amount), IP);
+
+        // 흔적 기록의 race 예외가 BestEffortRequiresNew로 흡수돼 충전은 정상 완료된다(generic 500 아님).
+        assertThat(response.getStatus()).isEqualTo("COMPLETED");
+        assertThat(created.getBalance()).isEqualByComparingTo("500000");
+        verify(bankClient).withdraw(TOKEN, amount, "KRW", KEY); // 흡수 후 외부 출금까지 진행
+        verify(transactionRepository).save(any(Transaction.class));
     }
 
     @Test

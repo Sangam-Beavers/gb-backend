@@ -29,6 +29,7 @@ import com.gb.wallet.domain.transaction.repository.RemittanceAmountProjection;
 import com.gb.wallet.domain.transaction.repository.TransactionAuditLogRepository;
 import com.gb.wallet.domain.transaction.repository.TransactionRepository;
 import com.gb.wallet.domain.transaction.service.RemittanceAttemptWriter;
+import com.gb.wallet.domain.transaction.service.TransferPinGate;
 import com.gb.wallet.domain.transaction.service.TransferService;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.entity.WalletBalance;
@@ -44,6 +45,7 @@ import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.client.dto.PayoutResult;
 import com.gb.wallet.global.common.util.AccountNumberMasker;
+import com.gb.wallet.global.common.util.BestEffortRequiresNew;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.MemberErrorCode;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
@@ -123,6 +125,7 @@ public class TransferServiceImpl implements TransferService {
     private final IdempotencyCacheHelper idempotencyCacheHelper;
     private final RateLimitHelper rateLimitHelper;
     private final TransferRateLimitProperties transferRateLimitProperties;
+    private final TransferPinGate transferPinGate;
     private final ObjectMapper objectMapper;
 
     /**
@@ -336,6 +339,27 @@ public class TransferServiceImpl implements TransferService {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public TransferExecuteResponse execute(String userPublicId, String idempotencyKey,
                                            TransferExecuteRequest request) {
+        // 사용자 직접 호출(POST /transfers) — 송금 PIN 게이트 ON(TX-PIN).
+        return executeInternal(userPublicId, idempotencyKey, request, true);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public TransferExecuteResponse executePreAuthorized(String userPublicId, String idempotencyKey,
+                                                        TransferExecuteRequest request) {
+        // 사전 인가된 정기송금 회차 실행(스케줄러) — PIN은 설정 시 1회 검증한 standing order라 게이트 OFF(TX-PIN).
+        // NOT_SUPPORTED 유지 필수: 스케줄러 executeSingle(REQUIRES_NEW)의 트랜잭션을 suspend해 자금 이동을
+        // 독립 경계에서 커밋해야 한다(execute와 동일 사상).
+        return executeInternal(userPublicId, idempotencyKey, request, false);
+    }
+
+    /**
+     * 송금 실행 공통 본문. {@code requirePinGate}만 사용자 직접 호출({@link #execute}, true)과 사전 인가
+     * 스케줄러({@link #executePreAuthorized}, false)를 가른다 — 그 외 멱등성 3-layer·rate-limit·락 재시도·
+     * 자금 이동은 완전히 동일하다.
+     */
+    private TransferExecuteResponse executeInternal(String userPublicId, String idempotencyKey,
+                                                    TransferExecuteRequest request, boolean requirePinGate) {
         // 비-HTTP 경로(스케줄러·내부 직접 호출) 서비스단 가드(WTX-02): HTTP는 컨트롤러
         // @RequestHeader("Idempotency-Key") @NotBlank로 막지만(WTX-01), 빈 키가 멱등 3-layer 키 스코프
         // (cacheKey/findByIdempotencyKey)를 무력화하므로 모든 side effect(rate-limit/캐시/DB) 전에
@@ -389,6 +413,17 @@ public class TransferServiceImpl implements TransferService {
                 Duration.ofSeconds(transferRateLimitProperties.windowSeconds()));
         if (!allowed) {
             throw new BusinessException(TransferErrorCode.RATE_LIMIT_EXCEEDED);
+        }
+
+        // 5.7) 송금 PIN 서버측 게이트(TX-PIN) — 사용자 직접 호출만(requirePinGate). pin-verify 성공 마커를 원자
+        //      소비(GETDEL)해, 마커가 없으면 PIN 미설정 TRANSFER4009 / 미검증 TRANSFER4010(428)으로 차단한다.
+        //      위치: rate-limit 뒤·executeWithRetry 앞. ① 멱등 재요청(Layer1/2 hit)은 위에서 이미 반환돼 여기
+        //      도달하지 않으므로 재검증을 요구하지 않는다. ② rate-limit으로 막힌 요청은 마커를 소비하지 않아
+        //      (게이트 미도달) 검증을 헛되이 태우지 않는다. ③ 마커는 executeWithRetry의 락경합 재시도 *바깥*에서
+        //      1회만 소비된다(재시도가 마커를 다시 요구하지 않음). rate-limit(5.5)과 달리 Redis 장애 시 fail-closed.
+        //      정기송금 회차(executePreAuthorized)는 설정 시 1회 인가한 standing order라 이 게이트를 면제한다.
+        if (requirePinGate) {
+            transferPinGate.requireVerified(userPublicId);
         }
 
         // 6) 실 처리 + 락 경합 재시도 래퍼 — race(UNIQUE 위반)와 락 경합을 도메인별 분기에 공통 처리.
@@ -456,6 +491,11 @@ public class TransferServiceImpl implements TransferService {
             throw new BusinessException(TransferErrorCode.SELF_TRANSFER_NOT_ALLOWED);
         }
 
+        // 수신자 본명 snapshot을 분산 락/FOR UPDATE 진입 *전*에 외부 MemberClient로 미리 조회한다(wallet-transfer-2).
+        // 확인증용 read-only 보강이라 트랜잭션·정합성 의존이 없어(fail-open, 실패 시 null) 락 밖에서 안전하게 빼낼 수
+        // 있다 — 락/잔액행 락을 보유한 채 외부 HTTP를 호출해 같은 송신자의 다른 송금/환전을 대기시키던 것을 제거한다.
+        String receiverName = fetchMemberNameSafe(receiverWallet.getUserPublicId());
+
         // 분산 락 획득 (wallet_id 오름차순 — DistributedLockHelper 내부 정책). 실패 → 503.
         RLock lock = distributedLockHelper.tryLockTwoWallets(
                 senderWallet.getId(), receiverWallet.getId());
@@ -466,7 +506,7 @@ public class TransferServiceImpl implements TransferService {
             // 트랜잭션 내 실제 처리 (self-proxy로 호출 — 직접 호출 시 @Transactional 미적용).
             return self.executeInTransaction(
                     senderWallet.getId(), receiverWallet.getId(),
-                    currency, transferType, idempotencyKey, request);
+                    currency, transferType, idempotencyKey, request, receiverName);
         } finally {
             // 락 보유자가 본인인 경우에만 해제 (lease 만료로 다른 스레드가 가진 경우 안전).
             if (lock.isHeldByCurrentThread()) {
@@ -695,7 +735,7 @@ public class TransferServiceImpl implements TransferService {
     public TransferExecuteResponse executeInTransaction(
             Long senderWalletId, Long receiverWalletId,
             CurrencyType currency, TransactionType transferType,
-            String idempotencyKey, TransferExecuteRequest request) {
+            String idempotencyKey, TransferExecuteRequest request, String receiverNameSnapshot) {
 
         // 멱등성 Layer 3(idempotency_key UNIQUE 위반) catch는 상위 executeWithRetry로 위임 — 거기서
         // rebuildFromPrior 검증을 거친 readPriorTransaction(REQUIRES_NEW)으로 첫 결과를 재반환한다.
@@ -719,7 +759,7 @@ public class TransferServiceImpl implements TransferService {
             // (2) 수신자 잔액 행 0원 보장 — REQUIRES_NEW로 독립 커밋(이미 있으면 no-op, 동시 생성 race 흡수).
             //     이래야 (3)의 FOR UPDATE가 존재하지 않는 행을 잠그려다 실패하지 않는다.
             //     송신자는 자동 생성하지 않는다 — 돈을 보내려면 잔액 행이 이미 있어야 정상.
-            walletBalanceWriter.ensureBalanceRow(receiverWallet, currency);
+            BestEffortRequiresNew.run(() -> walletBalanceWriter.ensureBalanceRow(receiverWallet, currency)); // charge-2
 
             // (3) 비관적 락 — wallet_id 오름차순으로 잡아 데드락 회피(분산 락 정책과 동일 방향).
             //     락 SQL 발행 순서는 lower → higher 그대로 유지하고, 결과는 역할(sender/receiver)로 재매핑.
@@ -762,9 +802,10 @@ public class TransferServiceImpl implements TransferService {
             BigDecimal senderAfter = senderBalance.getBalance();
             BigDecimal receiverAfter = receiverBalance.getBalance();
 
-            // (6-a) 수신자 본명 snapshot — 송금 확인증의 receiver_name 출처.
-            //     fail-open: MemberClient 장애로 본업(송금)을 막지 않는다. 실패 시 receiverName=null로 저장.
-            String receiverName = fetchMemberNameSafe(receiverWallet.getUserPublicId());
+            // (6-a) 수신자 본명 snapshot — 송금 확인증의 receiver_name 출처. 락/FOR UPDATE 보유 중 외부 HTTP를
+            //     피하려 executeInternalTransferPath가 락 진입 *전*에 미리 조회해 넘긴 값을 그대로 쓴다
+            //     (wallet-transfer-2). fail-open 동작 불변 — 조회 실패 시 null이 그대로 들어온다.
+            String receiverName = receiverNameSnapshot;
 
             // (6) Transaction INSERT — idempotency_key UNIQUE 위반 시 catch로 Layer 3 흐름.
             Transaction transaction = transactionRepository.save(Transaction.builder()
@@ -878,8 +919,9 @@ public class TransferServiceImpl implements TransferService {
         // self-proxy로 호출 — 직접 호출 시 @Transactional 미적용(INTERNAL_TRANSFER 경로와 동일).
         // receiverWalletId는 null (외부 계좌). executeInTransaction이 transferType으로 분기.
         // 캐시 저장은 execute()가 일괄 처리(race·재시도 시 중복 호출 방지).
+        // receiverNameSnapshot=null — REMITTANCE는 외부 계좌라 tx 내에서 bank_account.holder_name을 쓴다(외부 HTTP 없음).
         return self.executeInTransaction(
-                senderWallet.getId(), null, currency, TransactionType.REMITTANCE, idempotencyKey, request);
+                senderWallet.getId(), null, currency, TransactionType.REMITTANCE, idempotencyKey, request, null);
     }
 
     /**
@@ -944,8 +986,8 @@ public class TransferServiceImpl implements TransferService {
         // (6.5) 외부 호출 *직전* 시도 흔적을 REQUIRES_NEW로 별도 커밋 — payout 실패/timeout 시 메인 tx가
         //       rollback돼도 흔적은 남아 운영 reconcile 입력이 된다. 같은 idempotency_key 재시도/race는
         //       Writer 내부 UNIQUE 위반 흡수로 1행만 유지(상세: RemittanceAttemptWriter javadoc).
-        remittanceAttemptWriter.record(idempotencyKey, senderWallet.getUserPublicId(),
-                account.getId(), totalDeduct, currency);
+        BestEffortRequiresNew.run(() -> remittanceAttemptWriter.record(idempotencyKey, // charge-2 (동시 race UnexpectedRollbackException 흡수)
+                senderWallet.getUserPublicId(), account.getId(), totalDeduct, currency));
 
         // (7) Mock 은행 지급. 외부 에러는 BankErrorMapper가 BusinessException으로 변환해 던지므로 그대로 전파
         //     (BANK4002→ACCOUNT4003, BANK4040→ACCOUNT4001, BANK4003→ACCOUNT4002, BANK4010→ACCOUNT4006,

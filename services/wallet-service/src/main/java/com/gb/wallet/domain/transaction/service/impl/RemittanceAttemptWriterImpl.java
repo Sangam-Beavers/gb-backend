@@ -23,6 +23,10 @@ import org.springframework.transaction.annotation.Transactional;
  * {@code uk_remittance_attempts_idempotency_key} 위반을 받지만, 행은 이미 존재해 의미상 흔적이
  * 남아 있는 것이므로 흡수(no-op)한다. 메인 트랜잭션이 이 위반 때문에 rollback-only로 오염되지 않도록
  * 메인과 분리한 이유이기도 하다(WalletBalanceWriterImpl 동일 논리).
+ *
+ * <p><b>주의(wallet-account-charge-2):</b> 본 REQUIRES_NEW 트랜잭션은 flush 실패로 rollback-only가 돼 커밋 시
+ * {@code UnexpectedRollbackException}이 호출자(REMITTANCE 송금)로 전파되므로, 호출 측은
+ * {@link com.gb.wallet.global.common.util.BestEffortRequiresNew}로 흡수한다(흔적은 이미 존재).
  */
 @Service
 @RequiredArgsConstructor

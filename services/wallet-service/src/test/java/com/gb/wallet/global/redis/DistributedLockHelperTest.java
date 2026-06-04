@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
@@ -107,5 +108,36 @@ class DistributedLockHelperTest {
         given(lock.tryLock(3L, TimeUnit.SECONDS)).willThrow(new RedisException("redis down"));
 
         assertThat(helper.tryLockWithWatchdog(BATCH_KEY)).isNull();
+    }
+
+    // --- tryLockTwoWallets (wallet-lock-1) ---
+
+    @Test
+    @DisplayName("두-wallet: Redis 장애(RedisException)도 null로 정규화 — 500이 아니라 호출 측 503(COMMON5031)으로 매핑되게")
+    void multiLock_Redis예외_null() throws Exception {
+        RLock lock1 = Mockito.mock(RLock.class);
+        RLock lock2 = Mockito.mock(RLock.class);
+        RLock multiLock = Mockito.mock(RLock.class);
+        given(redissonClient.getLock("lock:wallet:1")).willReturn(lock1);
+        given(redissonClient.getLock("lock:wallet:2")).willReturn(lock2);
+        given(redissonClient.getMultiLock(lock1, lock2)).willReturn(multiLock);
+        given(multiLock.tryLock(3L, 5L, TimeUnit.SECONDS)).willThrow(new RedisException("redis down"));
+
+        // 이전엔 tryLockTwoWallets만 RuntimeException catch가 없어 RedisException이 새어 generic 500이 됐다.
+        assertThat(helper.tryLockTwoWallets(1L, 2L)).isNull();
+    }
+
+    @Test
+    @DisplayName("두-wallet: 인자 역순이어도 wallet_id 오름차순 키로 MultiLock 획득")
+    void multiLock_획득_오름차순키() throws Exception {
+        RLock lock1 = Mockito.mock(RLock.class);
+        RLock lock2 = Mockito.mock(RLock.class);
+        RLock multiLock = Mockito.mock(RLock.class);
+        given(redissonClient.getLock("lock:wallet:1")).willReturn(lock1); // lower=1
+        given(redissonClient.getLock("lock:wallet:2")).willReturn(lock2); // higher=2
+        given(redissonClient.getMultiLock(lock1, lock2)).willReturn(multiLock);
+        given(multiLock.tryLock(3L, 5L, TimeUnit.SECONDS)).willReturn(true);
+
+        assertThat(helper.tryLockTwoWallets(2L, 1L)).isSameAs(multiLock); // 역순 인자 → 동일 오름차순 키
     }
 }

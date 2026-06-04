@@ -238,6 +238,22 @@ class TransferControllerTest {
     }
 
     @Test
+    @DisplayName("POST /transfers 428: Service가 PIN_VERIFICATION_REQUIRED throw → 428 + TRANSFER4010 (TX-PIN)")
+    void executeTransfer_TRANSFER4010_428() throws Exception {
+        willThrow(new BusinessException(TransferErrorCode.PIN_VERIFICATION_REQUIRED))
+                .given(transferService).execute(eq(USER), eq(KEY), any());
+
+        mockMvc.perform(post("/api/v1/transfers")
+                        .with(authedJwt())
+                        .header("Idempotency-Key", KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validBody("10000.0000"))))
+                .andExpect(status().isPreconditionRequired())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("TRANSFER4010"));
+    }
+
+    @Test
     @DisplayName("POST /transfers 401: 토큰 없음 → AUTH4011, Service 미호출")
     void executeTransfer_토큰_없음_401() throws Exception {
         mockMvc.perform(post("/api/v1/transfers")

@@ -14,6 +14,7 @@ import com.gb.wallet.domain.transaction.scheduled.entity.ScheduledTransfer;
 import com.gb.wallet.domain.transaction.scheduled.repository.ScheduledTransferRepository;
 import com.gb.wallet.domain.transaction.scheduled.service.NextRunDateCalculator;
 import com.gb.wallet.domain.transaction.scheduled.service.ScheduledTransferService;
+import com.gb.wallet.domain.transaction.service.TransferPinGate;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.MemberInfo;
@@ -57,6 +58,7 @@ public class ScheduledTransferServiceImpl implements ScheduledTransferService {
     private final TransactionRepository transactionRepository;
     private final MemberClient memberClient;
     private final NextRunDateCalculator nextRunDateCalculator;
+    private final TransferPinGate transferPinGate;
 
     @Override
     @Transactional
@@ -127,6 +129,12 @@ public class ScheduledTransferServiceImpl implements ScheduledTransferService {
             // INTERNAL: MemberClient로 receiver name snapshot (fail-open — TransferServiceImpl 동일 정책).
             receiverName = fetchMemberNameSafe(receiverPublicId);
         }
+
+        // (4-2) 송금 PIN 서버측 게이트(TX-PIN, standing order) — 정기송금은 "미래 자금 이동을 예약"하는
+        //       행위라 설정 시 1회 PIN 검증으로 인가한다. 회차 실행(스케줄러)은 이 인가를 근거로 면제된다
+        //       (executePreAuthorized). pin-verify 성공 마커를 원자 소비 — 미설정 TRANSFER4009 / 미검증 TRANSFER4010.
+        //       입력·대상 검증을 모두 통과한 뒤 소비해, 검증 실패가 1회용 마커를 헛되이 태우지 않게 한다(게이트는 persist 직전).
+        transferPinGate.requireVerified(userPublicId);
 
         // (5) next_run_date 계산 (KST 기준, 월말 fallback, "오늘 지났으면 다음 주기").
         LocalDate nextRunDate = nextRunDateCalculator.calculate(frequency, scheduleDay);

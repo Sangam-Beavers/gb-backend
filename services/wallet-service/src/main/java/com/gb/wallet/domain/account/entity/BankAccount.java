@@ -51,7 +51,14 @@ public class BankAccount extends BaseEntity {
     @JoinColumn(name = "bank_id", nullable = false)
     private Bank bank;
 
-    /** 평문 계좌번호. 응답 시 {@code AccountResponse}에서 마스킹된다. */
+    /**
+     * 계좌번호. 응답 시 {@code AccountResponse}에서 마스킹된다(평문은 클라이언트에 노출 안 됨).
+     *
+     * <p>TODO(D-3, wallet-account-charge-3): 현재 데모 평문 저장 — 공용 AES-256 암복호 유틸(D-3) 도입 후
+     * 암호화 컬럼으로 교체한다(신분증 {@code document_number}와 동일 계열, 함께 sequencing). 단 WACC-06
+     * 부분 유니크 생성 컬럼과 dedup 조회가 account_number 평문 동등성에 의존하므로, 암호화 시 결정적 암호
+     * 또는 별도 HMAC blind-index 컬럼이 필요하다(랜덤 IV AES면 동등성 매칭이 깨짐).
+     */
     @Column(name = "account_number", length = 100, nullable = false)
     private String accountNumber;
 
