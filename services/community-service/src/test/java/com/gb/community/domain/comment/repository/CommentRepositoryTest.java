@@ -149,6 +149,23 @@ class CommentRepositoryTest {
                         b.getPublicId(), c3.getPublicId());
     }
 
+    @Test
+    @DisplayName("softDeleteByPublicId: 활성 댓글 첫 호출=1행, 이미 삭제된 댓글 재호출=0행 — comment_count 과차감 게이트(COM1)")
+    void softDeleteByPublicId_영향행_게이트() {
+        String pid = c1.getPublicId(); // setUp의 활성 댓글
+        LocalDateTime now = LocalDateTime.of(2026, 5, 25, 12, 0);
+
+        int first = commentRepository.softDeleteByPublicId(pid, now);
+        // 같은 행을 다시 삭제 시도 — deleted_at IS NULL 조건 불일치(동시 중복 삭제의 '패자'가 받는 값).
+        int second = commentRepository.softDeleteByPublicId(pid, now);
+
+        assertThat(first).as("활성 댓글 → 1건 soft delete").isEqualTo(1);
+        assertThat(second).as("이미 삭제 → 0건. 서비스는 1일 때만 comment_count -1 하므로 과차감 방지").isZero();
+        // 실제로 deleted_at이 박혀 활성 단건 조회에서 빠지는지 확인.
+        assertThat(commentRepository.findByPublicIdAndDeletedAtIsNull(pid)).isEmpty();
+        // 한계: 진짜 동시성(두 트랜잭션 동시 진입)은 H2로 재현 불가 — 조건부 UPDATE의 affected-row 의미만 순차 검증.
+    }
+
     // ----- helpers -----
 
     private Post persistPost(String userPublicId, PostCategory category, String title, String content) {

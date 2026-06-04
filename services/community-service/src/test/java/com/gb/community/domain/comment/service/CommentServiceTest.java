@@ -3,7 +3,9 @@ package com.gb.community.domain.comment.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -217,7 +219,7 @@ class CommentServiceTest {
     // ==========================================================================
 
     @Test
-    @DisplayName("deleteComment 정상: softDelete + post.commentCount -1, MemberClient 호출 없음")
+    @DisplayName("deleteComment 정상: 원자 soft delete(affected=1) + post.commentCount -1, MemberClient 호출 없음")
     void deleteComment_정상() {
         Post post = post(PID);
         ReflectionTestUtils.setField(post, "commentCount", 5); // 시드값(원자 UPDATE 호출은 repo verify로 검증)
@@ -226,12 +228,32 @@ class CommentServiceTest {
 
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(commentRepository.findByPublicIdAndDeletedAtIsNull(C_PID)).willReturn(Optional.of(c));
+        given(commentRepository.softDeleteByPublicId(eq(C_PID), any(LocalDateTime.class))).willReturn(1);
 
         service.deleteComment(PID, C_PID, USER);
 
-        assertThat(c.isDeleted()).as("softDelete로 deleted_at이 설정됨").isTrue();
-        verify(postRepository).decrementCommentCount(post.getId()); // comment_count -1 DB 원자 UPDATE
+        verify(commentRepository).softDeleteByPublicId(eq(C_PID), any(LocalDateTime.class)); // 원자 조건부 soft delete
+        verify(postRepository).decrementCommentCount(post.getId()); // affected==1이라 comment_count -1
         verifyNoInteractions(memberClient); // 삭제는 작성자 정보 조회 불필요
+    }
+
+    @Test
+    @DisplayName("deleteComment 동시 패자(affected=0): 이미 삭제된 행이면 comment_count 감소하지 않음(COM1 회귀)")
+    void deleteComment_동시패자_affected0_감소안함() {
+        Post post = post(PID);
+        ReflectionTestUtils.setField(post, "commentCount", 5);
+        Comment c = comment(post, USER, "내용", LocalDateTime.of(2026, 5, 26, 4, 15, 30));
+        ReflectionTestUtils.setField(c, "publicId", C_PID);
+
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(commentRepository.findByPublicIdAndDeletedAtIsNull(C_PID)).willReturn(Optional.of(c));
+        // 동시 삭제: read-time deleted_at IS NULL은 통과했으나 원자 UPDATE 시점엔 다른 트랜잭션이 이미
+        // 삭제(deleted_at != NULL) → affected==0(패자). H2는 동시성 미재현 — affected=0 분기만 단언.
+        given(commentRepository.softDeleteByPublicId(eq(C_PID), any(LocalDateTime.class))).willReturn(0);
+
+        service.deleteComment(PID, C_PID, USER); // 예외 없이 멱등 종료
+
+        verify(postRepository, never()).decrementCommentCount(any()); // 과차감 방지 — 감소 호출 안 함
     }
 
     @Test
@@ -281,7 +303,8 @@ class CommentServiceTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommunityErrorCode.COMMENT_NOT_FOUND);
 
-        assertThat(c.isDeleted()).as("URL 검증에서 막혀 softDelete 호출 안 됨").isFalse();
+        verify(commentRepository, never()).softDeleteByPublicId(any(), any()); // URL 검증에서 막혀 삭제 호출 안 됨
+        verify(postRepository, never()).decrementCommentCount(any());
     }
 
     @Test
@@ -301,7 +324,8 @@ class CommentServiceTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.FORBIDDEN);
 
-        assertThat(c.isDeleted()).as("권한 검증에서 막혀 softDelete 호출 안 됨").isFalse();
+        verify(commentRepository, never()).softDeleteByPublicId(any(), any()); // 권한 검증에서 막혀 삭제 호출 안 됨
+        verify(postRepository, never()).decrementCommentCount(any());
         assertThat(post.getCommentCount()).as("commentCount도 변하지 않음").isEqualTo(3);
     }
 
