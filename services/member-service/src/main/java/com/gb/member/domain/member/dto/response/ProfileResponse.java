@@ -12,9 +12,9 @@ import lombok.Getter;
 /**
  * 마이페이지 내 프로필 응답. 조회(GET)·수정(PATCH) 응답 공통.
  *
- * <p>{@code isVerified}/{@code temperatureGrade}/{@code profileImageUrl} 3개는 각각 신분증 인증·커뮤니티
- * 매너온도·이미지 업로드 도메인 소관이라 아직 members에 저장하지 않는다. 화면 렌더를 위해 임시 기본값을
- * 내려보내고, 해당 도메인 구현 시 실제 값으로 교체한다(아래 from()의 TODO).
+ * <p>{@code isVerified}는 신분증 인증 도메인 구현으로 실제 값(members.is_verified)을 내려보낸다.
+ * {@code temperatureGrade}/{@code profileImageUrl}은 각각 커뮤니티 매너온도·이미지 업로드 도메인 소관이라
+ * 아직 members에 저장하지 않고 임시 기본값을 내려보낸다(해당 도메인 구현 시 교체).
  *
  * <p>JSON은 전역 SNAKE_CASE 설정으로 변환된다(public_id/is_verified/...). {@code Boolean isVerified}로 둔 건
  * getter가 {@code getIsVerified()}가 되어 snake_case가 {@code is_verified}로 떨어지게 하기 위함(primitive면 verified로 떨어짐).
@@ -40,7 +40,7 @@ public class ProfileResponse {
     @Schema(description = "자기소개(한 줄 소개). 미입력 시 null", nullable = true)
     private final String bio;
 
-    @Schema(description = "신분증 인증 배지 여부. (현재 기본 false — 인증 도메인 구현 시 실제 값)")
+    @Schema(description = "신분증 인증 배지 여부. user_verifications APPROVED 시 true")
     private final Boolean isVerified;
 
     @Schema(description = "커뮤니티 매너온도 등급(RED/YELLOW/GREEN/PURPLE/BLUE). (현재 기본값 — 커뮤니티 도메인 구현 시 실제 값)")
@@ -76,8 +76,9 @@ public class ProfileResponse {
                 .nationality(member.getNationality())
                 .language(member.getLanguage())
                 .bio(member.getBio())
-                // TODO: 아래 3개는 각각 신분증 인증/커뮤니티 매너온도/이미지 업로드 도메인 구현 시 실제 값으로 교체.
-                .isVerified(false)
+                // is_verified는 신분증 인증 도메인 구현 완료로 실제 값(members.is_verified)을 내려보낸다.
+                // temperature_grade/profile_image_url은 각각 커뮤니티 매너온도/이미지 업로드 도메인 구현 시 교체.
+                .isVerified(member.isVerified())
                 .temperatureGrade("GREEN")
                 .profileImageUrl(null)
                 .createdAt(toUtcZ(member.getCreatedAt()))
