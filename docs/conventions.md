@@ -429,3 +429,12 @@ private String documentNumber;
 - **로그에 평문 PII가 새지 않도록** 엔티티/Request DTO의 `toString`을 점검한다. Lombok `@ToString.Exclude`로 가린다.
 - DB에 직접 native SQL을 날려서 raw 컬럼을 봐야 할 때, 값은 ciphertext다. 평문 비교가 필요하면 애플리케이션을 통과시키거나 같은 키로 암호화해 비교해야 한다(결정성 없음에 유의 — IV 랜덤이라 매번 다름).
 - 키 교체(rotation)는 단순 yml 교체로 불가능하다. 기존 데이터가 옛 키로 복호화 가능해야 하므로, **dual-key 단계(옛 키 fallback)** 또는 **재암호화 마이그레이션 배치**가 필요하다. KMS 도입 이슈에서 같이 다룬다.
+- **`@DataJpaTest` 슬라이스에서는 crypto 빈을 `@Import`해야 한다.** `@Convert` 대상 엔티티가 같은 EntityManagerFactory에 로드되는 한 Hibernate가 컨버터 빈을 요구하기 때문이다. `@DataJpaTest`는 일반 `@Component`를 스캔하지 않으므로 누락 시 `NoSuchBeanDefinitionException`이 난다.
+  ```java
+  @DataJpaTest
+  @ActiveProfiles("test")
+  @AutoConfigureTestDatabase(replace = Replace.NONE)
+  @Import({CryptoConfig.class, AesGcmCryptoService.class, EncryptedStringConverter.class})
+  class XxxRepositoryTest { ... }
+  ```
+  적용 대상 엔티티가 없는 다른 서비스(wallet·community·document)의 `@DataJpaTest`는 영향 없다.
