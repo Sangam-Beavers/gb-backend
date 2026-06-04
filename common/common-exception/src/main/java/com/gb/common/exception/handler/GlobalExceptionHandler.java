@@ -107,18 +107,23 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * DB 무결성 제약 위반({@link DataIntegrityViolationException} — 주로 UNIQUE 중복) → 409 COMMON4091(MEM-02m).
+     * DB 무결성 제약 위반({@link DataIntegrityViolationException}) → 500 COMMON5000(서버측 결함, CMN 정합).
      *
-     * <p>서비스가 {@code existsBy} 선검사 후에도 동시 가입/생성 race로 UNIQUE 제약에 걸리는 경우, 커밋 시점에
-     * 이 예외가 던져진다. 핸들러가 없으면 catch-all로 떨어져 500이 돼 클라이언트엔 서버 오류처럼 보인다.
-     * "이미 존재" 의미의 409({@link CommonErrorCode#RESOURCE_ALREADY_EXISTS})로 통일한다. 진단용 상세(어느
-     * 제약인지)는 응답에 노출하지 않고 서버 로그로만 남긴다(내부 구조 비노출). NOT NULL/FK 등 비-중복 위반도
-     * 같은 예외 계열이지만 빈도가 낮고 로그로 식별 가능하므로 한 핸들러로 둔다.
+     * <p><b>왜 500인가:</b> 예상되는 UNIQUE 중복(동시 가입/생성 race 등)은 각 서비스가 해당 {@code saveAndFlush}
+     * 바로 옆에서 이 예외를 직접 catch해 도메인/COMMON 코드(COMMON4091 "이미 존재", ACCOUNT4004 등)로 변환한다
+     * (LikeServiceImpl·BankAccountServiceImpl·MemberServiceImpl). 그 contextual catch를 거치지 않고 여기까지
+     * 올라온 DataIntegrityViolation은 NOT NULL/FK/CHECK 위반 등 <b>예상치 못한 서버측 결함</b>일 가능성이 높아
+     * "이미 존재"(409)가 아니라 500으로 처리한다(서버 오류를 클라이언트 충돌로 오인시키지 않음). 제약명/SQLState로
+     * UNIQUE만 골라내는 판별은 DB별로 값이 달라(MySQL 23000 vs H2 23505, {@code getConstraintName} null 가능)
+     * 비이식적이라 쓰지 않고, 기대 중복은 호출부에서 contextual하게 잡는 것을 표준으로 한다. 진단 상세는 응답에
+     * 노출하지 않고 서버 로그(error)로만 남긴다(내부 구조 비노출).
      */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException e) {
-        ErrorCode errorCode = CommonErrorCode.RESOURCE_ALREADY_EXISTS;
-        log.warn("Data integrity violation: code={}, detail={}", errorCode.getCode(), e.getMessage());
+        ErrorCode errorCode = CommonErrorCode.INTERNAL_SERVER_ERROR;
+        // 기대 중복은 호출부 contextual catch에서 처리됐어야 한다 — 여기 도달 = 예상 못한 무결성 결함이라 error 로깅.
+        log.error("Unexpected data integrity violation (expected duplicates are caught contextually): detail={}",
+                e.getMessage(), e);
         return ResponseEntity
                 .status(errorCode.getHttpStatus())
                 .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));

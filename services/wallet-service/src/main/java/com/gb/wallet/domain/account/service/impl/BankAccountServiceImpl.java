@@ -158,6 +158,10 @@ public class BankAccountServiceImpl implements BankAccountService {
         //   안에서 잡는다. 분산락 lease 만료/split-brain로 선검사를 통과한 동시 등록이 빠져나가도 DB 제약이
         //   최종 안전망이며, 위반은 ACCOUNT4004로 매핑한다(부분 UNIQUE는 active 행만 — 삭제 계좌 재등록 허용.
         //   DDL은 database.md 참조. dev/H2는 생성컬럼 미생성이라 본 catch는 prod에서만 실효).
+        //   이 saveAndFlush에서 발생 가능한 무결성 위반은 위 부분 UNIQUE(uk_bank_accounts_active_acct)뿐이다 —
+        //   FK(bank)·NOT NULL·holderName은 상위에서 모두 확정·검증된다. 따라서 제약명(getConstraintName)으로
+        //   골라내지 않고 contextual하게 좁혀 잡는다(제약명 판별은 prod-only·null 가능이라 비이식적, CMN 정합).
+        //   (만약 미상의 위반이라면 rethrow돼 중앙 핸들러가 500 COMMON5000으로 처리한다.)
         try {
             BankAccount saved = bankAccountRepository.saveAndFlush(account);
             return AccountResponse.from(saved);

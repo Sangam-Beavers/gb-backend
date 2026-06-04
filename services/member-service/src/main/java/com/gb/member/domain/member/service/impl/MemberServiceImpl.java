@@ -23,6 +23,7 @@ import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -58,16 +59,25 @@ public class MemberServiceImpl implements MemberService {
         // MEM-02 — 로컬 row 선점(save) → IdP provision → sub 채우기 순서로 IdP 고아계정을 막는다.
         //  ① authProviderId 없이 먼저 saveAndFlush: IdP 호출 전에 email/nickname/publicId UNIQUE 경합을
         //     이 시점에 확정한다(위 existsBy를 통과한 동시 가입 race 백스톱). 여기서 깨지면 IdP를 아직
-        //     안 건드렸으므로 고아가 생기지 않는다(UNIQUE 위반은 GlobalExceptionHandler가 COMMON4091/409로).
+        //     안 건드렸으므로 고아가 생기지 않는다.
         //     authProviderId는 provision 후에야 정해지므로 지금은 비운다(컬럼 nullable — Member 상단 TODO 참조).
-        Member savedMember = memberRepository.saveAndFlush(Member.builder()
-                .publicId(publicId)
-                .email(request.getEmail())
-                .name(request.getName())
-                .nickname(request.getNickname())
-                .nationality(request.getNationality())
-                .language(request.getLanguage())
-                .build());
+        Member savedMember;
+        try {
+            savedMember = memberRepository.saveAndFlush(Member.builder()
+                    .publicId(publicId)
+                    .email(request.getEmail())
+                    .name(request.getName())
+                    .nickname(request.getNickname())
+                    .nationality(request.getNationality())
+                    .language(request.getLanguage())
+                    .build());
+        } catch (DataIntegrityViolationException race) {
+            // 위 existsBy를 통과한 동시 가입 race가 email/nickname/publicId UNIQUE에 걸린 경우. 어느 제약인지
+            // 구분은 비이식적(제약명 판별 회피, getConstraintName null 가능)이라 generic "이미 존재"(COMMON4091)로
+            // 통일한다(member-5 — 도메인 코드 대신 COMMON4091은 race에서의 의도된 트레이드오프). contextual로 여기서
+            // 잡으므로 더는 중앙 핸들러에 의존하지 않는다(중앙은 이제 DataIntegrityViolation을 500으로 처리).
+            throw new BusinessException(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
+        }
 
         // ② 방식 B: 비밀번호는 우리 DB에 저장하지 않고 IdP가 보유·검증한다. IdP에 사용자를 등록(비번 +
         //    publicId attribute 포함)하고 IdP가 부여한 식별자(sub)를 받는다. provision 실패 시 예외가 올라와
@@ -117,7 +127,15 @@ public class MemberServiceImpl implements MemberService {
                 .authProviderId(authProviderId)
                 .build();
 
-        Member savedMember = memberRepository.save(member);
+        // saveAndFlush로 INSERT를 이 메서드 안에서 강제해, 위 existsBy를 통과한 동시 호출 race의 UNIQUE 위반
+        // (publicId/email/nickname)을 contextual하게 잡는다(중앙 핸들러는 이제 DataIntegrityViolation을 500으로
+        // 처리하므로 여기서 COMMON4091로 변환해야 race가 409로 유지된다 — 위 existsByPublicId 분기와 동일 코드).
+        Member savedMember;
+        try {
+            savedMember = memberRepository.saveAndFlush(member);
+        } catch (DataIntegrityViolationException race) {
+            throw new BusinessException(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
+        }
 
         return SocialProfileResponse.from(savedMember);
     }

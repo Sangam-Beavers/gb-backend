@@ -37,6 +37,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -162,6 +163,31 @@ class MemberServiceImplTest {
         verify(idpUserClient, never()).provisionUser(any(), any(), any(), any());
     }
 
+    @Test
+    @DisplayName("WU-F8: existsBy 통과 후 동시 가입 race(saveAndFlush UNIQUE 위반) → COMMON4091, IdP provision 미호출(고아 방지)")
+    void signup_동시가입race_COMMON4091() {
+        SignupRequest request = new SignupRequest();
+        ReflectionTestUtils.setField(request, "email", "race@example.com");
+        ReflectionTestUtils.setField(request, "password", "P@ssw0rd!");
+        ReflectionTestUtils.setField(request, "name", "홍길동");
+        ReflectionTestUtils.setField(request, "nickname", "gildong");
+        ReflectionTestUtils.setField(request, "nationality", "VN");
+        ReflectionTestUtils.setField(request, "language", "vi");
+        when(memberRepository.existsByEmail("race@example.com")).thenReturn(false);
+        when(memberRepository.existsByNickname("gildong")).thenReturn(false);
+        // 선검사는 통과했으나 커밋 전 saveAndFlush에서 동시 가입 race가 UNIQUE를 위반.
+        when(memberRepository.saveAndFlush(any(Member.class)))
+                .thenThrow(new DataIntegrityViolationException("Duplicate entry for key 'uk_members_email'"));
+
+        assertThatThrownBy(() -> memberService.signup(request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS); // 중앙 핸들러(500) 대신 contextual 409
+
+        // race를 saveAndFlush(IdP 호출 전)에서 잡으므로 IdP 사용자(고아)는 만들어지지 않는다.
+        verify(idpUserClient, never()).provisionUser(any(), any(), any(), any());
+    }
+
     // ──────────────────── 소셜 가입 추가정보 보완 ────────────────────
 
     private SocialProfileRequest socialProfileRequest(String nickname, String nationality, String language) {
@@ -180,7 +206,7 @@ class MemberServiceImplTest {
         when(memberRepository.existsByPublicId("pub-uuid-1")).thenReturn(false);
         when(memberRepository.existsByEmail("google@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
-        when(memberRepository.save(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(memberRepository.saveAndFlush(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // when
         SocialProfileResponse response = memberService.completeSocialProfile(
@@ -193,7 +219,7 @@ class MemberServiceImplTest {
 
         // 저장된 회원: 토큰 claim은 토큰값, 나머지는 입력값으로 채워져야 한다.
         ArgumentCaptor<Member> saved = ArgumentCaptor.forClass(Member.class);
-        verify(memberRepository).save(saved.capture());
+        verify(memberRepository).saveAndFlush(saved.capture());
         Member m = saved.getValue();
         assertThat(m.getPublicId()).isEqualTo("pub-uuid-1");
         assertThat(m.getEmail()).isEqualTo("google@example.com");
@@ -218,7 +244,25 @@ class MemberServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
 
-        verify(memberRepository, never()).save(any());
+        verify(memberRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("WU-F8: 소셜 보완 existsBy 통과 후 동시 호출 race(saveAndFlush UNIQUE 위반) → COMMON4091(중앙 핸들러 500 대신 contextual 409)")
+    void completeSocialProfile_동시race_COMMON4091() {
+        SocialProfileRequest request = socialProfileRequest("gildong", "VN", "vi");
+        when(memberRepository.existsByPublicId("pub-uuid-1")).thenReturn(false);
+        when(memberRepository.existsByEmail("google@example.com")).thenReturn(false);
+        when(memberRepository.existsByNickname("gildong")).thenReturn(false);
+        // 선검사는 통과했으나 saveAndFlush에서 동시 호출 race가 UNIQUE를 위반.
+        when(memberRepository.saveAndFlush(any(Member.class)))
+                .thenThrow(new DataIntegrityViolationException("Duplicate entry for key 'uk_members_public_id'"));
+
+        assertThatThrownBy(() -> memberService.completeSocialProfile(
+                "pub-uuid-1", "google@example.com", "홍길동", "idp-sub-1", request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
     }
 
     @Test
@@ -234,7 +278,7 @@ class MemberServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(MemberErrorCode.EMAIL_ALREADY_EXISTS);
 
-        verify(memberRepository, never()).save(any());
+        verify(memberRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -251,7 +295,7 @@ class MemberServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
 
-        verify(memberRepository, never()).save(any());
+        verify(memberRepository, never()).saveAndFlush(any());
     }
 
     // ──────────────────── 이메일/닉네임 중복 확인 ────────────────────

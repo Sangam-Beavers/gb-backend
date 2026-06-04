@@ -30,6 +30,14 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * <p>4개 서비스가 {@code scanBasePackages = "com.gb"}로 스캔하므로 별도 등록 없이 빈으로 잡힌다
  * ({@link RestAuthenticationEntryPoint}와 동일). 현재는 트리거 경로가 없어 선제적 방어이며,
  * 메서드 보안({@code @PreAuthorize}) 등 인가 도입 시 활성화된다.
+ *
+ * <p><b>커버 범위(dispatch 한정):</b> {@code @RestControllerAdvice}라 이 핸들러는 DispatcherServlet 처리
+ * 단계에서 던져진 {@code AccessDeniedException}(컨트롤러·향후 {@code @PreAuthorize} 메서드 보안)만 잡는다.
+ * 보안 <b>필터 체인</b>(AuthorizationFilter)에서 던져지는 인가 실패는 advice가 아니라
+ * {@code SecurityConfig.exceptionHandling().accessDeniedHandler(...)}로 잡아야 한다. 다만 현재 SecurityConfig는
+ * {@code permitAll + authenticated()}만 써 {@code .access()/.hasRole()}·메서드 보안이 없으므로 필터 체인이
+ * 인가 실패({@code AccessDeniedException})를 던지는 경로 자체가 없다 — 따라서 dispatch 단 핸들러로 충분하며,
+ * 필터 체인 인가를 도입하는 시점에 {@code accessDeniedHandler}를 함께 추가하면 된다.
  */
 @Slf4j
 @Order(Ordered.HIGHEST_PRECEDENCE)
