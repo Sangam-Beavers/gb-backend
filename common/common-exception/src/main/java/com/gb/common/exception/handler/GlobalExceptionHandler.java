@@ -8,6 +8,7 @@ import com.gb.common.response.ErrorResponse;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
@@ -100,6 +101,24 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleNotReadableOrTypeMismatch(Exception e) {
         ErrorCode errorCode = CommonErrorCode.INVALID_REQUEST;
         log.warn("Malformed request body/param: code={}, detail={}", errorCode.getCode(), e.getMessage());
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));
+    }
+
+    /**
+     * DB 무결성 제약 위반({@link DataIntegrityViolationException} — 주로 UNIQUE 중복) → 409 COMMON4091(MEM-02m).
+     *
+     * <p>서비스가 {@code existsBy} 선검사 후에도 동시 가입/생성 race로 UNIQUE 제약에 걸리는 경우, 커밋 시점에
+     * 이 예외가 던져진다. 핸들러가 없으면 catch-all로 떨어져 500이 돼 클라이언트엔 서버 오류처럼 보인다.
+     * "이미 존재" 의미의 409({@link CommonErrorCode#RESOURCE_ALREADY_EXISTS})로 통일한다. 진단용 상세(어느
+     * 제약인지)는 응답에 노출하지 않고 서버 로그로만 남긴다(내부 구조 비노출). NOT NULL/FK 등 비-중복 위반도
+     * 같은 예외 계열이지만 빈도가 낮고 로그로 식별 가능하므로 한 핸들러로 둔다.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException e) {
+        ErrorCode errorCode = CommonErrorCode.RESOURCE_ALREADY_EXISTS;
+        log.warn("Data integrity violation: code={}, detail={}", errorCode.getCode(), e.getMessage());
         return ResponseEntity
                 .status(errorCode.getHttpStatus())
                 .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));
