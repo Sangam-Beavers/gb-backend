@@ -5,6 +5,7 @@ import com.gb.wallet.domain.account.dto.request.VerifyAccountRequest;
 import com.gb.wallet.domain.account.dto.response.AccountListResponse;
 import com.gb.wallet.domain.account.dto.response.AccountResponse;
 import com.gb.wallet.domain.account.dto.response.VerifyAccountResponse;
+import com.gb.wallet.domain.account.entity.Bank;
 
 public interface BankAccountService {
 
@@ -34,11 +35,21 @@ public interface BankAccountService {
      * 계좌 등록의 실제 처리(쓰기 트랜잭션). {@code bank_accounts}에 INSERT하고 {@code mock_account_token}을
      * 함께 저장한다(추후 충전 시 사용). 사용자의 첫 활성 계좌면 {@code isPrimary=true}로 강제 등록한다.
      *
+     * <p><b>F1</b> — 은행 코드 검증({@code bank})과 예금주명 조회({@code holderName}, 동기 HTTP inquiry)는
+     * {@link #registerAccount}가 락/트랜잭션 <b>밖</b>에서 미리 확정해 파라미터로 넘긴다. 락 lease(5s,
+     * watchdog 없음)보다 bank read-timeout(10s)이 길어, inquiry를 critical section 안에서 호출하면 lease
+     * 만료 창에 동시 등록이 끼어 다중 주계좌가 생길 수 있기 때문이다(ACC1). 이 메서드의 critical section엔
+     * DB read/write만 남긴다.
+     *
      * <p><b>self-proxy 전용</b> — {@link #registerAccount}가 락을 잡은 채 프록시를 통해 호출해야
      * {@code @Transactional}이 적용되고, 락이 트랜잭션 커밋 시점까지 유지된다(같은 빈 내부 직접 호출은
      * AOP를 우회). 다른 컴포넌트에서 직접 호출하지 말 것.
+     *
+     * @param bank       {@code registerAccount}가 {@code findByCode}로 검증한 은행(락 밖에서 확정).
+     * @param holderName {@code registerAccount}가 은행 inquiry로 받은 권위 예금주명(클라 입력 아님 — WACC-05).
      */
-    AccountResponse registerAccountLocked(String userPublicId, RegisterAccountRequest request);
+    AccountResponse registerAccountLocked(String userPublicId, RegisterAccountRequest request,
+                                          Bank bank, String holderName);
 
     /**
      * 지정한 계좌를 주 계좌로 변경한다(PATCH /api/v1/accounts/{id}/primary). 기존 주 계좌는 자동 해제해

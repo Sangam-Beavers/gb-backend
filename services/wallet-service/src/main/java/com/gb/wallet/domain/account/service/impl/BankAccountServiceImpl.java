@@ -93,13 +93,27 @@ public class BankAccountServiceImpl implements BankAccountService {
         // 등록을 user 단위로 직렬화(분산락) — 동시 등록 race에서 중복 계좌·다중 주계좌가 생기는 것을 차단한다.
         // 락은 트랜잭션 "밖"(NOT_SUPPORTED)에서 잡고, 실제 INSERT는 self-proxy(registerAccountLocked,
         // @Transactional)로 호출해 락이 커밋 시점까지 유지되도록 한다(TransferServiceImpl.execute와 동일 구조).
+        //
+        // F1 — 은행 코드 검증(findByCode)과 예금주명 조회(inquiry, 동기 HTTP)는 락/트랜잭션 "밖"에서 먼저 한다.
+        //   락 lease=5s(watchdog 없음) < bank read-timeout=10s 이므로, inquiry를 락 안에서 호출하면 은행 지연 시
+        //   lease 만료 창에 같은 user의 2번째 등록이 끼어 다중 주계좌가 생길 수 있다(ACC1 회귀). critical section엔
+        //   DB write만 남긴다. 부수로 잘못된 bank_code는 inquiry(은행 호출) 전에 COMMON4001로 끊긴다.
+        Bank bank = bankRepository.findByCode(request.getBankCode())
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.INVALID_REQUEST));
+
+        // WACC-05 — 예금주명은 클라이언트 입력(request.getHolderName())이 아니라 은행 권위 값(inquiry)을 쓴다.
+        //   클라가 verify는 진짜 이름으로 통과시키고 register엔 다른 이름을 보내 송금 확인증(receiver_name)을
+        //   위조하는 것을 막는다. (request.holderName 필드는 호환 위해 남기되 신뢰하지 않는다 — vestigial.)
+        String holderName = bankClient.inquiry(request.getBankCode(), request.getAccountNumber())
+                .accountHolderName();
+
         RLock lock = distributedLockHelper.tryLock(REGISTER_LOCK_KEY_PREFIX + userPublicId);
         if (lock == null) {
             // 락 획득 실패 → 503(fail-closed): "잠깐 거부"가 "조용히 중복 생성"보다 안전.
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
         try {
-            return self.registerAccountLocked(userPublicId, request);
+            return self.registerAccountLocked(userPublicId, request, bank, holderName);
         } finally {
             // 락 보유자가 본인인 경우에만 해제(lease 만료로 다른 스레드가 가진 경우 안전).
             if (lock.isHeldByCurrentThread()) {
@@ -110,7 +124,8 @@ public class BankAccountServiceImpl implements BankAccountService {
 
     @Override
     @Transactional
-    public AccountResponse registerAccountLocked(String userPublicId, RegisterAccountRequest request) {
+    public AccountResponse registerAccountLocked(String userPublicId, RegisterAccountRequest request,
+                                                 Bank bank, String holderName) {
         // 1차 방어: 활성 중복 계좌 선검사(흔한 경로를 깔끔히 ACCOUNT4004로). 동시성 최종 안전망은 아래 (user,
         //   bank, account_number) 부분 UNIQUE(prod, WACC-06)와 분산락이 함께 담당한다.
         if (bankAccountRepository.existsByUserPublicIdAndBank_CodeAndAccountNumberAndIsActiveTrue(
@@ -118,14 +133,8 @@ public class BankAccountServiceImpl implements BankAccountService {
             throw new BusinessException(AccountErrorCode.ACCOUNT_ALREADY_REGISTERED);
         }
 
-        Bank bank = bankRepository.findByCode(request.getBankCode())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.INVALID_REQUEST));
-
-        // WACC-05 — 예금주명은 클라이언트 입력(request.getHolderName())이 아니라 은행 권위 값(inquiry)을 쓴다.
-        //   클라가 verify는 진짜 이름으로 통과시키고 register엔 다른 이름을 보내 송금 확인증(receiver_name)을
-        //   위조하는 것을 막는다. (request.holderName 필드는 호환 위해 남기되 신뢰하지 않는다 — vestigial.)
-        String holderName = bankClient.inquiry(request.getBankCode(), request.getAccountNumber())
-                .accountHolderName();
+        // bank(은행 코드 검증)·holderName(은행 권위 예금주명)은 호출자(registerAccount)가 락/트랜잭션 밖에서
+        //   미리 확정해 넘긴다(F1 — ACC1 회귀 차단). 이 메서드의 critical section엔 DB read/write만 둔다.
 
         // 사용자의 첫 활성 계좌면 자동으로 주 계좌. 그 외에는 항상 false로 둔다 — 등록 흐름에서 다중
         // 주 계좌(같은 사용자에 활성 is_primary=true 둘 이상)가 발생하면 충전 시 어느 계좌가 기본인지
