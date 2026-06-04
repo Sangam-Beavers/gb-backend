@@ -1,9 +1,11 @@
 package com.gb.wallet.global.redis;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
-import org.redisson.api.RAtomicLong;
+import org.redisson.api.RScript;
 import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.StringCodec;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
@@ -60,11 +62,9 @@ public class TransferPinAttemptStore {
      */
     public boolean recordFailure(String userPublicId) {
         // (1) 24h 누적 카운터 — 단기 잠금이 카운트를 리셋해도 이 카운터는 24h 동안 유지된다.
-        RAtomicLong dayFails = redissonClient.getAtomicLong(DAY_FAIL_KEY_PREFIX + userPublicId);
-        long dayCount = dayFails.incrementAndGet();
-        if (dayCount == 1L) {
-            dayFails.expire(DAY_WINDOW);
-        }
+        //     INCR + 첫 증가(=1) PEXPIRE를 atomic Lua로 묶어 — incr와 expire 사이에 JVM/연결이 끊겨도
+        //     TTL 없는 영구 키(=24h 캡이 영영 안 빠지는 영구 잠금)가 남지 않게 한다(WSCH-06 회귀 차단).
+        long dayCount = incrementAndGetWithTtl(DAY_FAIL_KEY_PREFIX + userPublicId, DAY_WINDOW);
         // (2) 누적 한도 도달 → 장기 잠금으로 에스컬레이션(단기 잠금보다 우선). 일일 시도 총량을 캡한다.
         if (dayCount >= DAY_MAX_ATTEMPTS) {
             redissonClient.getBucket(LOCK_KEY_PREFIX + userPublicId)
@@ -73,23 +73,49 @@ public class TransferPinAttemptStore {
             return true;
         }
 
-        // (3) 단기(10분) 윈도 카운터 — 기존 동작 유지.
-        RAtomicLong fails = redissonClient.getAtomicLong(FAIL_KEY_PREFIX + userPublicId);
-        long count = fails.incrementAndGet();
-        if (count == 1L) {
-            // 첫 실패에만 윈도우 TTL을 건다(연속 실패만 누적, 오래된 실패는 자동 만료).
-            fails.expire(FAIL_WINDOW);
-        }
+        // (3) 단기(10분) 윈도 카운터 — 24h 카운터와 동일하게 atomic Lua(INCR + 첫 증가 PEXPIRE)로 센다.
+        long count = incrementAndGetWithTtl(FAIL_KEY_PREFIX + userPublicId, FAIL_WINDOW);
         if (count >= MAX_ATTEMPTS) {
             redissonClient.getBucket(LOCK_KEY_PREFIX + userPublicId)
                     .set("locked", LOCK_MINUTES, TimeUnit.MINUTES);
-            fails.delete();
+            redissonClient.getAtomicLong(FAIL_KEY_PREFIX + userPublicId).delete();
             return true;
         }
         return false;
     }
 
-    /** 검증 성공 시 실패 카운트(단기·24h 누적)/잠금을 모두 초기화한다. */
+    /**
+     * {@code key} 고정 윈도 카운터를 1 증가시키고, 첫 증가(=1)일 때만 {@code window} TTL을 건다 — 두 연산을
+     * 한 Lua로 원자 실행한다({@code RateLimitHelper}와 동일 패턴). incr와 expire를 분리하면 그 사이 프로세스가
+     * 죽을 때 TTL 없는 영구 키가 남아 카운터가 영영 만료되지 않는다(영구 캡/잠금) — 이를 막는다.
+     *
+     * @return 증가 후 현재 카운트
+     */
+    private long incrementAndGetWithTtl(String key, Duration window) {
+        return redissonClient.getScript(StringCodec.INSTANCE).<Long>eval(
+                RScript.Mode.READ_WRITE,
+                INCR_WITH_TTL_LUA,
+                RScript.ReturnType.INTEGER,
+                List.<Object>of(key),
+                String.valueOf(window.toMillis()));
+    }
+
+    /** 고정 윈도 카운터의 INCR + 첫 증가(=1) 시 PEXPIRE를 원자 실행하는 Lua(RateLimitHelper와 동일). KEYS[1]=키, ARGV[1]=윈도(ms). */
+    private static final String INCR_WITH_TTL_LUA =
+            "local count = redis.call('incr', KEYS[1]); "
+            + "if count == 1 then redis.call('pexpire', KEYS[1], ARGV[1]); end; "
+            + "return count;";
+
+    /**
+     * 검증 성공 시 실패 카운트(단기·24h 누적)/잠금을 모두 초기화한다.
+     *
+     * <p><b>24h 누적까지 함께 리셋하는 이유(설계 의도, WSCH-06):</b> PIN 검증 성공은 정당한 소유자임을
+     * 증명하므로 일일 누적 실패 캡(24h)도 비운다. 24h 캡(15회)은 "연속 실패(brute-force)"를 조이기 위한
+     * 장치이고, 성공이 끼어들면 brute-force가 아니다 — 공격자는 PIN을 모르면 success를 만들 수 없어 이 reset을
+     * 유발할 수 없으므로 캡 우회가 아니다. 오히려 PIN을 자주 쓰는 정상 사용자가 가끔 오타를 내도 성공 때마다
+     * 누적이 비워져 24h 장기 잠금에 잘못 걸리지 않는다(가용성). (round6 감사가 "일일 하드캡"으로 바꾸자고 제안한
+     * 부분이나, 위 분석상 현행이 더 합리적이라 유지한다.)
+     */
     public void reset(String userPublicId) {
         redissonClient.getAtomicLong(FAIL_KEY_PREFIX + userPublicId).delete();
         redissonClient.getAtomicLong(DAY_FAIL_KEY_PREFIX + userPublicId).delete();
