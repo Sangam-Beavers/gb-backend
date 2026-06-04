@@ -5,6 +5,9 @@ dependencies {
 
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-security'
+    // 검표원(방식 B): issuer-uri 기반 JWT(RS256/JWKS) 검증. Jwt/JwtAuthenticationToken/JwtDecoder 및
+    // oauth2ResourceServer().jwt() DSL을 제공한다. starter-security만으론 미포함(wallet/member/community와 동일).
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springframework.boot:spring-boot-starter-validation'

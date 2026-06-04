@@ -14,7 +14,7 @@
 | 캐시/락 | **Redis** | 분산 락, 멱등성, 세션, 카운터, 캐시 |
 | 인증 | **JWT** | Authentik(개발) / Cognito(운영·스테이징) |
 | 컨테이너 오케스트레이션 | **Kubernetes** | 온프렘(Cilium) / AWS EKS |
-| AI (계정 B) | **AWS Bedrock (Claude)** + **Bedrock Knowledge Bases** (법령 RAG, 백엔드 = S3 Vectors) | 분석: OCR/분석/번역 · 후속 챗봇: Tool Use + MCP. 법령 검색은 분석·챗봇 공통으로 KB `retrieve` |
+| AI (계정 B) | **AWS Bedrock (Claude)** + **Bedrock Knowledge Bases** (법령 RAG, 백엔드 = S3 Vectors) | 분석: OCR/분석/번역 · 후속 챗봇: Tool Use 루프 + 도구 4종 (법령=KB / 환율·커뮤니티=자체 MCP1·2 / 웹검색=외부 Tavily Remote MCP 직결). 법령 검색은 분석·챗봇 공통으로 KB `retrieve` |
 | 챗봇 대화 저장 (계정 B) | **DynamoDB** (TTL 90일) + **Redis** (TTL 30분 캐시) | 후속 질문 챗봇 전용. 분석 결과(MySQL)와 별개 워크로드 |
 | 메시징 | **SQS** | 계정 B → 계정 A 분석 결과 비동기 전달 |
 

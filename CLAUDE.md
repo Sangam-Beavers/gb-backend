@@ -23,7 +23,10 @@
 - **AI 후속 질문 챗봇**(분석 결과를 본 사용자의 후속 질문)은 계정 B 챗봇 Lambda에서 **동기 + SSE 스트리밍**으로
   처리되고, 본체는 `POST /api/v1/documents/{id}/chat` 1개를 **추가**해 권한검증 + 분석요약 추출 + Lambda 호출 + SSE 중계만 한다.
   대화기록은 계정 B DynamoDB(`chat_sessions`) + Redis 캐시에 저장(분석 결과는 여전히 MySQL — 별개 워크로드).
-  법령=KB 직접, 환율·커뮤니티=MCP. **기존 와이어프레임/분석 API 무변경, "추가만".** 상세: `docs/document-analysis/ai-chatbot-mcp.md`.
+  도구 4종: **법령 = KB 직접** (우리 도메인) · **환율·커뮤니티 = 자체 MCP 어댑터(MCP1/2)** (같은 회사 다른 팀 도메인 분리) ·
+  **웹 검색 = 외부 Tavily Remote MCP 직결(MCP3)** — 챗봇 Lambda 가 Python `mcp` SDK 의 Streamable HTTP 클라이언트로
+  `https://mcp.tavily.com/mcp/` 에 직접 붙는다(자체 어댑터 서버 없음, 외부 회사 시스템을 표준 인터페이스로 통합).
+  **기존 와이어프레임/분석 API 무변경, "추가만".** 상세: `docs/document-analysis/ai-chatbot-mcp.md`.
 - **충전·현금화**는 외부 Mock 은행 서버(Beaver/Quokka Bank)를 호출해 시뮬레이션한다(구현 수준 2).
   `wallet-service`는 `BankClient` 인터페이스로 호출하고, 실서비스 전환 시 구현체/URL만 교체한다.
   상세: `docs/remittance/api-spec.md` §13.
