@@ -249,6 +249,31 @@ com.gb.{서비스}/
 - 로컬에서 코드 실행 시 DB/Redis 연결이 필요하다. 미구성 상태에서는
   `compileJava`로 컴파일까지만 검증하고, 실제 기동·호출 검증은 DB 연결 후 수행한다.
 
+### 8-1. PII 컬럼 암호화 (AES-256-GCM)
+
+- 신분증 번호 등 **고민감 PII는 평문 저장 금지.** JPA `AttributeConverter`(`EncryptedStringConverter`)로
+  영속/조회 시점에 자동 암복호한다. 서비스/리포지터리 코드는 평문 문자열을 다루듯 작성하면 된다.
+  ```java
+  @Convert(converter = EncryptedStringConverter.class)
+  @Column(name = "document_number", length = 255, nullable = false)
+  private String documentNumber;
+  ```
+- 위치: `member-service/global/security/crypto/` (현 사용처가 1곳뿐이라 서비스 내부에 둠. 타 도메인
+  확산 시 `common-crypto` 모듈로 승격 — §2 원칙).
+- 알고리즘은 **AES-256-GCM**(CBC 아님). IV 12B 랜덤·tag 128bit. 컬럼 포맷은
+  `Base64( IV || ciphertext || tag )`. 같은 평문도 매번 다른 ciphertext가 나오므로
+  컬럼 `equals`/`LIKE` 검색이 불가능하다. 검색 요구가 생기면 별도 HMAC hash 컬럼을 추가한다.
+- **컬럼 길이는 반드시 확장.** 평문 100자 기준 `VARCHAR(255)`. 기존 `VARCHAR(100)` 그대로 두면 ciphertext가
+  잘려 복호화 깨진다. 산정표 = `docs/conventions.md` §15-3.
+- **키는 평문 yml 금지.** 환경변수 `GB_CRYPTO_KEY`(Base64 32B)로만 주입. 생성 `openssl rand -base64 32`.
+  키 누락/길이오류는 `AesGcmCryptoService` 빈 생성 시 `IllegalStateException`으로 fail-fast.
+  테스트 프로파일(`application-test.yml`)은 고정 더미 키(Base64 32B all-zero) 사용 — 비밀 아님.
+- **운영 전환 시 AWS KMS Envelope Encryption으로 교체 예정**(별도 이슈). CMK→Data Key→컬럼 암호화 + 키 로테이션.
+- **새 PII 컬럼 추가 시 체크리스트:** ① 엔티티에 `@Convert` ② 컬럼 길이 §15-3 표 기준 확장 ③ 응답 DTO
+  미노출 또는 마스킹 ④ 로그/`toString`에 새지 않는지 확인(`@ToString.Exclude`) ⑤ `conventions.md` §15-5
+  적용 컬럼 표에 등록.
+- 상세: [`docs/conventions.md` §15](./docs/conventions.md#15-민감정보-컬럼-암호화-pii-★-claude-code-주의)
+
 ---
 
 ## 9. 인증 (OAuth2 Resource Server — 방식 B)
@@ -340,7 +365,7 @@ com.gb.{서비스}/
 > - docs/README.md — docs 전체 인덱스 (기능별 문서 진입점)
 > - docs/tech-stack.md — 기술 스택 + 데이터 저장 정책 (법령 RAG = Bedrock Knowledge Bases, 백엔드 S3 Vectors / 챗봇 대화기록 = DynamoDB 등)
 > - docs/architecture.md — 시스템/인프라 아키텍처, 계정 A/B 분리, 계정 간 연동
-> - docs/conventions.md — API/코딩 공통 규칙, 에러 코드 표, 인증 임시처리(§14)
+> - docs/conventions.md — API/코딩 공통 규칙, 에러 코드 표, 인증(§14), **PII 컬럼 암호화(§15)**
 > - docs/database.md — 테이블 스키마 + Redis 키 설계 (bank_accounts.mock_account_token 포함)
 > - docs/{auth,remittance,document-analysis,community}/ — 기능별 requirements·flow·api-spec
     >   (remittance/api-spec.md §13 = Mock 은행 연동, document-analysis/ai-pipeline.md = AI 분석 파이프라인,

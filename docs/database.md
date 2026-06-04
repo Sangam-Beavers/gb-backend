@@ -27,6 +27,12 @@
 - `transaction_audit_logs`는 **append-only** (INSERT만, UPDATE/DELETE 금지)
 - 외부 노출 ID는 `public_id`(UUID)
 
+### (3) 민감정보 컬럼 암호화 (PII)
+
+- 신분증 번호 등 **고민감 PII는 평문 저장 금지.** 애플리케이션 레이어에서 AES-256-GCM으로 자동 암복호한 뒤 DB에는 ciphertext(Base64)만 적재한다 — JPA `AttributeConverter`(`EncryptedStringConverter`)가 영속/조회 시점에 투명 변환.
+- 컬럼 길이는 **암호화 오버헤드 흡수치**로 잡는다(평문 100자 기준 `VARCHAR(255)`). 산정표·키 관리·적용 컬럼 목록은 [`conventions.md` §15](./conventions.md#15-민감정보-컬럼-암호화-pii-★-claude-code-주의) 참고.
+- 운영 키는 환경변수 `GB_CRYPTO_KEY`(Base64 32B)로 주입. 운영 전환 시 AWS KMS Envelope Encryption으로 교체 예정(별도 이슈).
+
 ---
 
 ## 1. 테이블 목록 (도메인별)
