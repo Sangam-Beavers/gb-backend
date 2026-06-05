@@ -36,8 +36,34 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
      * 마이페이지 거래내역({@code GET /api/v1/wallets/me/transactions})에서 호출하며,
      * 정렬(최근순)은 {@link Pageable}로 받는다. {@code wallet.userPublicId}로 본인 거래만 필터링한다
      * (MSA 경계 — public_id 참조).
+     *
+     * <p><b>주의:</b> 본 메서드는 본인이 <b>송신자</b>인 거래만 반환한다(INTERNAL_TRANSFER 수신자
+     * 거래는 별도 row가 없고 {@code receiverWallet} FK로만 연결되므로 누락). 마이페이지 거래내역은
+     * 송수신을 모두 포함해야 하므로 {@link #findByMineSendingOrReceiving}를 사용한다.
      */
     Page<Transaction> findByWallet_UserPublicId(String userPublicId, Pageable pageable);
+
+    /**
+     * 회원이 <b>송신자 또는 수신자</b>인 모든 유형 거래를 페이지로 조회한다.
+     * 마이페이지 거래내역({@code GET /api/v1/wallets/me/transactions})에서 호출한다.
+     *
+     * <p>INTERNAL_TRANSFER의 transactions 행은 송신자 1건만 INSERT되고 수신자는 {@code receiverWallet}
+     * FK로만 연결된다. 본인이 수신자인 거래도 함께 보여주기 위해 송수신 양쪽을 OR로 조회한다.
+     * 송수신 시점 본인이 어느 쪽이었는지(direction)는 Service에서 결정해 응답에 채운다.
+     *
+     * <p><b>LEFT JOIN 명시 이유:</b> {@code t.receiverWallet.userPublicId} 같은 path 표현은 JPQL에서
+     * 묵시적 INNER JOIN이 되어 {@code receiverWallet=null}인 거래(CHARGE/REMITTANCE/EXCHANGE)는
+     * OR 좌측이 참이어도 join 단계에서 row가 제거된다. alias로 명시적 LEFT JOIN을 잡아야 OR 양쪽 조건이
+     * 의도대로 적용된다.
+     */
+    @Query("""
+            SELECT t FROM Transaction t
+            LEFT JOIN t.receiverWallet rw
+            WHERE t.wallet.userPublicId = :userPublicId
+               OR rw.userPublicId = :userPublicId
+            """)
+    Page<Transaction> findByMineSendingOrReceiving(
+            @Param("userPublicId") String userPublicId, Pageable pageable);
 
     /**
      * {@code idempotency_key}가 지정된 prefix로 시작하는 거래를 페이지로 조회한다.

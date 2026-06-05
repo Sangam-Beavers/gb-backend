@@ -103,7 +103,7 @@
 ## 3. 주요 통화 환율 / 거래내역
 
 - 환율 조회: `GET /api/v1/wallets/exchange-rates` → 통화별 환율 목록(+표시용 등락률 `change_rate`는 number 허용). 환율 값 자체는 string.
-- 거래내역: `GET /api/v1/wallets/me/transactions?page=&size=` · Auth ✅ → 본인 전 유형(CHARGE/INTERNAL_TRANSFER/REMITTANCE/EXCHANGE) 거래를 `created_at` DESC 페이지 조회. 거래가 없으면 200 + 빈 배열.
+- 거래내역: `GET /api/v1/wallets/me/transactions?page=&size=` · Auth ✅ → 본인 전 유형(CHARGE/INTERNAL_TRANSFER/REMITTANCE/EXCHANGE) 거래를 `created_at` DESC 페이지 조회. **본인이 송신자 또는 수신자인 거래를 모두 포함**한다 — INTERNAL_TRANSFER는 transactions에 송신자 row 1건만 INSERT되므로(수신자는 `receiver_wallet` FK로만 연결) 송수신 OR 조회로 양쪽을 모은다. 거래가 없으면 200 + 빈 배열.
 
 **Response 200** — `data` (페이지 메타 + `transactions` 배열)
 | 필드 | 타입 | nullable | 설명 |
@@ -119,6 +119,7 @@
 | --- | --- | --- | --- |
 | `public_id` | string | N | 거래 식별자(UUID) |
 | `type` | string | N | CHARGE / INTERNAL_TRANSFER / REMITTANCE / EXCHANGE |
+| `direction` | string | N | 본인 기준 방향. `OUT` = 본인이 송신자(출금), `IN` = 본인이 수신자(입금). CHARGE/REMITTANCE/EXCHANGE는 항상 `OUT`, INTERNAL_TRANSFER만 `OUT`/`IN` 분기 |
 | `status` | string | N | PENDING / PROCESSING / COMPLETED / FAILED / CANCELLED |
 | `amount` | string | N | 거래(출금) 금액 (string, 소수 4자리) |
 | `currency_code` | string | N | 출금 통화 코드 |
