@@ -33,6 +33,11 @@ public class TransactionHistoryItemResponse {
             allowableValues = {"CHARGE", "INTERNAL_TRANSFER", "REMITTANCE", "EXCHANGE"})
     private final String type;
 
+    @Schema(description = "본인 기준 거래 방향. OUT = 본인이 송신자(출금), IN = 본인이 수신자(입금). "
+            + "CHARGE/REMITTANCE/EXCHANGE는 본인 출금이라 항상 OUT, INTERNAL_TRANSFER만 OUT/IN 분기.",
+            example = "OUT", allowableValues = {"OUT", "IN"})
+    private final String direction;
+
     @Schema(description = "거래 상태", example = "COMPLETED",
             allowableValues = {"PENDING", "PROCESSING", "COMPLETED", "FAILED", "CANCELLED"})
     private final String status;
@@ -59,11 +64,12 @@ public class TransactionHistoryItemResponse {
     private final String createdAt;
 
     @Builder
-    private TransactionHistoryItemResponse(String publicId, String type, String status, String amount,
-                                           String currencyCode, String fee, String receiveAmount,
+    private TransactionHistoryItemResponse(String publicId, String type, String direction, String status,
+                                           String amount, String currencyCode, String fee, String receiveAmount,
                                            String receiveCurrencyCode, String receiverName, String createdAt) {
         this.publicId = publicId;
         this.type = type;
+        this.direction = direction;
         this.status = status;
         this.amount = amount;
         this.currencyCode = currencyCode;
@@ -74,10 +80,16 @@ public class TransactionHistoryItemResponse {
         this.createdAt = createdAt;
     }
 
-    public static TransactionHistoryItemResponse from(Transaction tx) {
+    /**
+     * 본인 시점({@code currentUserPublicId}) 기준으로 응답 항목을 만든다. INTERNAL_TRANSFER는 본인이
+     * 수신자({@code receiverWallet})인 경우 {@code direction=IN}, 그 외(CHARGE/REMITTANCE/EXCHANGE 또는
+     * INTERNAL_TRANSFER 송신자)는 {@code direction=OUT}이다.
+     */
+    public static TransactionHistoryItemResponse from(Transaction tx, String currentUserPublicId) {
         return TransactionHistoryItemResponse.builder()
                 .publicId(tx.getPublicId())
                 .type(tx.getType().name())
+                .direction(resolveDirection(tx, currentUserPublicId))
                 .status(tx.getStatus().name())
                 .amount(toPlainString(tx.getAmount()))
                 .currencyCode(tx.getCurrencyCode().name())
@@ -87,6 +99,23 @@ public class TransactionHistoryItemResponse {
                 .receiverName(tx.getReceiverName())
                 .createdAt(toUtcZ(tx.getCreatedAt()))
                 .build();
+    }
+
+    /**
+     * 송수신 방향 결정. wallet(송신자)의 user_public_id와 일치하면 OUT, receiverWallet의 user_public_id와
+     * 일치하면 IN. 송수신 양쪽 다 본인인 경우(자기↔자기 송금)는 OUT으로 본다(현재 자기송금은 서비스에서 차단).
+     */
+    private static String resolveDirection(Transaction tx, String currentUserPublicId) {
+        if (tx.getWallet() != null
+                && currentUserPublicId.equals(tx.getWallet().getUserPublicId())) {
+            return "OUT";
+        }
+        if (tx.getReceiverWallet() != null
+                && currentUserPublicId.equals(tx.getReceiverWallet().getUserPublicId())) {
+            return "IN";
+        }
+        // OR 조회 결과라 양쪽 어디에도 본인이 아닐 수는 없지만, 방어적으로 OUT 처리(현 응답 의미와 동일).
+        return "OUT";
     }
 
     /** 금액을 소수 4자리 string으로 변환한다(지수 표기 회피). null이면 그대로 null. */
