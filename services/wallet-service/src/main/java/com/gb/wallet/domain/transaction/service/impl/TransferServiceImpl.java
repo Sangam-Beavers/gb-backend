@@ -68,6 +68,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import lombok.RequiredArgsConstructor;
@@ -342,26 +343,40 @@ public class TransferServiceImpl implements TransferService {
     public TransferExecuteResponse execute(String userPublicId, String idempotencyKey,
                                            TransferExecuteRequest request) {
         // 사용자 직접 호출(POST /transfers) — 송금 PIN 게이트 ON(TX-PIN).
-        return executeInternal(userPublicId, idempotencyKey, request, true);
+        // 수신자 표시명은 실행 시점에 MemberClient로 조회한다(HTTP 요청 컨텍스트라 JWT 릴레이 가능).
+        // resolver는 INTERNAL 경로에서 수신 wallet의 user_public_id를 인자로 락 진입 전에 1회 호출된다
+        // (wallet-transfer-2) — REMITTANCE는 미사용.
+        return executeInternal(userPublicId, idempotencyKey, request, true,
+                this::fetchMemberNameSafe);
     }
 
     @Override
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public TransferExecuteResponse executePreAuthorized(String userPublicId, String idempotencyKey,
-                                                        TransferExecuteRequest request) {
+                                                        TransferExecuteRequest request,
+                                                        String receiverNameSnapshot) {
         // 사전 인가된 정기송금 회차 실행(스케줄러) — PIN은 설정 시 1회 검증한 standing order라 게이트 OFF(TX-PIN).
         // NOT_SUPPORTED 유지 필수: 스케줄러 executeSingle(REQUIRES_NEW)의 트랜잭션을 suspend해 자금 이동을
         // 독립 경계에서 커밋해야 한다(execute와 동일 사상).
-        return executeInternal(userPublicId, idempotencyKey, request, false);
+        // 수신자 표시명은 실행 시점에 재조회하지 않고 설정 시점 snapshot을 그대로 쓴다(wallet-sched-1) —
+        // 스케줄러 스레드에는 SecurityContext(JWT)가 없어 RealMemberClient JWT 릴레이가 불가능하고,
+        // 재조회하면 항상 폴백("Unknown")이 확인증(transactions.receiver_name)에 영속되기 때문.
+        // snapshot이 null이면 null 그대로(설정 시점 조회 실패 케이스 — 폴백 문자열을 원장에 만들지 않는다).
+        return executeInternal(userPublicId, idempotencyKey, request, false,
+                ignoredReceiverId -> receiverNameSnapshot);
     }
 
     /**
-     * 송금 실행 공통 본문. {@code requirePinGate}만 사용자 직접 호출({@link #execute}, true)과 사전 인가
-     * 스케줄러({@link #executePreAuthorized}, false)를 가른다 — 그 외 멱등성 3-layer·rate-limit·락 재시도·
-     * 자금 이동은 완전히 동일하다.
+     * 송금 실행 공통 본문. 호출원별로 두 가지가 갈린다 — {@code requirePinGate}: 사용자 직접 호출
+     * ({@link #execute}, true) vs 사전 인가 스케줄러({@link #executePreAuthorized}, false).
+     * {@code receiverNameResolver}: INTERNAL 확인증 수신자명 결정 함수(인자 = 수신 wallet의
+     * user_public_id) — 직접 호출은 실행 시점 MemberClient 조회(fail-open), 스케줄러는 인자를 무시하고
+     * 설정 시점 snapshot 그대로(wallet-sched-1). 그 외 멱등성 3-layer·rate-limit·락 재시도·자금 이동은
+     * 완전히 동일하다.
      */
     private TransferExecuteResponse executeInternal(String userPublicId, String idempotencyKey,
-                                                    TransferExecuteRequest request, boolean requirePinGate) {
+                                                    TransferExecuteRequest request, boolean requirePinGate,
+                                                    Function<String, String> receiverNameResolver) {
         // 비-HTTP 경로(스케줄러·내부 직접 호출) 서비스단 가드(WTX-02): HTTP는 컨트롤러
         // @RequestHeader("Idempotency-Key") @NotBlank로 막지만(WTX-01), 빈 키가 멱등 3-layer 키 스코프
         // (cacheKey/findByIdempotencyKey)를 무력화하므로 모든 side effect(rate-limit/캐시/DB) 전에
@@ -430,7 +445,8 @@ public class TransferServiceImpl implements TransferService {
 
         // 6) 실 처리 + 락 경합 재시도 래퍼 — race(UNIQUE 위반)와 락 경합을 도메인별 분기에 공통 처리.
         TransferExecuteResponse response = executeWithRetry(
-                userPublicId, idempotencyKey, request, currency, transferType, scopeId);
+                userPublicId, idempotencyKey, request, currency, transferType, scopeId,
+                receiverNameResolver);
 
         // 7) 커밋 이후 Redis 캐시 채우기 (Layer 1).
         writeToCache(cacheKey, response);
@@ -449,14 +465,16 @@ public class TransferServiceImpl implements TransferService {
      */
     private TransferExecuteResponse executeWithRetry(
             String userPublicId, String idempotencyKey, TransferExecuteRequest request,
-            CurrencyType currency, TransactionType transferType, String scopeId) {
+            CurrencyType currency, TransactionType transferType, String scopeId,
+            Function<String, String> receiverNameResolver) {
         int attempt = 0;
         while (true) {
             try {
                 if (transferType == TransactionType.REMITTANCE) {
                     return executeRemittancePath(userPublicId, idempotencyKey, request, currency);
                 }
-                return executeInternalTransferPath(userPublicId, idempotencyKey, request, currency, transferType);
+                return executeInternalTransferPath(userPublicId, idempotencyKey, request, currency, transferType,
+                        receiverNameResolver);
             } catch (DataIntegrityViolationException race) {
                 // 멱등 Layer 3: idempotency_key UNIQUE 충돌(진짜 동시 race)만 첫 결과 재반환으로 흡수한다.
                 //   같은 키의 prior가 실제로 존재할 때만 race로 간주하고, prior가 없으면 idempotency 충돌이
@@ -483,7 +501,8 @@ public class TransferServiceImpl implements TransferService {
      */
     private TransferExecuteResponse executeInternalTransferPath(
             String userPublicId, String idempotencyKey, TransferExecuteRequest request,
-            CurrencyType currency, TransactionType transferType) {
+            CurrencyType currency, TransactionType transferType,
+            Function<String, String> receiverNameResolver) {
         // 송신/수신 wallet 조회 (락 키용 id 확보).
         Wallet senderWallet = walletRepository.findByUserPublicId(userPublicId)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
@@ -500,10 +519,12 @@ public class TransferServiceImpl implements TransferService {
             throw new BusinessException(TransferErrorCode.SELF_TRANSFER_NOT_ALLOWED);
         }
 
-        // 수신자 본명 snapshot을 분산 락/FOR UPDATE 진입 *전*에 외부 MemberClient로 미리 조회한다(wallet-transfer-2).
-        // 확인증용 read-only 보강이라 트랜잭션·정합성 의존이 없어(fail-open, 실패 시 null) 락 밖에서 안전하게 빼낼 수
-        // 있다 — 락/잔액행 락을 보유한 채 외부 HTTP를 호출해 같은 송신자의 다른 송금/환전을 대기시키던 것을 제거한다.
-        String receiverName = fetchMemberNameSafe(receiverWallet.getUserPublicId());
+        // 수신자 본명 snapshot을 분산 락/FOR UPDATE 진입 *전*에 확보한다(wallet-transfer-2 — 락 보유 중 외부
+        // HTTP 금지). 공급원은 호출원별로 다르다: 사용자 직접 호출(execute)은 실행 시점 MemberClient 조회
+        // (fail-open, HTTP 컨텍스트라 JWT 릴레이 가능), 정기송금 회차(executePreAuthorized)는 설정 시점
+        // snapshot 그대로(wallet-sched-1 — 스케줄러 스레드는 SecurityContext가 없어 재조회가 항상 "Unknown"
+        // 폴백이 되므로 재조회하지 않는다). 확인증용 read-only 보강이라 트랜잭션·정합성 의존이 없다.
+        String receiverName = receiverNameResolver.apply(receiverWallet.getUserPublicId());
 
         // 분산 락 획득 (wallet_id 오름차순 — DistributedLockHelper 내부 정책). 실패 → 503.
         RLock lock = distributedLockHelper.tryLockTwoWallets(

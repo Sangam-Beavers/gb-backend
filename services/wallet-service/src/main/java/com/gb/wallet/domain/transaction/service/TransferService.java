@@ -67,16 +67,26 @@ public interface TransferService {
     TransferExecuteResponse execute(String userPublicId, String idempotencyKey, TransferExecuteRequest request);
 
     /**
-     * <b>사전 인가된(pre-authorized) 송금 실행</b> — PIN 게이트를 적용하지 않는 점만 {@link #execute}와 다르다.
+     * <b>사전 인가된(pre-authorized) 송금 실행</b> — {@link #execute}와 두 가지만 다르다:
+     * ① PIN 게이트를 적용하지 않는다. ② INTERNAL 수신자 표시명을 실행 시점에 조회하지 않고
+     * <b>설정 시점 snapshot({@code receiverNameSnapshot})을 그대로 쓴다</b>.
      * 그 외 멱등성 3-layer·rate-limit·락 재시도·자금 이동은 완전히 동일하다.
      *
      * <p><b>용도(스케줄러 전용):</b> 정기송금은 사람이 PIN을 입력할 주체가 없는 시스템 자동 실행이다. 대신
      * 정기송금 <b>설정 시점</b>({@code ScheduledTransferServiceImpl.create})에 PIN을 1회 검증해 인가하는
      * standing-order 모델을 쓰므로, 회차 실행은 per-run PIN을 면제한다. {@code ScheduledTransferRunner}만
      * 호출하며 HTTP 컨트롤러에서 호출하지 말 것(PIN 우회 통로가 된다).
+     *
+     * @param receiverNameSnapshot INTERNAL_TRANSFER 수신자 본명 snapshot —
+     *        {@code scheduled_transfers.receiver_name}(설정 시점에 MemberClient로 박은 값, null 가능)을
+     *        그대로 넘긴다. 스케줄러 스레드에는 SecurityContext(JWT)가 없어 {@code RealMemberClient}의
+     *        JWT 릴레이가 불가능하므로 <b>실행 시점 재조회는 항상 폴백("Unknown")</b>이 된다 — 회차 실행은
+     *        재조회 없이 이 값을 {@code transactions.receiver_name}으로 복사한다(ScheduledTransfer 엔티티
+     *        javadoc의 "외부 의존 없는 빠른 실행" 계약). REMITTANCE면 null(tx 내 holder_name 사용이라 무시됨).
      */
     TransferExecuteResponse executePreAuthorized(
-            String userPublicId, String idempotencyKey, TransferExecuteRequest request);
+            String userPublicId, String idempotencyKey, TransferExecuteRequest request,
+            String receiverNameSnapshot);
 
     /**
      * 실제 송금 처리(쓰기 트랜잭션). 잔액 행 비관적 락(wallet_id 오름차순) → 잔액 검증 → 차감/증액 →

@@ -176,7 +176,11 @@ public class ScheduledTransferRunner {
         String idempotencyKey = "scheduled:" + s.getPublicId() + ":" + s.getNextRunDate();
         TransferExecuteRequest request = toExecuteRequest(s);
         // 사전 인가 경로(executePreAuthorized) — PIN은 설정 시 1회 검증한 standing order라 회차는 면제(TX-PIN).
-        transferService.executePreAuthorized(s.getUserPublicId(), idempotencyKey, request);
+        // receiverName snapshot(설정 시점 박은 값)을 그대로 전달한다(wallet-sched-1) — 스케줄러 스레드는
+        // SecurityContext(JWT)가 없어 실행 시점 MemberClient 재조회가 항상 "Unknown" 폴백이 되므로,
+        // 회차는 재조회 없이 snapshot을 transactions.receiver_name으로 복사한다(엔티티 javadoc 계약).
+        transferService.executePreAuthorized(
+                s.getUserPublicId(), idempotencyKey, request, s.getReceiverName());
 
         // 다음 회차 계산 — today 기준 다음 주기. "오늘 이미 지났음" 정책으로 자연스럽게 다음 주/달로.
         LocalDate next = nextRunDateCalculator.calculateFrom(

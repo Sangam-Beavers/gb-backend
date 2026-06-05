@@ -87,7 +87,7 @@ class ScheduledTransferRunnerTest {
                 .willReturn(List.of(st));
         given(scheduledTransferRepository.findById(10L)).willReturn(Optional.of(st));
         given(bankAccountRepository.findById(99L)).willReturn(Optional.of(account));
-        given(transferService.executePreAuthorized(anyString(), anyString(), any(TransferExecuteRequest.class)))
+        given(transferService.executePreAuthorized(anyString(), anyString(), any(TransferExecuteRequest.class), any()))
                 .willReturn(Mockito.mock(TransferExecuteResponse.class));
         given(nextRunDateCalculator.calculateFrom(any(), Mockito.anyInt(), any(LocalDate.class)))
                 .willReturn(LocalDate.of(2026, 7, 25));
@@ -98,7 +98,8 @@ class ScheduledTransferRunnerTest {
         ArgumentCaptor<TransferExecuteRequest> reqCaptor =
                 ArgumentCaptor.forClass(TransferExecuteRequest.class);
         ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(transferService).executePreAuthorized(eq("user-uuid"), keyCaptor.capture(), reqCaptor.capture());
+        verify(transferService).executePreAuthorized(
+                eq("user-uuid"), keyCaptor.capture(), reqCaptor.capture(), eq("NGUYEN VAN A"));
         // TX-PIN: 정기송금 회차는 사전 인가 경로만 쓴다 — PIN 게이트가 걸린 execute()는 호출하지 않는다(standing order).
         verify(transferService, never()).execute(anyString(), anyString(), any(TransferExecuteRequest.class));
         assertThat(reqCaptor.getValue().transferType()).isEqualTo("REMITTANCE");
@@ -124,7 +125,7 @@ class ScheduledTransferRunnerTest {
         given(scheduledTransferRepository.findAllByStatusAndNextRunDateLessThanEqual(any(), any()))
                 .willReturn(List.of(st));
         given(scheduledTransferRepository.findById(11L)).willReturn(Optional.of(st));
-        given(transferService.executePreAuthorized(anyString(), anyString(), any(TransferExecuteRequest.class)))
+        given(transferService.executePreAuthorized(anyString(), anyString(), any(TransferExecuteRequest.class), any()))
                 .willReturn(Mockito.mock(TransferExecuteResponse.class));
         given(nextRunDateCalculator.calculateFrom(any(), Mockito.anyInt(), any(LocalDate.class)))
                 .willReturn(LocalDate.of(2026, 7, 25));
@@ -133,7 +134,10 @@ class ScheduledTransferRunnerTest {
 
         ArgumentCaptor<TransferExecuteRequest> reqCaptor =
                 ArgumentCaptor.forClass(TransferExecuteRequest.class);
-        verify(transferService).executePreAuthorized(anyString(), anyString(), reqCaptor.capture());
+        // wallet-sched-1: 설정 시점 receiver_name snapshot이 실행 호출에 그대로 전달된다 — 스케줄러
+        // 스레드는 SecurityContext(JWT)가 없어 실행 시점 재조회가 항상 "Unknown" 폴백이 되기 때문.
+        verify(transferService).executePreAuthorized(
+                anyString(), anyString(), reqCaptor.capture(), eq("NGUYEN VAN A"));
         assertThat(reqCaptor.getValue().transferType()).isEqualTo("INTERNAL_TRANSFER");
         assertThat(reqCaptor.getValue().receiverPublicId()).isEqualTo("receiver-uuid");
         assertThat(reqCaptor.getValue().bankAccountPublicId()).isNull();
@@ -159,9 +163,9 @@ class ScheduledTransferRunnerTest {
         // 첫 회차 실패(잔액 부족 등), 두 번째는 정상
         willThrow(new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE))
                 .given(transferService).executePreAuthorized(anyString(), Mockito.contains(st1.getPublicId()),
-                        any(TransferExecuteRequest.class));
+                        any(TransferExecuteRequest.class), any());
         given(transferService.executePreAuthorized(anyString(), Mockito.contains(st2.getPublicId()),
-                any(TransferExecuteRequest.class)))
+                any(TransferExecuteRequest.class), any()))
                 .willReturn(Mockito.mock(TransferExecuteResponse.class));
         given(nextRunDateCalculator.calculateFrom(any(), Mockito.anyInt(), any(LocalDate.class)))
                 .willReturn(LocalDate.of(2026, 7, 25));
@@ -169,7 +173,7 @@ class ScheduledTransferRunnerTest {
         runner.runDueTransfers();
 
         // 두 번 다 시도됨 (첫 실패가 두 번째 건너뛰지 않음)
-        verify(transferService, times(2)).executePreAuthorized(anyString(), anyString(), any(TransferExecuteRequest.class));
+        verify(transferService, times(2)).executePreAuthorized(anyString(), anyString(), any(TransferExecuteRequest.class), any());
         verify(lock).unlock();
     }
 
@@ -183,7 +187,7 @@ class ScheduledTransferRunnerTest {
 
         runner.executeSingle(30L, LocalDate.of(2026, 6, 25));
 
-        verify(transferService, never()).executePreAuthorized(anyString(), anyString(), any());
+        verify(transferService, never()).executePreAuthorized(anyString(), anyString(), any(), any());
     }
 
     @Test
@@ -195,7 +199,7 @@ class ScheduledTransferRunnerTest {
 
         runner.executeSingle(31L, LocalDate.of(2026, 6, 25));
 
-        verify(transferService, never()).executePreAuthorized(anyString(), anyString(), any());
+        verify(transferService, never()).executePreAuthorized(anyString(), anyString(), any(), any());
     }
 
     // ===== helpers =====
