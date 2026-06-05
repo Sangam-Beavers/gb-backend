@@ -65,13 +65,10 @@ public class VerificationServiceImpl implements VerificationService {
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
 
-        // TODO(D-3): document_number는 명세상 AES-256 암호화 저장 대상이다. 암복호 유틸 도입 후
-        //   아래 평문 저장을 암호화 저장으로 교체한다(데모 한정 평문).
-        String storedDocumentNumber = request.getDocumentNumber();
-
         // 4) 형식 검증 통과 → 즉시 승인(데모). 인증 레코드 저장 + 회원 배지 부여(dirty checking).
+        //    document_number는 엔티티의 EncryptedStringConverter가 영속 시점에 AES-256-GCM으로 자동 암호화한다.
         UserVerification verification = UserVerification.approved(
-                member, documentType, storedDocumentNumber, request.getS3Key());
+                member, documentType, request.getDocumentNumber(), request.getS3Key());
         verificationRepository.save(verification);
         member.markVerified();
 

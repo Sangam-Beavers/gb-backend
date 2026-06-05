@@ -225,13 +225,13 @@ message: "회원가입이 완료되었습니다."
 
 ## 10. 신분증 인증 요청
 
-`POST /api/v1/members/me/verification` · Auth ✅ **(※ 미구현 — `user_verifications` 엔티티·AES-256 부재)**
+`POST /api/v1/members/me/verification` · Auth ✅
 
 **Request Body**
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | `identity_document_type` | string | O | `ALIEN_REGISTRATION` / `PASSPORT` / `NATIONAL_ID` |
-| `document_number` | string | O | 문서 번호 (서버에서 AES-256 암호화 저장) |
+| `document_number` | string | O | 문서 번호 (서버에서 AES-256-GCM 암호화 저장, `EncryptedStringConverter` 자동 변환) |
 | `s3_key` | string | O | 사전 업로드된 신분증 이미지 S3 key |
 
 **Response 201** — `data`: `status`="PENDING", `submitted_at`(ISO 8601 UTC Z)

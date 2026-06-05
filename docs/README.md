@@ -78,6 +78,7 @@ Claude Code가 반드시 지켜야 하는 프로젝트 차원의 결정입니다
 - **회원 식별자 보안 원칙** — `members.id`(BIGINT 순번)는 member 도메인 경계를 벗어나지 않는다. 도메인 밖에는 `user_public_id`(UUID)만 노출/전파한다.
 - **금액·환율은 JSON `string` 십진수로 전송**한다. `number`(float) 금지. (표시용 수치 — 등락률·OCR 신뢰도 등 — 만 예외적으로 number 허용)
 - **인증은 OAuth2 Resource Server(방식 B)로 구현됨.** 본인 식별은 토큰 claim `public_id`를 `@CurrentUserPublicId`로 추출한다. (member·wallet·community 적용 완료, document-service만 `@RequestHeader("X-User-Public-Id")` 헤더 임시처리 잔존 — conventions §14)
+- **민감정보 컬럼 암호화 = `EncryptedStringConverter`(AES-256-GCM).** 신분증 번호 등 PII는 JPA `AttributeConverter`로 영속 시점에 자동 암복호 → DB에는 ciphertext(Base64)만 적재. 키는 환경변수 `GB_CRYPTO_KEY`(Base64 32B). 운영 전환 시 AWS KMS Envelope Encryption으로 교체 예정(별도 이슈). 상세: [`conventions.md` §15](./conventions.md#15-민감정보-컬럼-암호화-pii-★-claude-code-주의).
 - **패키지 루트 `com.gb`**, 멀티모듈(`common` + `services`). JSON 필드는 snake_case이되 **DTO는 camelCase + Jackson 전역 변환**(`property-naming-strategy: SNAKE_CASE`).
 
 ---

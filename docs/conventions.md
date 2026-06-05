@@ -363,3 +363,80 @@ com.gb.common
 > //       현재는 헤더(X-User-Public-Id)로 임시 수신.
 > @RequestHeader("X-User-Public-Id") String userPublicId
 > ```
+
+---
+
+## 15. 민감정보 컬럼 암호화 (PII) ★ Claude Code 주의
+
+신분증 번호·계좌번호 같이 **고민감 PII는 DB에 평문으로 두지 않는다.** 애플리케이션 레이어에서 AES-256-GCM으로 자동 암복호한 뒤 DB에는 ciphertext만 적재한다. RDS 스냅샷·백업·슬로우쿼리 로그 등 디스크에 남는 모든 경로에서 평문 노출을 차단하는 게 목적이다.
+
+### 15-1. 구현 방식 — `EncryptedStringConverter`
+
+JPA `AttributeConverter`로 영속/조회 시점에 투명하게 변환한다. 서비스/리포지터리 코드는 평문 문자열을 다루듯 작성하면 되고, 컨버터가 자동으로 끼어든다.
+
+```java
+@Convert(converter = EncryptedStringConverter.class)
+@Column(name = "document_number", length = 255, nullable = false)
+private String documentNumber;
+```
+
+- 위치: `member-service/global/security/crypto/` (현 사용처가 1곳뿐이라 서비스 내부에 둠. 타 도메인으로 확산되면 `common-crypto` 모듈로 승격 — CLAUDE §2 "메커니즘 common, 구체 서비스" 원칙).
+- 구성 빈 3종:
+  - `CryptoProperties` — `@ConfigurationProperties("gb.crypto")` 레코드, env `GB_CRYPTO_KEY` 바인딩.
+  - `AesGcmCryptoService` — AES-256-GCM 암복호. 빈 생성 시 키 길이(32B) 검증 fail-fast.
+  - `EncryptedStringConverter` — `AttributeConverter<String, String>`, `@Component` + `@Converter(autoApply = false)`.
+- 등록은 `CryptoConfig`의 `@EnableConfigurationProperties(CryptoProperties.class)`로 처리.
+
+### 15-2. 알고리즘 — AES-256-GCM (CBC 아님)
+
+- **AEAD(인증암호화)** 라 변조 시 `AEADBadTagException` 발생 → 손상된 ciphertext로 인한 무성 복호화 사고 차단.
+- IV는 호출마다 12B 랜덤(`SecureRandom`), 인증 태그 128bit.
+- 컬럼 저장 포맷: `Base64( IV(12B) || ciphertext || tag(16B) )` — 단일 VARCHAR로 깔끔히 처리.
+- **결정성 없음** — 같은 평문도 매번 다른 ciphertext가 나온다. 따라서 컬럼에 `equals`·`LIKE` 검색이 불가능하다.
+  - 검색·중복확인이 필요해지면 별도 `*_hash` 컬럼(HMAC-SHA256 with peppered key)을 추가하는 방식으로 푼다. 현재 적용 컬럼(`document_number`)은 검색 요구가 없어 hash 컬럼을 두지 않았다.
+
+### 15-3. 컬럼 길이 산정
+
+평문 N자(UTF-8 N B 가정)일 때 GCM 출력 = `12 + N + 16` 바이트. Base64 인코딩 후 `ceil((N+28) / 3) × 4` 자.
+
+| 평문 한계 | 권장 컬럼 길이 (`VARCHAR`) |
+| --- | --- |
+| ~16자 | 64 |
+| ~50자 | 128 |
+| ~100자 | **255** ← 현재 `document_number` 기준 |
+| ~180자 | 512 |
+
+> 평문 컬럼을 그대로 두면 안 되고, **암호화 적용 시 컬럼 길이를 반드시 확장**한다. 기존 컬럼이 `VARCHAR(100)`이었다면 ciphertext가 잘려 복호화가 깨진다.
+
+### 15-4. 키 관리
+
+- 운영/개발기는 yml에 평문 키를 적지 않는다. **환경변수 `GB_CRYPTO_KEY`로만 주입**한다(application yml은 `${GB_CRYPTO_KEY}` 참조).
+- 키 형식: Base64(32B = 256bit). 생성: `openssl rand -base64 32`.
+- 테스트 프로파일(`application-test.yml`)은 고정 더미 키(Base64 32B all-zero) 사용 — 비밀 아님, 인메모리 H2에만 적용.
+- 키 누락/형식오류/길이오류는 `AesGcmCryptoService` 빈 생성 시점에 `IllegalStateException`으로 fail-fast. 부팅 시 즉시 발견된다.
+- **운영 전환 시 AWS KMS Envelope Encryption 도입 예정** — CMK가 Data Key를 발급, Data Key로 컬럼 암호화, 암호화된 Data Key는 별도 컬럼에 보관. CMK 연 1회 로테이션. (별도 이슈에서 다룬다)
+
+### 15-5. 적용 컬럼 표
+
+| 테이블.컬럼 | 컬럼 타입 | 적용 상태 | 비고 |
+| --- | --- | --- | --- |
+| `user_verifications.document_number` | VARCHAR(255) | ✅ 적용 | 외국인등록번호·여권번호·본국 신분증 번호. PR #141 |
+| `bank_accounts.account_number` | VARCHAR(100) | ⏳ 후속 | "암호화 권장"(database.md). 컬럼 길이 확장 + 컨버터 적용 별도 이슈 |
+
+> **새 PII 컬럼을 추가할 때 체크리스트:** ① 엔티티 필드에 `@Convert(converter = EncryptedStringConverter.class)` ② 컬럼 길이를 §15-3 표 기준으로 확장 ③ 응답 DTO에 노출하지 않는지 확인 (또는 마스킹) ④ 로그/`toString`에 새지 않는지 확인 ⑤ 위 §15-5 표에 등록.
+
+### 15-6. 운영 주의
+
+- **응답 DTO에는 PII를 노출하지 않는다.** 노출이 필요하면 마스킹(예: `9901**-*****01`) 응답을 별도 필드로.
+- **로그에 평문 PII가 새지 않도록** 엔티티/Request DTO의 `toString`을 점검한다. Lombok `@ToString.Exclude`로 가린다.
+- DB에 직접 native SQL을 날려서 raw 컬럼을 봐야 할 때, 값은 ciphertext다. 평문 비교가 필요하면 애플리케이션을 통과시키거나 같은 키로 암호화해 비교해야 한다(결정성 없음에 유의 — IV 랜덤이라 매번 다름).
+- 키 교체(rotation)는 단순 yml 교체로 불가능하다. 기존 데이터가 옛 키로 복호화 가능해야 하므로, **dual-key 단계(옛 키 fallback)** 또는 **재암호화 마이그레이션 배치**가 필요하다. KMS 도입 이슈에서 같이 다룬다.
+- **`@DataJpaTest` 슬라이스에서는 crypto 빈을 `@Import`해야 한다.** `@Convert` 대상 엔티티가 같은 EntityManagerFactory에 로드되는 한 Hibernate가 컨버터 빈을 요구하기 때문이다. `@DataJpaTest`는 일반 `@Component`를 스캔하지 않으므로 누락 시 `NoSuchBeanDefinitionException`이 난다.
+  ```java
+  @DataJpaTest
+  @ActiveProfiles("test")
+  @AutoConfigureTestDatabase(replace = Replace.NONE)
+  @Import({CryptoConfig.class, AesGcmCryptoService.class, EncryptedStringConverter.class})
+  class XxxRepositoryTest { ... }
+  ```
+  적용 대상 엔티티가 없는 다른 서비스(wallet·community·document)의 `@DataJpaTest`는 영향 없다.

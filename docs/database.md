@@ -27,6 +27,12 @@
 - `transaction_audit_logs`는 **append-only** (INSERT만, UPDATE/DELETE 금지)
 - 외부 노출 ID는 `public_id`(UUID)
 
+### (3) 민감정보 컬럼 암호화 (PII)
+
+- 신분증 번호 등 **고민감 PII는 평문 저장 금지.** 애플리케이션 레이어에서 AES-256-GCM으로 자동 암복호한 뒤 DB에는 ciphertext(Base64)만 적재한다 — JPA `AttributeConverter`(`EncryptedStringConverter`)가 영속/조회 시점에 투명 변환.
+- 컬럼 길이는 **암호화 오버헤드 흡수치**로 잡는다(평문 100자 기준 `VARCHAR(255)`). 산정표·키 관리·적용 컬럼 목록은 [`conventions.md` §15](./conventions.md#15-민감정보-컬럼-암호화-pii-★-claude-code-주의) 참고.
+- 운영 키는 환경변수 `GB_CRYPTO_KEY`(Base64 32B)로 주입. 운영 전환 시 AWS KMS Envelope Encryption으로 교체 예정(별도 이슈).
+
 ---
 
 ## 1. 테이블 목록 (도메인별)
@@ -88,7 +94,7 @@
 | `id` | BIGINT | PK, AI | |
 | `user_id` | BIGINT | FK → members.id, NOT NULL | member 내부 참조 → BIGINT FK |
 | `document_type` | VARCHAR(30) | NOT NULL | 신분증 유형 (ALIEN_REGISTRATION/PASSPORT/NATIONAL_ID) ※ API에선 `identity_document_type` |
-| `document_number` | VARCHAR(100) | NOT NULL | **AES-256 암호화 저장 예정** (현재 데모 평문 저장, D-3 암복호 유틸 도입 후 교체 — 서비스 `// TODO`) |
+| `document_number` | VARCHAR(255) | NOT NULL | **AES-256-GCM 암호화 저장** (`EncryptedStringConverter`가 영속 시점에 자동 변환 — `Base64(IV \|\| ciphertext \|\| tag)`. 평문 100자 + GCM 28B + Base64 오버헤드 흡수). 운영 키는 환경변수 `GB_CRYPTO_KEY`로 주입. 운영 전환 시 KMS Envelope Encryption으로 교체 예정(별도 이슈) |
 | `s3_key` | VARCHAR(500) | NOT NULL | 신분증 이미지 S3 경로 |
 | `status` | VARCHAR(20) | NOT NULL, DEFAULT 'PENDING' | PENDING/APPROVED/REJECTED |
 | `reviewed_at` | DATETIME | NULL | |
