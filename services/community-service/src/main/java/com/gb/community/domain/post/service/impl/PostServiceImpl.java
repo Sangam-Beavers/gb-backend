@@ -17,11 +17,14 @@ import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -32,8 +35,21 @@ public class PostServiceImpl implements PostService {
     private final PostRepository postRepository;
     private final MemberClient memberClient;
 
+    /** self-injection: createPostTx/updatePostTx의 @Transactional 프록시 적용 위함(wallet 동일 패턴). */
+    @Autowired
+    @Lazy
+    private PostService self;
+
+    // 10D community-2 — MemberClient(외부 HTTP) 호출은 트랜잭션/커넥션을 보유한 채 하지 않는다.
+    //   현재는 MockMemberClient(인메모리)뿐이라 latent지만 RealMemberClient 도입 시 풀 고갈 위험.
+    //   읽기 경로는 NOT_SUPPORTED(단일 SELECT는 트랜잭션 불요 — repo 호출이 각자 짧은 readOnly tx),
+    //   쓰기 경로는 DB 본문을 self-proxy tx 메서드로 묶고 회원 조회는 커밋 후 응답 조립에서 한다.
+    //   응답 DTO는 스칼라 컬럼만 읽으므로(LAZY 연관 미탐색) tx 밖 접근이 안전하다.
+
     @Override
-    public PostListResponse getPosts(String category, String keyword, String sort, int page, int size) {
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public PostListResponse getPosts(String requesterUserPublicId, String category, String keyword,
+                                     String sort, int page, int size) {
         PostCategory categoryFilter = parseCategory(category);   // 잘못된 값 → COMMON4001
         String keywordFilter = escapeLikeKeyword(nullIfBlank(keyword)); // 빈 키워드면 null(전체), 아니면 LIKE 메타문자 이스케이프
         Pageable pageable = buildPageable(sort, page, size);     // 잘못된 sort → COMMON4001
@@ -48,7 +64,8 @@ public class PostServiceImpl implements PostService {
                 authorIds.isEmpty() ? Map.of() : memberClient.getMembers(authorIds);
 
         List<PostSummaryResponse> items = posts.stream()
-                .map(post -> PostSummaryResponse.from(post, authorsByPublicId.get(post.getUserPublicId())))
+                .map(post -> PostSummaryResponse.from(
+                        post, authorsByPublicId.get(post.getUserPublicId()), requesterUserPublicId))
                 .toList();
 
         return PostListResponse.of(items, result.getNumber(), result.getSize(),
@@ -56,29 +73,52 @@ public class PostServiceImpl implements PostService {
     }
 
     @Override
-    public PostDetailResponse getPost(String postPublicId) {
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public PostDetailResponse getPost(String requesterUserPublicId, String postPublicId) {
         Post post = getActivePostOrThrow(postPublicId);
-        return PostDetailResponse.from(post, memberClient.getMember(post.getUserPublicId()));
+        // 단건 SELECT 후 외부 호출 — 트랜잭션 불요(NOT_SUPPORTED로 클래스 readOnly tx 차단).
+        return PostDetailResponse.from(post, memberClient.getMember(post.getUserPublicId()),
+                requesterUserPublicId);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public PostDetailResponse createPost(String requesterUserPublicId, PostCreateRequest request) {
+        // DB 본문(INSERT)은 self-proxy 쓰기 트랜잭션으로, 작성자 표시 정보 조회는 커밋 후 tx 밖에서.
+        Post saved = self.createPostTx(requesterUserPublicId, request);
+        // is_author: 작성 응답은 요청자가 곧 작성자 — 항상 true.
+        return PostDetailResponse.from(saved, memberClient.getMember(requesterUserPublicId),
+                requesterUserPublicId);
     }
 
     @Override
     @Transactional
-    public PostDetailResponse createPost(String requesterUserPublicId, PostCreateRequest request) {
+    public Post createPostTx(String requesterUserPublicId, PostCreateRequest request) {
         PostCategory category = parseCategory(request.getCategory());
         if (category == null) {
             // @NotBlank가 1차로 막지만, 방어적으로 한 번 더 — 카테고리는 작성 시 필수.
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
         // language는 "ko" 고정(Post.of).
-        Post saved = postRepository.save(
+        return postRepository.save(
                 Post.of(requesterUserPublicId, category, request.getTitle(), request.getContent()));
-        return PostDetailResponse.from(saved, memberClient.getMember(requesterUserPublicId));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public PostDetailResponse updatePost(String requesterUserPublicId, String postPublicId,
+                                         PostUpdateRequest request) {
+        // DB 본문(조회→본인검증→dirty checking 변경)은 self-proxy 쓰기 트랜잭션으로, 회원 조회는 커밋 후.
+        Post post = self.updatePostTx(requesterUserPublicId, postPublicId, request);
+        // is_author: 수정은 본인 검증을 통과한 흐름 — 항상 true.
+        return PostDetailResponse.from(post, memberClient.getMember(post.getUserPublicId()),
+                requesterUserPublicId);
     }
 
     @Override
     @Transactional
-    public PostDetailResponse updatePost(String requesterUserPublicId, String postPublicId,
-                                         PostUpdateRequest request) {
+    public Post updatePostTx(String requesterUserPublicId, String postPublicId,
+                             PostUpdateRequest request) {
         Post post = getActivePostOrThrow(postPublicId);
         verifyOwner(post, requesterUserPublicId);
 
@@ -92,8 +132,7 @@ public class PostServiceImpl implements PostService {
         }
         post.update(newCategory, newTitle, newContent);
         // 변경은 영속성 컨텍스트 dirty checking으로 커밋 시 반영(별도 save 불필요).
-
-        return PostDetailResponse.from(post, memberClient.getMember(post.getUserPublicId()));
+        return post;
     }
 
     @Override

@@ -122,7 +122,12 @@ public class ChargeServiceImpl implements ChargeService {
      *       DeadlockLoserDataAccessException): 같은 잔액 행을 다른 거래(다른 키의 충전·환전 등)와 비관적 락으로
      *       동시에 다투면 InnoDB가 패자 트랜잭션을 롤백한다. 일시적 충돌이므로 최대 {@link #MAX_CHARGE_ATTEMPTS}회
      *       재시도한다 — 재시도 첫 단계(doCharge 멱등 선검사)가 그새 커밋된 첫 결과를 잡으면 멱등 재반환되고,
-     *       경합 상대가 끝났으면 정상 처리된다. 재시도 소진 시 일시 장애로 보고 {@code COMMON5031}(503).</li>
+     *       경합 상대가 끝났으면 정상 처리된다. 재시도 소진 시 일시 장애로 보고 {@code COMMON5031}(503).
+     *       <br>⚠️ 재시도는 doCharge "전체" 재실행이라 (6) {@code bankClient.withdraw}도 같은 멱등키로
+     *       재호출된다(직전 시도의 withdraw가 성공했어도 — 락 경합은 그 뒤 (7) FOR UPDATE에서 터지므로).
+     *       이중출금은 은행 측 키 dedup(같은 키 → 첫 응답 재반환, remittance api-spec §13 계약)이 막으며
+     *       로컬 측 선차감 가드는 두지 않는다(11D charge-2 — 도입 시 인터페이스/정합성 모델 변경이라
+     *       WTX-03 saga 재설계와 함께 검토). 은행 구현체 교체 시 이 dedup 계약 유지가 전제 조건.</li>
      * </ul>
      */
     private ChargeResponse doChargeWithRetry(String userPublicId, String accountPublicId,

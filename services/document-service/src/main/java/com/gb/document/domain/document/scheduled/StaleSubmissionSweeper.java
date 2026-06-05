@@ -5,6 +5,7 @@ import com.gb.document.domain.document.entity.DocumentStatus;
 import com.gb.document.domain.document.repository.DocumentRepository;
 import com.gb.document.global.config.AnalysisProperties;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,7 +48,7 @@ public class StaleSubmissionSweeper {
     @Scheduled(cron = "${gb.analysis.stale-sweep-cron:0 */10 * * * *}", zone = "Asia/Seoul")
     @Transactional
     public void sweepStaleSubmissions() {
-        LocalDateTime threshold = LocalDateTime.now()
+        LocalDateTime threshold = LocalDateTime.now(ZoneOffset.UTC)
                 .minusMinutes(analysisProperties.staleTimeoutMinutes());
         List<Document> stales = documentRepository
                 .findAllByStatusAndUpdatedAtBefore(DocumentStatus.ANALYZING, threshold);

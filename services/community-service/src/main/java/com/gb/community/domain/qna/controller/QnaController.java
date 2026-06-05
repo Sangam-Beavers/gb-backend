@@ -49,7 +49,7 @@ public class QnaController {
             description = "특정 카테고리의 활성 게시글을 답변(댓글) 수 내림차순으로 상위 N건 반환한다. "
                     + "page 메타는 없다(Top N 고정). 작성자 정보·본문은 응답에 포함하지 않으며 단건 조회 API로 별도 조회한다. "
                     + "category 미입력 시 QUESTION 카테고리만, 입력 시 해당 카테고리만 반환한다 "
-                    + "(LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION). 잘못된 카테고리는 400 COMMON4001. "
+                    + "(LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION/FREE). 잘못된 카테고리는 400 COMMON4001. "
                     + "본 API는 **인증 불필요** — 비로그인 사용자도 호출 가능.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(

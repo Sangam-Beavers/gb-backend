@@ -8,7 +8,7 @@ package com.gb.community.domain.post.entity;
 public enum PostCategory {
     /** 생활 정보 */
     LIFE_INFO,
-    /** 일자리/근로 */
+    /** 취업 */
     JOB,
     /** 비자/체류 */
     VISA,
@@ -17,5 +17,7 @@ public enum PostCategory {
     /** 거주지 */
     RESIDENCE,
     /** 질문 */
-    QUESTION
+    QUESTION,
+    /** 자유게시판 */
+    FREE
 }

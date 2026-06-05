@@ -29,6 +29,7 @@ import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.common.util.BestEffortRequiresNew;
+import com.gb.wallet.global.config.ExchangeProperties;
 import com.gb.wallet.global.exception.code.ExchangeErrorCode;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
@@ -58,8 +59,6 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class ExchangeServiceImpl implements ExchangeService {
 
-    /** 환전 수수료: 신청 금액의 0.5%(KRW 기준), 소수 4자리 HALF_UP. 임시 정책 — 운영 시 정책 객체로 분리. */
-    private static final BigDecimal EXCHANGE_FEE_RATE = new BigDecimal("0.005");
     private static final int MONEY_SCALE = 4;
     private static final int RATE_SCALE = 8;
     /** 견적 유효 시간(분). Redis TTL과 응답 expires_at 계산에 함께 사용. */
@@ -80,6 +79,7 @@ public class ExchangeServiceImpl implements ExchangeService {
     private final QuoteRedisRepository quoteRedisRepository;
     private final ExchangeRateClient exchangeRateClient;
     private final IdempotencyCacheHelper idempotencyCacheHelper;
+    private final ExchangeProperties exchangeProperties;
     private final ObjectMapper objectMapper;
 
     /** self-injection: @Transactional 프록시 적용 위함(충전/송금 동일 패턴). */
@@ -127,8 +127,8 @@ public class ExchangeServiceImpl implements ExchangeService {
 
         // amount(from 통화) → KRW 환산 → to 통화로 환산.
         BigDecimal amountInKrw = amount.multiply(fromRate);
-        // 수수료는 KRW 기준 0.5%.
-        BigDecimal fee = amountInKrw.multiply(EXCHANGE_FEE_RATE).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        // 수수료는 KRW 기준 — 비율은 wallet.exchange.fee-rate로 외부화(기본 0.5%, ExchangeProperties).
+        BigDecimal fee = amountInKrw.multiply(exchangeProperties.feeRate()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         // 수수료 차감 후 KRW를 to 통화로 환산 = 수령액.
         BigDecimal receiveAmount = amountInKrw.subtract(fee)
                 .divide(toRate, MONEY_SCALE, RoundingMode.HALF_UP);

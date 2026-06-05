@@ -29,10 +29,12 @@ public class QuoteRequest {
     @NotBlank(message = "입금 통화는 필수입니다")
     private String toCurrencyCode;
 
-    @Schema(description = "환전 신청 금액 (string 십진수, 소수점 최대 4자리, 양수)", example = "100000.0000")
+    @Schema(description = "환전 신청 금액 (string 십진수, 정수부 최대 14자리·소수점 최대 4자리, 양수)", example = "100000.0000")
     @NotBlank(message = "금액은 필수입니다")
     // 양수 십진수만 통과: 0, 0.0, 0.0000 차단(부정형 lookahead). 송금(TransferExecuteRequest)과 동일 패턴.
-    @Pattern(regexp = "^(?!0+(\\.0{1,4})?$)\\d+(\\.\\d{1,4})?$",
-            message = "amount must be a positive decimal with up to 4 fractional digits")
+    // 정수부 ≤14자리 — 거대 문자열이 BigDecimal/Redis 페이로드로 흘러가지 않게 상한(DECIMAL(18,4) 기준,
+    // ChargeRequest @Digits(integer=14)와 동일).
+    @Pattern(regexp = "^(?!0+(\\.0{1,4})?$)\\d{1,14}(\\.\\d{1,4})?$",
+            message = "amount must be a positive decimal with up to 14 integer and 4 fractional digits")
     private String amount;
 }

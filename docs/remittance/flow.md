@@ -30,7 +30,8 @@
   │     → Mock 은행: POST /api/v1/bank/accounts/verify → account_token 수신
   │     (※ 실제 인증 불가 → Mock/화면만)
   │   계좌 등록 최종 완료  POST /api/v1/accounts
-  │     → bank_accounts INSERT (mock_account_token = 받은 토큰 저장)
+  │     → 본체가 은행 verify 재호출로 토큰 재발급(클라 토큰 무신뢰 — api-spec §13-2)
+  │     → bank_accounts INSERT (mock_account_token = 서버가 재발급받은 토큰 저장)
   └──────────────────────────────────────────────────┘
   │
 [충전 실행]

@@ -173,6 +173,60 @@ class DocumentSubmissionServiceImplTest {
     }
 
     @Test
+    @DisplayName("getStatus: ANALYZING인데 결과(COMPLETED) 도착 — lazy-sync로 COMPLETED 반환, estimated=0")
+    void getStatus_결과도착시_lazySync_완료() {
+        // dev 경로: Lambda B가 results를 직접 INSERT — Consumer를 안 거치므로 status가 ANALYZING으로 남는 케이스.
+        Document doc = analyzingDoc();
+        given(documentRepository.findByPublicId(PUBLIC_ID)).willReturn(Optional.of(doc));
+        given(documentResultRepository.findBySubmission_PublicId(PUBLIC_ID))
+                .willReturn(Optional.of(resultOf(doc, ProcessingStatus.COMPLETED)));
+
+        DocumentStatusResponse res = service.getStatus(OWNER, PUBLIC_ID);
+
+        assertThat(res.getStatus()).isEqualTo("COMPLETED");
+        assertThat(res.getEstimatedMinutes()).isZero();
+        assertThat(doc.getStatus()).isEqualTo(DocumentStatus.COMPLETED);
+    }
+
+    @Test
+    @DisplayName("getStatus: ANALYZING인데 결과(FAILED) 도착 — lazy-sync로 FAILED 반환")
+    void getStatus_결과도착시_lazySync_실패() {
+        Document doc = analyzingDoc();
+        given(documentRepository.findByPublicId(PUBLIC_ID)).willReturn(Optional.of(doc));
+        given(documentResultRepository.findBySubmission_PublicId(PUBLIC_ID))
+                .willReturn(Optional.of(resultOf(doc, ProcessingStatus.FAILED)));
+
+        DocumentStatusResponse res = service.getStatus(OWNER, PUBLIC_ID);
+
+        assertThat(res.getStatus()).isEqualTo("FAILED");
+        assertThat(doc.getStatus()).isEqualTo(DocumentStatus.FAILED);
+    }
+
+    @Test
+    @DisplayName("getStatus: ANALYZING인데 결과(PARTIAL) 도착 — Consumer §4와 동일하게 COMPLETED 매핑")
+    void getStatus_결과도착시_lazySync_부분성공은_완료매핑() {
+        Document doc = analyzingDoc();
+        given(documentRepository.findByPublicId(PUBLIC_ID)).willReturn(Optional.of(doc));
+        given(documentResultRepository.findBySubmission_PublicId(PUBLIC_ID))
+                .willReturn(Optional.of(resultOf(doc, ProcessingStatus.PARTIAL)));
+
+        DocumentStatusResponse res = service.getStatus(OWNER, PUBLIC_ID);
+
+        assertThat(res.getStatus()).isEqualTo("COMPLETED");
+    }
+
+    @Test
+    @DisplayName("getStatus: 이미 종료 상태(COMPLETED)면 결과 조회(lazy-sync) 자체를 안 한다")
+    void getStatus_종료상태면_결과조회_생략() {
+        given(documentRepository.findByPublicId(PUBLIC_ID)).willReturn(Optional.of(completedDoc()));
+
+        DocumentStatusResponse res = service.getStatus(OWNER, PUBLIC_ID);
+
+        assertThat(res.getStatus()).isEqualTo("COMPLETED");
+        verifyNoInteractions(documentResultRepository);
+    }
+
+    @Test
     @DisplayName("getResult: 결과 없음 → COMMON4221 (UNPROCESSABLE_ENTITY)")
     void getResult_결과없음() {
         given(documentRepository.findByPublicId(PUBLIC_ID)).willReturn(Optional.of(analyzingDoc()));
@@ -334,6 +388,17 @@ class DocumentSubmissionServiceImplTest {
                 .analysisDocumentType(AnalysisDocumentType.LABOR_CONTRACT)
                 .fileName("c.pdf")
                 .status(DocumentStatus.FAILED)
+                .build();
+    }
+
+    /** lazy-sync 테스트용 최소 결과 — processing_status만 의미 있다. */
+    private static DocumentResult resultOf(Document doc, ProcessingStatus processingStatus) {
+        return DocumentResult.builder()
+                .submission(doc)
+                .analysisDocumentType(AnalysisDocumentType.LABOR_CONTRACT)
+                .processingStatus(processingStatus)
+                .ocrConfidence(new BigDecimal("0.90"))
+                .completedAt(LocalDateTime.parse("2026-06-05T09:00:00"))
                 .build();
     }
 

@@ -21,6 +21,8 @@ import com.gb.member.global.mail.EmailSender;
 import com.gb.member.global.redis.PasswordResetRateLimiter;
 import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,8 +44,24 @@ public class MemberServiceImpl implements MemberService {
     @Value("${app.password-reset.base-url}")
     private String passwordResetBaseUrl;
 
+    /**
+     * 이메일 회원가입 — <b>IdP-first 단일 INSERT</b>(11D member-idp-1·core-2 묶음 수정, MEM-02 재설계).
+     *
+     * <p>순서: 중복 선검사 → IdP 프로비저닝(<b>트랜잭션 밖</b>) → 로컬 단일 INSERT(sub 포함, 자체 짧은 tx).
+     * 과거(MEM-02)에는 "로컬 row 선점 → IdP → sub UPDATE"를 한 @Transactional로 묶었으나,
+     * ① IdP HTTP(호출당 최대 ~13s × 2회)가 tx 안에 있어 UNIQUE/행 락과 Hikari 커넥션을 점유했고(core-2)
+     * ② set_password 실패 시 IdP 고아가 남아 그 이메일이 영구 가입불가였다(idp-1).
+     * 보상 삭제가 생기면서 "로컬 선점으로 고아를 막는다"는 전제가 바뀌어 IdP-first로 재설계했다:
+     * <ul>
+     *   <li>이메일 race는 IdP username unique가 직렬화 — 패자는 MEMBER4002(409, unique 매핑)를 받고
+     *       IdP에 아무것도 만들지 못하므로 고아가 없다.</li>
+     *   <li>프로비저닝 부분실패(② set_password)는 클라이언트 내부 보상 DELETE로 회수된다.</li>
+     *   <li>로컬 INSERT 실패(닉네임 race·DB 장애)는 방금 만든 IdP 사용자를 best-effort 회수한다.</li>
+     *   <li>커밋되는 row는 항상 sub까지 포함한 완전한 형상 — "sub 없는 회원" 상태가 존재하지 않는다
+     *       (auth_provider_id NOT NULL, database.md §members 일치).</li>
+     * </ul>
+     */
     @Override
-    @Transactional
     public SignupResponse signup(SignupRequest request) {
         if (memberRepository.existsByEmail(request.getEmail())) {
             throw new BusinessException(MemberErrorCode.EMAIL_ALREADY_EXISTS);
@@ -57,42 +75,41 @@ public class MemberServiceImpl implements MemberService {
         // 토큰 custom claim(public_id)과 우리 회원이 일치한다(토큰 sub ↔ publicId 매핑).
         String publicId = UUID.randomUUID().toString();
 
-        // MEM-02 — 로컬 row 선점(save) → IdP provision → sub 채우기 순서로 IdP 고아계정을 막는다.
-        //  ① authProviderId 없이 먼저 saveAndFlush: IdP 호출 전에 email/nickname/publicId UNIQUE 경합을
-        //     이 시점에 확정한다(위 existsBy를 통과한 동시 가입 race 백스톱). 여기서 깨지면 IdP를 아직
-        //     안 건드렸으므로 고아가 생기지 않는다.
-        //     authProviderId는 provision 후에야 정해지므로 지금은 비운다(컬럼 nullable — Member 상단 TODO 참조).
-        Member savedMember;
-        try {
-            savedMember = memberRepository.saveAndFlush(Member.builder()
-                    .publicId(publicId)
-                    .email(request.getEmail())
-                    .name(request.getName())
-                    .nickname(request.getNickname())
-                    .nationality(request.getNationality())
-                    .language(request.getLanguage())
-                    // TODO(약관): 프론트 미연동 — 미전송(null)은 임시로 동의(true)로 처리한다(@AssertTrue가 명시 false는 차단).
-                    //   프론트가 동의 값을 전송하면 SignupRequest @NotNull 복구 + 아래 null 기본처리를 제거한다.
-                    .termsAgreed(request.getTermsAgreed() == null || request.getTermsAgreed())
-                    .privacyAgreed(request.getPrivacyAgreed() == null || request.getPrivacyAgreed())
-                    .consentAgreedAt(LocalDateTime.now())
-                    .build());
-        } catch (DataIntegrityViolationException race) {
-            // 위 existsBy를 통과한 동시 가입 race가 email/nickname/publicId UNIQUE에 걸린 경우. 어느 제약인지
-            // 구분은 비이식적(제약명 판별 회피, getConstraintName null 가능)이라 generic "이미 존재"(COMMON4091)로
-            // 통일한다(member-5 — 도메인 코드 대신 COMMON4091은 race에서의 의도된 트레이드오프). contextual로 여기서
-            // 잡으므로 더는 중앙 핸들러에 의존하지 않는다(중앙은 이제 DataIntegrityViolation을 500으로 처리).
-            throw new BusinessException(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
-        }
-
-        // ② 방식 B: 비밀번호는 우리 DB에 저장하지 않고 IdP가 보유·검증한다. IdP에 사용자를 등록(비번 +
-        //    publicId attribute 포함)하고 IdP가 부여한 식별자(sub)를 받는다. provision 실패 시 예외가 올라와
-        //    @Transactional이 롤백되므로 ①에서 선점한 로컬 row도 사라진다(로컬·IdP 모두 없음 → 정합성).
+        // ① IdP 프로비저닝 — 트랜잭션 "밖"이라 IdP가 느려도 DB 커넥션/락을 점유하지 않는다(core-2).
+        //    실패하면 로컬엔 아무것도 만든 게 없어 보상이 필요 없다(set_password 부분실패의 IdP 고아는
+        //    RealIdpUserClient가 내부에서 보상 DELETE — idp-1). 방식 B: 비밀번호는 IdP에만 저장된다.
         String authProviderId = idpUserClient.provisionUser(
                 request.getEmail(), request.getName(), request.getPassword(), publicId);
 
-        // ③ provision 결과(sub)를 같은 트랜잭션에서 채운다(커밋 시 UPDATE → 커밋된 상태는 항상 non-null).
-        savedMember.assignAuthProviderId(authProviderId);
+        // ② 로컬 단일 INSERT(자체 짧은 tx) — sub까지 포함한 완전한 형상으로만 커밋한다.
+        Member member = Member.builder()
+                .publicId(publicId)
+                .email(request.getEmail())
+                .name(request.getName())
+                .nickname(request.getNickname())
+                .nationality(request.getNationality())
+                .language(request.getLanguage())
+                .authProviderId(authProviderId)
+                // TODO(약관): 프론트 미연동 — 미전송(null)은 임시로 동의(true)로 처리한다(@AssertTrue가 명시 false는 차단).
+                //   프론트가 동의 값을 전송하면 SignupRequest @NotNull 복구 + 아래 null 기본처리를 제거한다.
+                .termsAgreed(request.getTermsAgreed() == null || request.getTermsAgreed())
+                .privacyAgreed(request.getPrivacyAgreed() == null || request.getPrivacyAgreed())
+                .consentAgreedAt(LocalDateTime.now(ZoneOffset.UTC))
+                .build();
+        Member savedMember;
+        try {
+            savedMember = memberRepository.saveAndFlush(member);
+        } catch (DataIntegrityViolationException race) {
+            // 선검사를 통과한 동시 가입 race가 UNIQUE에 걸린 경우(이메일은 IdP unique가 먼저 직렬화하므로
+            // 주로 닉네임/publicId). 어느 제약인지 구분은 비이식적이라 generic "이미 존재"(COMMON4091)로
+            // 통일한다(member-5 정책 유지). 방금 만든 IdP 사용자는 회수해 이메일을 풀어 준다(고아 방지).
+            idpUserClient.deleteUserBestEffort(authProviderId);
+            throw new BusinessException(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
+        } catch (RuntimeException dbFailure) {
+            // DB 장애 등 — IdP에만 사용자가 남은 채 끝나지 않도록 회수 후 원예외 전파(중앙 핸들러 500).
+            idpUserClient.deleteUserBestEffort(authProviderId);
+            throw dbFailure;
+        }
 
         return SignupResponse.from(savedMember);
     }
@@ -135,7 +152,7 @@ public class MemberServiceImpl implements MemberService {
                 //   프론트 연동 후 SocialProfileRequest @NotNull 복구 + null 기본처리 제거.
                 .termsAgreed(request.getTermsAgreed() == null || request.getTermsAgreed())
                 .privacyAgreed(request.getPrivacyAgreed() == null || request.getPrivacyAgreed())
-                .consentAgreedAt(LocalDateTime.now())
+                .consentAgreedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
 
         // saveAndFlush로 INSERT를 이 메서드 안에서 강제해, 위 existsBy를 통과한 동시 호출 race의 UNIQUE 위반
@@ -182,19 +199,25 @@ public class MemberServiceImpl implements MemberService {
 
         // 가입 여부 노출 방지(보안): 미가입 이메일이어도 예외/다른 응답 없이 조용히 종료한다.
         // (공격자가 응답 차이로 "이 이메일 가입돼 있나"를 알아내지 못하게 — 호출 측은 항상 200을 받는다.)
-        if (!memberRepository.existsByEmail(email)) {
+        // 회원을 "조회"해 저장 이메일(가입 당시 표기)을 쓴다(11D member-idp-3): MySQL 기본 collation은
+        // 대소문자 무시라 혼합 케이스 입력으로도 회원이 찾아지는데, 입력값을 그대로 토큰에 실으면 재설정
+        // 단계의 IdP username "정확 일치" 조회(changePassword)가 0건이 되어 500으로 깨진다. IdP username은
+        // 가입 표기와 byte-exact 동일하므로 토큰·발송 모두 저장 이메일로 통일한다.
+        Optional<Member> member = memberRepository.findByEmail(email);
+        if (member.isEmpty()) {
             return;
         }
+        String canonicalEmail = member.get().getEmail();
 
         // 일회용 재설정 토큰 생성 → Redis에 TTL 저장(토큰→email). 만료는 Redis가 자동 처리.
         String token = UUID.randomUUID().toString();
-        passwordResetTokenStore.save(token, email);
+        passwordResetTokenStore.save(token, canonicalEmail);
 
         // 재설정 링크를 메일로 발송. 링크는 프론트 비번재설정 페이지로 향한다(토큰을 쿼리로 전달).
         // 유효 시간 문구는 토큰 TTL 단일 출처에서 가져온다(MEM-08 — 리터럴 분리로 인한 불일치 방지).
         String link = passwordResetBaseUrl + "?token=" + token;
         emailSender.send(
-                email,
+                canonicalEmail,
                 "[Global Bridge] 비밀번호 재설정 안내",
                 "아래 링크에서 비밀번호를 재설정해주세요(" + passwordResetTokenStore.ttlMinutes()
                         + "분 내 유효):\n\n" + link

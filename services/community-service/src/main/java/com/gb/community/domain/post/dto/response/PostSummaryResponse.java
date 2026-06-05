@@ -15,6 +15,13 @@ import lombok.Getter;
  *
  * <p>작성자 표시 정보(닉네임)는 {@link MemberInfo}(MemberClient 조회 결과)에서 가져온다 —
  * MSA 경계 회원 참조라 DB 직접 SELECT 없이 client로 받는다(CLAUDE.md §7).
+ *
+ * <p>{@code is_author}는 "요청자 == 작성자" 여부 — 프론트가 수정·삭제 버튼 노출을 판단한다.
+ * 작성자 public_id를 응답에 노출하지 않고 서버가 비교 결과만 내린다. 필드 타입을 boxed
+ * {@code Boolean}으로 둔 이유: primitive {@code boolean isAuthor}면 Lombok 게터가 {@code isAuthor()}
+ * → Jackson 프로퍼티 {@code author}로 'is'가 떨어져 {@code author}로 직렬화되는 함정이 있다.
+ * Boolean이면 게터가 {@code getIsAuthor()} → 프로퍼티 {@code isAuthor} → snake_case {@code is_author}.
+ * (인증 필수 API라 값은 항상 채워진다 — null 의미 없음.)
  */
 @Getter
 public class PostSummaryResponse {
@@ -26,7 +33,7 @@ public class PostSummaryResponse {
     private final String publicId;
 
     @Schema(description = "카테고리", example = "JOB",
-            allowableValues = {"LIFE_INFO", "JOB", "VISA", "COUNTRY", "RESIDENCE", "QUESTION"})
+            allowableValues = {"LIFE_INFO", "JOB", "VISA", "COUNTRY", "RESIDENCE", "QUESTION", "FREE"})
     private final String category;
 
     @Schema(description = "제목", example = "시급 9,000원 받고 일했는데 최저임금 미달인가요?")
@@ -37,6 +44,9 @@ public class PostSummaryResponse {
 
     @Schema(description = "작성자 닉네임", example = "Minh")
     private final String authorNickname;
+
+    @Schema(description = "요청자가 작성자 본인인지 여부(수정·삭제 버튼 노출 판단용)", example = "false")
+    private final Boolean isAuthor;
 
     @Schema(description = "좋아요 수", example = "3")
     private final Integer likeCount;
@@ -49,25 +59,31 @@ public class PostSummaryResponse {
 
     @Builder
     private PostSummaryResponse(String publicId, String category, String title, String contentPreview,
-                               String authorNickname,
+                               String authorNickname, Boolean isAuthor,
                                Integer likeCount, Integer commentCount, String createdAt) {
         this.publicId = publicId;
         this.category = category;
         this.title = title;
         this.contentPreview = contentPreview;
         this.authorNickname = authorNickname;
+        this.isAuthor = isAuthor;
         this.likeCount = likeCount;
         this.commentCount = commentCount;
         this.createdAt = createdAt;
     }
 
-    public static PostSummaryResponse from(Post post, MemberInfo author) {
+    /**
+     * @param requesterUserPublicId 요청자(인증 JWT public_id). 작성자와 비교해 {@code is_author}를 계산한다 —
+     *                              수정/삭제의 {@code verifyOwner}와 동일한 public_id equals 비교.
+     */
+    public static PostSummaryResponse from(Post post, MemberInfo author, String requesterUserPublicId) {
         return PostSummaryResponse.builder()
                 .publicId(post.getPublicId())
                 .category(post.getCategory().name())
                 .title(post.getTitle())
                 .contentPreview(preview(post.getContent()))
                 .authorNickname(author.nickname())
+                .isAuthor(post.getUserPublicId().equals(requesterUserPublicId))
                 .likeCount(post.getLikeCount())
                 .commentCount(post.getCommentCount())
                 .createdAt(UtcTime.toUtcZ(post.getCreatedAt()))

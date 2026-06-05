@@ -28,7 +28,7 @@ public class LikedPostSummaryResponse {
     private final String publicId;
 
     @Schema(description = "카테고리", example = "JOB",
-            allowableValues = {"LIFE_INFO", "JOB", "VISA", "COUNTRY", "RESIDENCE", "QUESTION"})
+            allowableValues = {"LIFE_INFO", "JOB", "VISA", "COUNTRY", "RESIDENCE", "QUESTION", "FREE"})
     private final String category;
 
     @Schema(description = "제목", example = "시급 9,000원 받고 일했는데 최저임금 미달인가요?")

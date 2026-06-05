@@ -16,7 +16,7 @@ public interface QnaService {
      * <p>{@code category} 동작 (api-spec §8 명세 모호성 해석안 A):
      * <ul>
      *   <li>null/blank → {@code QUESTION} 카테고리만 반환 (명세 "category = QUESTION 필터")</li>
-     *   <li>값 있음 (LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION) → 해당 카테고리만 반환
+     *   <li>값 있음 (LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION/FREE) → 해당 카테고리만 반환
      *       (명세 "상위 카테고리 필터")</li>
      * </ul>
      * 잘못된 카테고리 값은 {@code COMMON4001}. {@code size}는 컨트롤러가 1~100 가드한다.

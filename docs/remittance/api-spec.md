@@ -173,8 +173,8 @@
 ## 5. 송금 사전 검증
 
 - 앱 사용자 검증: `GET /api/v1/transfers/validate-member?email={}` → `data: { receiver_public_id, nickname, is_verified }`
-- 송금 PIN 설정: `POST /api/v1/transfers/pin` (Body: `{ "pin": "123456" }`, 숫자 6자리) → 201. 형식 오류 `COMMON4001`, 이미 설정됨 `COMMON4091`. (방식 B라 계정 비밀번호는 IdP가 보유 → 송금 본인확인은 별도 송금 PIN 6자리로 한다.)
-- 송금 PIN 검증: `POST /api/v1/transfers/pin-verify` (Body: `{ "pin": "123456" }`) → 200. 불일치 `TRANSFER4007`, 미설정 `TRANSFER4009`, 5회 연속 실패 시 10분 잠금 `TRANSFER4008`(429). **요청 빈도 초과 시 `COMMON4291`(429) — 사용자 단위 rate-limit(`ratelimit:pin-verify:{user}`, 기본 60초/10회)로 무차별 대입 버스트를 캡한다(wallet-pin-redis-1). 잠금(TRANSFER4008)과 별개 장치.** 성공해야 송금 실행(§6)으로 진행. **검증 성공 시 서버가 단명·단일사용 마커(`pin:verified:{userPublicId}`, TTL 180초)를 남기고, 송금 실행(§6)·정기송금 설정(§7-2-2)이 이를 원자 소비(GETDEL)해야 진행한다(TX-PIN, 서버측 강제). 1회 검증 = 1회 인가** — 송금 직전 다시 검증해야 한다. Redis 장애 시 fail-closed(송금 차단).
+- 송금 PIN 설정: `POST /api/v1/transfers/pin` (Body: `{ "pin": "123456" }`, 숫자 6자리) → 201. 형식 오류 `COMMON4001`, 이미 설정됨 `COMMON4091`, 비활성 지갑 `WALLET4003`(422 — status≠ACTIVE 시 PIN 설정 차단, WTX-05). (방식 B라 계정 비밀번호는 IdP가 보유 → 송금 본인확인은 별도 송금 PIN 6자리로 한다.)
+- 송금 PIN 검증: `POST /api/v1/transfers/pin-verify` (Body: `{ "pin": "123456" }`) → 200. 불일치 `TRANSFER4007`, 미설정 `TRANSFER4009`, 5회 연속 실패 시 10분 잠금 `TRANSFER4008`(429). **요청 빈도 초과 시 `COMMON4291`(429) — 사용자 단위 rate-limit(`ratelimit:pin-verify:{user}`, 기본 60초/5회 — 단기 잠금 임계(5회)와 동일하게 캡해 비원자 잠금 경로의 동시 버스트 추측이 임계를 넘지 못하게 한다, 10D wallet-pin-redis-2)로 무차별 대입 버스트를 캡한다(wallet-pin-redis-1). 잠금(TRANSFER4008)과 별개 장치.** 성공해야 송금 실행(§6)으로 진행. **검증 성공 시 서버가 단명·단일사용 마커(`pin:verified:{userPublicId}`, TTL 180초)를 남기고, 송금 실행(§6)·정기송금 설정(§7-2-2)이 이를 원자 소비(GETDEL)해야 진행한다(TX-PIN, 서버측 강제). 1회 검증 = 1회 인가** — 송금 직전 다시 검증해야 한다. Redis 장애 시 fail-closed(송금 차단).
 
 ---
 
@@ -677,7 +677,7 @@ wallet:
 | --- | --- | --- | --- |
 | `quote_public_id` | string | N | 견적 UUID (실행 시 사용) |
 | `exchange_rate` | string | N | "1 외화→KRW" |
-| `fee` | string | N | 수수료 (KRW 기준) |
+| `fee` | string | N | 수수료 (KRW 기준). 신청 금액의 KRW 환산액 × **0.5%**(소수 4자리 HALF_UP, `wallet.exchange.fee-rate`로 외부화). ⚠️ 비율은 명세 확정 전 임시 값(§4 송금 수수료와 동일 caveat) |
 | `fee_currency_code` | string | N | 수수료 통화 |
 | `receive_amount` | string | N | 예상 수령액 |
 | `receive_currency_code` | string | N | 수령 통화 |
@@ -716,6 +716,7 @@ wallet:
 | 401 | AUTH4011 | 인증이 필요합니다. |
 | 403 | COMMON4031 | 접근 권한이 없습니다. (타인이 발급한 견적(quote_public_id)으로 환전 실행 시도 — 견적 소유자 불일치, 견적 탈취/소비 DoS 차단) |
 | 404 | EXCHANGE4001 | 존재하지 않는 환전 내역입니다. |
+| 404 | WALLET4001 | 존재하지 않는 지갑입니다. (요청자 지갑 부재 — 방어 경로) |
 | 422 | WALLET4002 | 지갑 잔액이 부족합니다. |
 | 422 | WALLET4003 | 비활성 지갑입니다. (지갑 status≠ACTIVE — SUSPENDED/CLOSED. 잔액 변경 전 차단 — 충전/송금과 대칭) |
 
@@ -736,6 +737,7 @@ wallet:
 - 계좌 연결+자동이체 인증 요청: `POST /api/v1/accounts/verify` (※ Mock/화면용. 실제 인증 미구현). 응답으로 `account_token`만 반환한다(§13 은행 연동·`VerifyAccountResponse` 정본). 예금주 실명은 위 `GET /api/v1/accounts/holder`로 받는다.
 - 계좌 등록 최종 완료: `POST /api/v1/accounts` → 201, `bank_accounts` INSERT
     - **Body 필수 필드**: `bank_code`, `account_number`, `account_token`(verify 응답), **`holder_name`(`GET /accounts/holder` 응답의 `account_holder_name`을 그대로 전달, 최대 100자)**.
+    - **`account_token`은 받기만 하고 신뢰·저장하지 않는다** — 서버가 은행 verify를 재호출해 직접 발급받은 토큰을 저장한다(토큰-계좌 바인딩 보장, `holder_name` vestigial 패턴과 동일 — §13-2, 10D wallet-account-charge-3).
     - holder_name은 REMITTANCE 송금 시 `Transaction.receiverName`에 snapshot되어 송금 확인증의 `receiver_name` 출처가 된다(외부 신뢰 source, 사용자 임의 입력 금지).
 - 주 계좌 변경: `PATCH /api/v1/accounts/{id}/primary` → 200, 변경된 `AccountResponse`. 이미 주 계좌면 부수효과 없이 **멱등 200**.
 - 계좌 삭제: `DELETE /api/v1/accounts/{id}` → 200, `data:null` (soft-delete, `is_active=false`).
@@ -808,9 +810,12 @@ wallet:
 [계좌 등록]
 POST /accounts/verify
   → Mock: POST /bank/accounts/verify { bank_code, account_number, holder_name }
-  → Mock 응답: { account_token, ... }
+  → Mock 응답: { account_token, ... }   (화면 흐름용 — 클라가 register Body로 되돌려 보낸다)
 POST /accounts (등록 확정)
-  → bank_accounts INSERT, mock_account_token = 받은 account_token 저장
+  → 본체가 Mock verify를 "재호출"해 토큰을 직접 재발급받는다(클라가 보낸 account_token은
+    Body 호환을 위해 받기만 하고 신뢰·저장하지 않는다 — 토큰-계좌 바인딩 보장,
+    holder_name vestigial 패턴과 동일. 10D wallet-account-charge-3)
+  → bank_accounts INSERT, mock_account_token = 서버가 재발급받은 account_token 저장
 
 [충전 실행]
 POST /accounts/{id}/charge { amount }

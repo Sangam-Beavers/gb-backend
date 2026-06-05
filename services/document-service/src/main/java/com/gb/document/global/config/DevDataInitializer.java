@@ -12,6 +12,7 @@ import com.gb.document.domain.document.repository.DocumentRepository;
 import com.gb.document.domain.document.repository.DocumentResultRepository;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -87,7 +88,7 @@ public class DevDataInitializer implements ApplicationRunner {
                 .translatedText("번역된 본문(데모).")
                 .translatedLang("ko")
                 .s3MaskedKey("masked/demo-masked.png")
-                .completedAt(LocalDateTime.now())
+                .completedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build());
 
         log.info("[dev-seed] 완료 데모 문서 + 결과 시드 완료 ({})", DEMO_DOCUMENT_PUBLIC_ID);

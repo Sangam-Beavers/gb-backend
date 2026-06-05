@@ -63,7 +63,8 @@ public class PostController {
             summary = "게시글 목록·검색",
             description = "category(선택)·keyword(선택, 제목·본문 검색)·sort(latest/popular/accuracy)로 "
                     + "필터·정렬해 페이지네이션한다. 삭제된 글은 제외된다. "
-                    + "이 API는 본인 식별을 쓰지 않지만 인증은 필요하다.")
+                    + "각 항목의 is_author는 요청자(JWT public_id)와 작성자 일치 여부 — "
+                    + "프론트의 수정·삭제 버튼 노출 판단용.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -86,6 +87,7 @@ public class PostController {
     })
     @GetMapping
     public ApiResponse<PostListResponse> getPosts(
+            @CurrentUserPublicId String userPublicId,
             @RequestParam(required = false) String category,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false, defaultValue = "latest") String sort,
@@ -93,13 +95,14 @@ public class PostController {
             @RequestParam(defaultValue = "0") @Min(0) @Max(10000) int page,
             // size 상한(100)은 명세에 없지만 과도한 조회를 막는 방어적 가드.
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
-        return ApiResponse.success(postService.getPosts(category, keyword, sort, page, size));
+        return ApiResponse.success(postService.getPosts(userPublicId, category, keyword, sort, page, size));
     }
 
     /** 게시글 단건 조회. 🔒 JWT 필요. */
     @Operation(
             summary = "게시글 단건 조회",
             description = "게시글 public_id로 본문 + 작성자(닉네임/인증배지) + 카운트를 반환한다. "
+                    + "is_author는 요청자(JWT public_id)와 작성자 일치 여부 — 수정·삭제 버튼 노출 판단용. "
                     + "삭제됐거나 없는 글이면 404 COMMUNITY4001.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -128,8 +131,9 @@ public class PostController {
     })
     @GetMapping("/{id}")
     public ApiResponse<PostDetailResponse> getPost(
+            @CurrentUserPublicId String userPublicId,
             @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId) {
-        return ApiResponse.success(postService.getPost(postPublicId));
+        return ApiResponse.success(postService.getPost(userPublicId, postPublicId));
     }
 
     /** 게시글 작성. 🔒 JWT 필요. */

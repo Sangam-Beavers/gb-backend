@@ -112,6 +112,25 @@ class TransferControllerTest {
     }
 
     @Test
+    @DisplayName("POST /transfers 400: amount 정수부 14자리 초과 → @Pattern 위반 → COMMON4001, Service 미호출 (DECIMAL(18,4) overflow 500 차단)")
+    void executeTransfer_amount_정수부_14자리_초과_COMMON4001() throws Exception {
+        // 정수부 15자리 — DECIMAL(18,4) 한도(정수 14자리) 초과 금액이 DB까지 흘러가 500(DataIntegrity)이
+        // 나지 않도록 입력단(@Pattern \d{1,14})에서 COMMON4001(400)로 끊는다(10D wallet-transfer-2).
+        Map<String, Object> body = validBody("999999999999999.0000");
+
+        mockMvc.perform(post("/api/v1/transfers")
+                        .with(authedJwt())
+                        .header("Idempotency-Key", KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verify(transferService, never()).execute(any(), any(), any());
+    }
+
+    @Test
     @DisplayName("POST /transfers 400: INTERNAL receiver_public_id 누락 → COMMON4001 (TX1: 검증이 @Valid→도메인으로 이동, 서비스 도달 후 차단)")
     void executeTransfer_receiverPublicId_누락_COMMON4001() throws Exception {
         Map<String, Object> body = validBody("10000.0000");

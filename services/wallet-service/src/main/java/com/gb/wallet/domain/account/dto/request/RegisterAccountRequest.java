@@ -10,6 +10,9 @@ import lombok.NoArgsConstructor;
  * {@code POST /api/v1/accounts} 요청 본문.
  *
  * <p>{@code accountToken}은 직전 {@code POST /accounts/verify} 응답으로 받은 값을 그대로 전달한다.
+ * 단 서버는 이 값을 <b>신뢰·저장하지 않는다</b> — 등록 시 은행 verify를 재호출해 직접 발급받은 토큰을
+ * 저장한다(10D wallet-account-charge-3, 토큰-계좌 바인딩 보장). 필드는 명세 §11 Body 호환을 위해
+ * 받기만 한다({@code holderName}과 동일한 vestigial 패턴 — WACC-05).
  * 주 계좌(is_primary) 지정은 본 등록 API에서 받지 않는다 — 사용자의 첫 활성 계좌면 서비스가 자동으로
  * true로 설정하고, 그 외 변경은 명세 §11의 {@code PATCH /api/v1/accounts/{id}/primary}로만 한다.
  * 이렇게 분리해야 등록 흐름에서 다중 주 계좌(같은 사용자에 활성 is_primary=true가 둘 이상)가

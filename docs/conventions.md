@@ -70,7 +70,10 @@
 | 인증 없음 (토큰 없음/만료) | 401 |
 | 권한 없음 (본인 것 아님) | 403 |
 | 리소스 없음 | 404 |
+| 허용되지 않은 HTTP 메서드 | 405 |
+| 응답 콘텐츠 협상 실패 (Accept 불일치) | 406 |
 | 중복 (리소스 이미 존재) | 409 |
+| 지원하지 않는 요청 본문 형식 (Content-Type) | 415 |
 | 처리 불가 (의미상 처리 불능) | 422 |
 | Rate limit 초과 | 429 |
 | 서버 에러 | 500 |
@@ -89,6 +92,7 @@
 - 응답 필드에서 식별자는 `public_id`로 명명. 벤더 접두사(`tx-`, `ex_`, `qt_` 등) 붙이지 않는다.
 - **통화 필드는 `_code` 접미사**: `currency_code`, `from_currency_code`, `to_currency_code`, `receive_currency_code`, `fee_currency_code`
 - **시각은 ISO 8601 UTC `Z`**: `"2026-05-25T12:00:00Z"`
+  - **저장(DATETIME 컬럼)도 UTC 기준으로 캡처한다** — JPA Auditing은 각 서비스 JpaConfig의 `utcDateTimeProvider`, 비감사 캡처는 `LocalDateTime.now(ZoneOffset.UTC)`로 통일(4서비스 공통, 10D member-core-4·community-3). 직렬화의 "저장값 = UTC" 간주가 JVM 기본존과 무관하게 항상 참이 되게 한다. 예외: 정기송금 영업일(`next_run_date` 등 LocalDate)은 사용자 체감 실행일 정책으로 의도적 KST(`NextRunDateCalculator.ZONE_KST`).
 - 액션이 필요하면 동사를 마지막에: `/transfers/{id}/execute`, `/members/check-email`
   - ❌ URL에 동사 앞세우기: `/getWallet`, `/cancelTransfer`
 - **JSON 필드는 snake_case.** 단, DTO 자바 필드는 **camelCase로 두고** 전역 설정으로 변환한다. 필드마다 `@JsonProperty`를 붙이지 않는다.
@@ -154,8 +158,11 @@
 | `COMMON4002` | 400 | 필수 입력 항목이 누락되었습니다. |
 | `COMMON4011` | 401 | 인증 정보가 유효하지 않습니다. (토큰 검증 실패는 `AUTH4011`로 통일 — 아래 AUTH 표. 본 코드는 호환 유지) |
 | `COMMON4031` | 403 | 접근 권한이 없습니다. |
-| `COMMON4041` | 404 | 존재하지 않는 리소스입니다. (도메인 코드가 없을 때 공통 사용) |
+| `COMMON4041` | 404 | 존재하지 않는 리소스입니다. (도메인 코드가 없을 때 공통 사용. 매핑되지 않은 경로 호출도 GlobalExceptionHandler가 이 코드로 응답) |
+| `COMMON4051` | 405 | 허용되지 않은 HTTP 메서드입니다. (GlobalExceptionHandler 전용 분기 — 과거 catch-all 500 오인 제거, 10D common-modules-1) |
+| `COMMON4061` | 406 | 응답할 수 없는 Accept 형식입니다. (콘텐츠 협상 실패. Accept가 JSON조차 거부하면 본문 없이 상태만 응답될 수 있음) |
 | `COMMON4091` | 409 | 이미 존재하는 리소스입니다. (멱등성 키 중복 시에는 에러 없이 첫 응답 재반환) |
+| `COMMON4151` | 415 | 지원하지 않는 요청 본문 형식입니다. (Content-Type 불일치) |
 | `COMMON4221` | 422 | 처리할 수 없는 요청입니다. |
 | `COMMON4291` | 429 | 요청 횟수를 초과했습니다. 잠시 후 다시 시도해주세요. |
 | `COMMON5000` | 500 | 서버 오류가 발생했습니다. (미처리 예외 전부 — GlobalExceptionHandler 기본값) |
@@ -206,7 +213,7 @@
 | `TRANSFER4005` | 400 | 지원하지 않는 통화 조합입니다. (다통화 송금 — 1단계 미지원, 후속 구현 예정) |
 | `TRANSFER4006` | 429 | 송금 요청 횟수를 초과했습니다. (user 단위 rate-limit — 기본 60초 윈도 / 30회) |
 | `TRANSFER4007` | 400 | 송금 PIN이 일치하지 않습니다. |
-| `TRANSFER4008` | 429 | 송금 PIN 입력 횟수를 초과했습니다. 잠시 후 다시 시도해주세요. (5회 연속 실패 시 10분 잠금) |
+| `TRANSFER4008` | 429 | 송금 PIN 입력 횟수를 초과해 일시적으로 잠겨 있습니다. (5회 연속 실패 시 10분 잠금, 24h 누적 15회 시 24h 잠금 — 단기·장기가 코드 공유라 잠금 시간 무관 메시지로 일반화, WSCH-06) |
 | `TRANSFER4009` | 400 | 송금 PIN이 설정되지 않았습니다. |
 | `TRANSFER4010` | 428 | 송금 전 PIN 검증이 필요합니다. (TX-PIN — `pin-verify` 성공 마커 없이 송금 실행/정기송금 설정 호출. 서버측 단명 마커(`pin:verified:{user}`, 단일사용)로 강제) |
 
@@ -251,7 +258,7 @@
 | `identity_document_type` (신분증) | `ALIEN_REGISTRATION` / `PASSPORT` / `NATIONAL_ID` |
 | `processing_status` (분석) | `COMPLETED` / `FAILED` / `PARTIAL` |
 | `overall_risk_level` / `risk_level` | `LOW` / `MEDIUM` / `HIGH` |
-| `category` (커뮤니티) | `LIFE_INFO` / `JOB` / `VISA` / `COUNTRY` / `RESIDENCE` / `QUESTION` |
+| `category` (커뮤니티) | `LIFE_INFO` / `JOB` / `VISA` / `COUNTRY` / `RESIDENCE` / `QUESTION` / `FREE` |
 
 > ⚠️ **`document_type` 단일 필드명 금지.** 도메인별로 분리:
 > 신분증 인증 = `identity_document_type`, AI 서류 분석 = `analysis_document_type`.

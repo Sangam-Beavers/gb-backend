@@ -115,13 +115,22 @@ public class BankAccountServiceImpl implements BankAccountService {
             throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
         }
 
+        // 10D wallet-account-charge-3 — 저장 토큰은 클라이언트 입력(request.getAccountToken())이 아니라 서버가
+        //   은행 verify를 재호출해 직접 발급받은 값을 쓴다. 클라 토큰을 그대로 저장하면 토큰-계좌 바인딩을
+        //   확인할 길이 없다(다른 계좌의 토큰·위조 토큰이 첫 충전의 BANK4010까지 잠복). 예금주명은 은행 권위
+        //   값(inquiry)이므로 이 verify는 정상 계좌면 항상 통과한다. (request.accountToken 필드는 명세 §11 Body
+        //   호환을 위해 받기만 하고 신뢰하지 않는다 — holderName과 동일한 vestigial 패턴, WACC-05.)
+        //   F1과 동일하게 외부 HTTP는 락/트랜잭션 밖에서 호출한다.
+        String accountToken = bankClient.verify(
+                request.getBankCode(), request.getAccountNumber(), holderName).accountToken();
+
         RLock lock = distributedLockHelper.tryLock(REGISTER_LOCK_KEY_PREFIX + userPublicId);
         if (lock == null) {
             // 락 획득 실패 → 503(fail-closed): "잠깐 거부"가 "조용히 중복 생성"보다 안전.
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
         try {
-            return self.registerAccountLocked(userPublicId, request, bank, holderName);
+            return self.registerAccountLocked(userPublicId, request, bank, holderName, accountToken);
         } finally {
             // 락 보유자가 본인인 경우에만 해제(lease 만료로 다른 스레드가 가진 경우 안전).
             if (lock.isHeldByCurrentThread()) {
@@ -133,7 +142,7 @@ public class BankAccountServiceImpl implements BankAccountService {
     @Override
     @Transactional
     public AccountResponse registerAccountLocked(String userPublicId, RegisterAccountRequest request,
-                                                 Bank bank, String holderName) {
+                                                 Bank bank, String holderName, String accountToken) {
         // 1차 방어: 활성 중복 계좌 선검사(흔한 경로를 깔끔히 ACCOUNT4004로). 동시성 최종 안전망은 아래 (user,
         //   bank, account_number) 부분 UNIQUE(prod, WACC-06)와 분산락이 함께 담당한다.
         if (bankAccountRepository.existsByUserPublicIdAndBank_CodeAndAccountNumberAndIsActiveTrue(
@@ -156,7 +165,8 @@ public class BankAccountServiceImpl implements BankAccountService {
                 .bank(bank)
                 .accountNumber(request.getAccountNumber())
                 .holderName(holderName)
-                .mockAccountToken(request.getAccountToken())
+                // 서버가 verify 재호출로 발급받은 토큰(클라 입력 아님 — charge-3). 호출자가 락 밖에서 확정해 넘긴다.
+                .mockAccountToken(accountToken)
                 .isVirtual(false)
                 .isPrimary(isPrimary)
                 .isActive(true)

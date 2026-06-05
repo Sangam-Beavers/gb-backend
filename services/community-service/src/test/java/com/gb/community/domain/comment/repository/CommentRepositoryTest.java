@@ -23,8 +23,8 @@ import org.springframework.test.context.ActiveProfiles;
 /**
  * {@link CommentRepository#findByPostAndDeletedAtIsNull} 검증 — 인메모리 H2(MySQL 호환 모드).
  *
- * <p>핵심은 작성순(createdAt ASC) 정렬·페이지네이션뿐 아니라 <b>필터링</b>(삭제 댓글·다른 게시글 댓글이
- * 결과에서 빠지는지)이다(CLAUDE.md §10 — 제외돼야 할 데이터가 안 나오는지 검증).
+ * <p>핵심은 최신순(createdAt DESC — 운영 정렬과 동일) 정렬·페이지네이션뿐 아니라 <b>필터링</b>(삭제 댓글·다른
+ * 게시글 댓글이 결과에서 빠지는지)이다(CLAUDE.md §10 — 제외돼야 할 데이터가 안 나오는지 검증).
  *
  * <p>{@code created_at}는 persist 후 native UPDATE로 직접 박는다 — {@code @CreatedDate}는 persist 시
  * now()로 채워질 수 있어, 정렬을 결정적으로 만들기 위함(PostRepositoryTest와 동일 기법).
@@ -44,13 +44,14 @@ class CommentRepositoryTest {
     private static final String U2 = "00000000-0000-0000-0000-000000000002";
     private static final String U3 = "00000000-0000-0000-0000-000000000003";
 
-    // 작성 시각 — 일 단위로 벌려 작성순(ASC) 의도를 분명히 한다.
+    // 작성 시각 — 일 단위로 벌려 정렬 의도를 분명히 한다.
     private static final LocalDateTime T1 = LocalDateTime.of(2026, 5, 21, 10, 0); // 가장 과거
     private static final LocalDateTime T2 = LocalDateTime.of(2026, 5, 22, 10, 0);
     private static final LocalDateTime T3 = LocalDateTime.of(2026, 5, 23, 10, 0); // 가장 최근
     private static final LocalDateTime T4 = LocalDateTime.of(2026, 5, 24, 10, 0);
 
-    private static final Sort OLDEST_FIRST = Sort.by(Direction.ASC, "createdAt", "id");
+    /** 운영 정렬과 동일한 최신순(CommentServiceImpl.getComments — createdAt DESC, id DESC tie-break). */
+    private static final Sort NEWEST_FIRST = Sort.by(Direction.DESC, "createdAt", "id");
 
     private Post target;  // 조회 대상 게시글
     private Post other;   // 다른 게시글 — 이 글의 댓글은 target 조회에서 빠져야 함
@@ -80,14 +81,14 @@ class CommentRepositoryTest {
     }
 
     @Test
-    @DisplayName("작성순(ASC) 조회: target의 활성 댓글만 createdAt ASC — 삭제 댓글·다른 글 댓글 제외")
-    void 작성순_정렬_필터() {
+    @DisplayName("최신순(DESC) 조회: target의 활성 댓글만 createdAt DESC — 삭제 댓글·다른 글 댓글 제외")
+    void 최신순_정렬_필터() {
         Page<Comment> page =
-                commentRepository.findByPostAndDeletedAtIsNull(target, PageRequest.of(0, 20, OLDEST_FIRST));
+                commentRepository.findByPostAndDeletedAtIsNull(target, PageRequest.of(0, 20, NEWEST_FIRST));
 
-        // createdAt ASC → c1(T1), c2(T2), c3(T3). id 순서(c2<c3<c1)와 다름을 확인해 createdAt 정렬임을 입증.
+        // createdAt DESC → c3(T3), c2(T2), c1(T1). id 순서(c2<c3<c1)와 다름을 확인해 createdAt 정렬임을 입증.
         assertThat(page.getContent()).extracting(Comment::getPublicId)
-                .containsExactly(c1.getPublicId(), c2.getPublicId(), c3.getPublicId());
+                .containsExactly(c3.getPublicId(), c2.getPublicId(), c1.getPublicId());
         assertThat(page.getTotalElements()).isEqualTo(3); // 삭제 댓글(cDeleted)·다른 글(cOther) 제외
         assertThat(page.getContent()).extracting(Comment::getContent)
                 .doesNotContain("삭제된 댓글", "다른 글 댓글");
@@ -97,7 +98,7 @@ class CommentRepositoryTest {
     @DisplayName("게시글 스코프: other 게시글 조회는 그 글의 댓글(cOther)만 — target 댓글 제외")
     void 게시글_스코프_격리() {
         Page<Comment> page =
-                commentRepository.findByPostAndDeletedAtIsNull(other, PageRequest.of(0, 20, OLDEST_FIRST));
+                commentRepository.findByPostAndDeletedAtIsNull(other, PageRequest.of(0, 20, NEWEST_FIRST));
 
         assertThat(page.getContent()).extracting(Comment::getPublicId)
                 .containsExactly(cOther.getPublicId());
@@ -108,31 +109,31 @@ class CommentRepositoryTest {
     @DisplayName("댓글 없는 게시글: 빈 목록 + total 0")
     void 빈_목록() {
         Page<Comment> page =
-                commentRepository.findByPostAndDeletedAtIsNull(empty, PageRequest.of(0, 20, OLDEST_FIRST));
+                commentRepository.findByPostAndDeletedAtIsNull(empty, PageRequest.of(0, 20, NEWEST_FIRST));
 
         assertThat(page.getContent()).isEmpty();
         assertThat(page.getTotalElements()).isZero();
     }
 
     @Test
-    @DisplayName("페이지네이션: size=2, 작성순 — page0=[c1,c2], page1=[c3], total=3/2페이지")
+    @DisplayName("페이지네이션: size=2, 최신순 — page0=[c3,c2], page1=[c1], total=3/2페이지")
     void 페이지네이션() {
         Page<Comment> page0 =
-                commentRepository.findByPostAndDeletedAtIsNull(target, PageRequest.of(0, 2, OLDEST_FIRST));
+                commentRepository.findByPostAndDeletedAtIsNull(target, PageRequest.of(0, 2, NEWEST_FIRST));
         assertThat(page0.getContent()).extracting(Comment::getPublicId)
-                .containsExactly(c1.getPublicId(), c2.getPublicId());
+                .containsExactly(c3.getPublicId(), c2.getPublicId());
         assertThat(page0.getTotalElements()).isEqualTo(3);
         assertThat(page0.getTotalPages()).isEqualTo(2);
         assertThat(page0.getNumber()).isZero();
 
         Page<Comment> page1 =
-                commentRepository.findByPostAndDeletedAtIsNull(target, PageRequest.of(1, 2, OLDEST_FIRST));
+                commentRepository.findByPostAndDeletedAtIsNull(target, PageRequest.of(1, 2, NEWEST_FIRST));
         assertThat(page1.getContent()).extracting(Comment::getPublicId)
-                .containsExactly(c3.getPublicId());
+                .containsExactly(c1.getPublicId());
     }
 
     @Test
-    @DisplayName("동률 tie-break: 같은 createdAt이면 id ASC로 결정적 정렬")
+    @DisplayName("동률 tie-break: 같은 createdAt이면 id DESC로 결정적 정렬(나중 INSERT 먼저)")
     void 동률_id_tie_break() {
         // 같은 시각(T2)에 작성된 댓글 2건을 추가 — createdAt 단독 정렬이면 순서가 비결정적.
         Comment a = persistComment(target, U1, "동시각 A", T2, false);
@@ -141,12 +142,12 @@ class CommentRepositoryTest {
         em.clear();
 
         Page<Comment> page =
-                commentRepository.findByPostAndDeletedAtIsNull(target, PageRequest.of(0, 20, OLDEST_FIRST));
+                commentRepository.findByPostAndDeletedAtIsNull(target, PageRequest.of(0, 20, NEWEST_FIRST));
 
-        // T2 동률(c2, a, b)은 id ASC. c2가 a/b보다 먼저 insert돼 id가 작으므로 c2 → a → b 순.
+        // T2 동률(c2, a, b)은 id DESC. insert 순서가 c2 → a → b(id 오름차순)이므로 역순인 b → a → c2 순.
         assertThat(page.getContent()).extracting(Comment::getPublicId)
-                .containsExactly(c1.getPublicId(), c2.getPublicId(), a.getPublicId(),
-                        b.getPublicId(), c3.getPublicId());
+                .containsExactly(c3.getPublicId(), b.getPublicId(), a.getPublicId(),
+                        c2.getPublicId(), c1.getPublicId());
     }
 
     @Test

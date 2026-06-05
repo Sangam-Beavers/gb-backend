@@ -16,13 +16,15 @@ import lombok.NoArgsConstructor;
 public class PostUpdateRequest {
 
     @Schema(description = "변경할 카테고리(선택)", example = "QUESTION",
-            allowableValues = {"LIFE_INFO", "JOB", "VISA", "COUNTRY", "RESIDENCE", "QUESTION"})
+            allowableValues = {"LIFE_INFO", "JOB", "VISA", "COUNTRY", "RESIDENCE", "QUESTION", "FREE"})
     private String category;
 
     @Schema(description = "변경할 제목(선택)", example = "제목을 수정합니다", maxLength = 255)
     @Size(max = 255)
     private String title;
 
-    @Schema(description = "변경할 본문(선택)", example = "본문을 수정합니다")
+    // 상한 10,000자 — 작성(PostCreateRequest)과 동일 정책(api-spec §2, 11D community-1).
+    @Schema(description = "변경할 본문(선택, 1~10,000자)", example = "본문을 수정합니다", maxLength = 10000)
+    @Size(max = 10000)
     private String content;
 }

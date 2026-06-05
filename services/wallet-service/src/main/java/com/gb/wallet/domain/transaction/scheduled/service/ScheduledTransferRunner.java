@@ -13,6 +13,7 @@ import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.redis.DistributedLockHelper;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -180,7 +181,9 @@ public class ScheduledTransferRunner {
         // 다음 회차 계산 — today 기준 다음 주기. "오늘 이미 지났음" 정책으로 자연스럽게 다음 주/달로.
         LocalDate next = nextRunDateCalculator.calculateFrom(
                 s.getFrequency(), s.getScheduleDay(), today);
-        s.markExecuted(LocalDateTime.now(), next);
+        // executedAt(타임스탬프)은 저장 시각 규약대로 UTC(10D 시각 통일, JpaConfig 참조).
+        // next(영업일 LocalDate)는 의도적으로 KST 기준 유지(ZONE_KST — 사용자 체감 실행일 정책)이며 별개 축.
+        s.markExecuted(LocalDateTime.now(ZoneOffset.UTC), next);
         // dirty checking으로 UPDATE — 본 메서드 종료 시 commit.
     }
 

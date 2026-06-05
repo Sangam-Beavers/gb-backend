@@ -16,12 +16,15 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class ProfileUpdateRequest {
 
-    @Schema(description = "닉네임", example = "global_neighbor")
+    // @Size 상한 = members 컬럼 길이(database.md §members SSOT, 11D member-core-1) — SignupRequest와 동일.
+    @Schema(description = "닉네임", example = "global_neighbor", maxLength = 50)
     @NotBlank(message = "닉네임은 필수입니다")
+    @Size(max = 50, message = "닉네임은 50자 이내여야 합니다")
     private String nickname;
 
-    @Schema(description = "주 사용 언어(BCP 47)", example = "ko")
+    @Schema(description = "주 사용 언어(BCP 47)", example = "ko", maxLength = 10)
     @NotBlank(message = "주 사용 언어는 필수입니다")
+    @Size(max = 10, message = "언어 코드는 10자 이내여야 합니다")
     private String language;
 
     @Schema(description = "자기소개(한 줄 소개). 선택값", nullable = true, example = "안녕하세요.")

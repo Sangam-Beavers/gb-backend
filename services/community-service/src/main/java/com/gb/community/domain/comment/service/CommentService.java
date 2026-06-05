@@ -3,6 +3,7 @@ package com.gb.community.domain.comment.service;
 import com.gb.community.domain.comment.dto.request.CreateCommentRequest;
 import com.gb.community.domain.comment.dto.response.CommentListResponse;
 import com.gb.community.domain.comment.dto.response.CommentResponse;
+import com.gb.community.domain.comment.entity.Comment;
 
 /**
  * 커뮤니티 댓글 비즈니스 로직 (api-spec §6·§7).
@@ -13,10 +14,11 @@ import com.gb.community.domain.comment.dto.response.CommentResponse;
 public interface CommentService {
 
     /**
-     * 특정 게시글의 댓글 목록 조회. 작성순(오래된 순)으로 정렬해 페이지네이션한다.
+     * 특정 게시글의 댓글 목록 조회. 최신순(최근 작성 순)으로 정렬해 페이지네이션한다.
      * 없거나 삭제된 게시글이면 COMMUNITY4001. 삭제된 댓글은 결과에서 제외한다.
+     * {@code requesterUserPublicId}는 항목별 {@code is_author}(요청자=작성자 여부) 계산에 쓴다.
      */
-    CommentListResponse getComments(String postPublicId, int page, int size);
+    CommentListResponse getComments(String postPublicId, String requesterUserPublicId, int page, int size);
 
     /**
      * 댓글 작성. {@code postPublicId}의 게시글에 본인({@code userPublicId}) 명의로 1건 INSERT하고
@@ -29,6 +31,18 @@ public interface CommentService {
      * SELECT는 MSA 경계 위반(CLAUDE.md §7).
      */
     CommentResponse createComment(String postPublicId, String userPublicId, CreateCommentRequest request);
+
+    /**
+     * 댓글 작성의 DB 본문(쓰기 트랜잭션). 활성 게시글 검증 → Comment INSERT → {@code comment_count} 원자
+     * 증가까지를 한 트랜잭션으로 묶고, 저장된 {@link Comment}를 반환한다.
+     *
+     * <p><b>self-proxy 전용</b> — {@link #createComment}가 프록시를 통해 호출해야 {@code @Transactional}이
+     * 적용된다(같은 빈 내부 직접 호출은 AOP 우회). 외부 MemberClient 호출(작성자 표시 정보)은 이 트랜잭션
+     * <b>밖</b>(createComment)에서 한다 — 쓰기 tx + posts 행 락(incrementCommentCount)을 보유한 채 HTTP를
+     * 기다리지 않기 위함(10D community-1, wallet registerAccountLocked와 동일 구조). 다른 컴포넌트에서
+     * 직접 호출하지 말 것.
+     */
+    Comment createCommentTx(String postPublicId, String userPublicId, CreateCommentRequest request);
 
     /**
      * 댓글 삭제(soft delete). 본인이 작성한 댓글만 삭제 가능하며, 게시글의 {@code comment_count}를

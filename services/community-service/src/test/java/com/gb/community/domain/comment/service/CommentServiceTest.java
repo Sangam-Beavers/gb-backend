@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -28,10 +29,12 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -46,7 +49,7 @@ import org.springframework.test.util.ReflectionTestUtils;
  * {@link CommentServiceImpl} 단위 테스트(Mockito). DB·Spring 컨텍스트 없이 조합/검증/예외를 본다.
  *
  * <p>검증 포인트: ① 없는 게시글이면 댓글 조회 전에 COMMUNITY4001(게시글 종속), ② 작성자 distinct 1회 조회,
- * ③ 빈 결과면 작성자 조회 없음, ④ Pageable에 작성순(createdAt ASC, id ASC)을 싣는지, ⑤ DTO 매핑.
+ * ③ 빈 결과면 작성자 조회 없음, ④ Pageable에 최신순(createdAt DESC, id DESC)을 싣는지, ⑤ DTO 매핑.
  */
 @ExtendWith(MockitoExtension.class)
 class CommentServiceTest {
@@ -55,6 +58,14 @@ class CommentServiceTest {
     @Mock private PostRepository postRepository;
     @Mock private MemberClient memberClient;
     @InjectMocks private CommentServiceImpl service;
+
+    @BeforeEach
+    void injectSelf() {
+        // 생성자 주입(@RequiredArgsConstructor)에선 @InjectMocks가 비-final self 필드를 채우지 않아 null.
+        // 단위 테스트는 프록시 없이 service 자신을 박아 createComment→createCommentTx 위임 체인을 그대로 탄다
+        // (@Transactional은 단위 테스트에서 no-op — wallet BankAccountServiceTest와 동일 처리).
+        ReflectionTestUtils.setField(service, "self", service);
+    }
 
     private static final String USER = "00000000-0000-0000-0000-000000000001";
     private static final String OTHER = "00000000-0000-0000-0000-000000000002";
@@ -69,7 +80,7 @@ class CommentServiceTest {
     void getComments_게시글없음() {
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.getComments(PID, 0, 20))
+        assertThatThrownBy(() -> service.getComments(PID, USER, 0, 20))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommunityErrorCode.POST_NOT_FOUND);
@@ -86,7 +97,7 @@ class CommentServiceTest {
         given(commentRepository.findByPostAndDeletedAtIsNull(any(), any()))
                 .willReturn(new PageImpl<>(List.of(), PageRequest.of(2, 5), 0));
 
-        CommentListResponse res = service.getComments(PID, 2, 5);
+        CommentListResponse res = service.getComments(PID, USER, 2, 5);
 
         assertThat(res.getComments()).isEmpty();
         assertThat(res.getTotalElements()).isZero();
@@ -96,7 +107,7 @@ class CommentServiceTest {
     }
 
     @Test
-    @DisplayName("Pageable에 작성순(createdAt ASC, id ASC) tie-break를 싣는다")
+    @DisplayName("Pageable에 최신순(createdAt DESC, id DESC) tie-break를 싣는다")
     void getComments_정렬_Pageable() {
         Post post = post(PID);
         ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
@@ -104,10 +115,10 @@ class CommentServiceTest {
         given(commentRepository.findByPostAndDeletedAtIsNull(any(), captor.capture()))
                 .willReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
 
-        service.getComments(PID, 0, 20);
+        service.getComments(PID, USER, 0, 20);
 
         assertThat(captor.getValue().getSort())
-                .containsExactly(Sort.Order.asc("createdAt"), Sort.Order.asc("id"));
+                .containsExactly(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
     }
 
     @Test
@@ -121,7 +132,7 @@ class CommentServiceTest {
                 .willReturn(new PageImpl<>(List.of(c1, c2), PageRequest.of(0, 20), 2));
         given(memberClient.getMembers(List.of(USER))).willReturn(Map.of(USER, MINH));
 
-        CommentListResponse res = service.getComments(PID, 0, 20);
+        CommentListResponse res = service.getComments(PID, USER, 0, 20);
 
         assertThat(res.getComments()).hasSize(2);
         assertThat(res.getTotalElements()).isEqualTo(2);
@@ -132,6 +143,7 @@ class CommentServiceTest {
         assertThat(first.getContent()).isEqualTo("첫 댓글");
         assertThat(first.getAuthorNickname()).isEqualTo("Minh");
         assertThat(first.isAuthorIsVerified()).isTrue();
+        assertThat(first.getIsAuthor()).isTrue(); // 요청자(USER)=작성자(USER)
         assertThat(first.getParentCommentPublicId()).isNull(); // 대댓글 미구현 — 항상 null
         assertThat(first.getCreatedAt()).isEqualTo("2026-05-26T04:15:30Z");
 
@@ -139,7 +151,7 @@ class CommentServiceTest {
     }
 
     @Test
-    @DisplayName("매핑: 작성자가 다르면 각각 1회 조회, 인증배지/닉네임 개별 매핑")
+    @DisplayName("매핑: 작성자가 다르면 각각 1회 조회, 인증배지/닉네임/is_author 개별 매핑")
     void getComments_다른작성자_매핑() {
         Post post = post(PID);
         Comment c1 = comment(post, USER, "a", LocalDateTime.of(2026, 5, 26, 4, 0, 0));
@@ -150,10 +162,12 @@ class CommentServiceTest {
         given(memberClient.getMembers(List.of(USER, OTHER)))
                 .willReturn(Map.of(USER, MINH, OTHER, SOKHA));
 
-        CommentListResponse res = service.getComments(PID, 0, 20);
+        CommentListResponse res = service.getComments(PID, USER, 0, 20);
 
+        assertThat(res.getComments().get(0).getIsAuthor()).isTrue();  // 본인(USER) 댓글
         assertThat(res.getComments().get(1).getAuthorNickname()).isEqualTo("Sokha");
         assertThat(res.getComments().get(1).isAuthorIsVerified()).isFalse();
+        assertThat(res.getComments().get(1).getIsAuthor()).isFalse(); // 타인(OTHER) 댓글
         verify(memberClient).getMembers(List.of(USER, OTHER));
     }
 
@@ -182,6 +196,7 @@ class CommentServiceTest {
         assertThat(resp.getContent()).isEqualTo("좋은 정보 감사합니다!");
         assertThat(resp.getAuthorNickname()).isEqualTo("Minh");
         assertThat(resp.isAuthorIsVerified()).isTrue();
+        assertThat(resp.getIsAuthor()).isTrue(); // 작성 응답은 요청자=작성자 — 항상 true
         assertThat(resp.getParentCommentPublicId()).as("대댓글 미지원 — 항상 null").isNull();
 
         // comment_count 증가는 DB 원자 UPDATE(incrementCommentCount) 호출로 검증(like_count와 동일)
@@ -206,6 +221,26 @@ class CommentServiceTest {
                 .isEqualTo(CommunityErrorCode.POST_NOT_FOUND);
 
         verifyNoInteractions(commentRepository, memberClient);
+    }
+
+    @Test
+    @DisplayName("createComment hoist(10D community-1): DB 본문(INSERT·count 증가)이 끝난 뒤에야 MemberClient를 호출하고, 회원 조회 실패가 본문을 막지 않는다")
+    void createComment_member조회는_tx본문_이후() {
+        // 외부 HTTP(MemberClient)가 쓰기 tx + posts 행 락 안에서 호출되지 않도록 분리한 구조의 회귀 가드:
+        // ① 호출 순서 save→incrementCommentCount→getMember, ② getMember가 던져도 save/increment는 이미 수행됨
+        //    (실제 커밋·롤백은 단위 범위 밖 — 프록시 tx가 분리돼 있어 본문 커밋은 보존된다).
+        Post post = post(PID);
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(commentRepository.save(any(Comment.class))).willAnswer(inv -> inv.getArgument(0));
+        given(memberClient.getMember(USER)).willThrow(new RuntimeException("member-service down"));
+
+        assertThatThrownBy(() -> service.createComment(PID, USER, createRequest("내용")))
+                .isInstanceOf(RuntimeException.class);
+
+        InOrder order = inOrder(commentRepository, postRepository, memberClient);
+        order.verify(commentRepository).save(any(Comment.class));
+        order.verify(postRepository).incrementCommentCount(post.getId());
+        order.verify(memberClient).getMember(USER);
     }
 
     private CreateCommentRequest createRequest(String content) {

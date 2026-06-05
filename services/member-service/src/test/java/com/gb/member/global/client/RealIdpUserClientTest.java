@@ -1,15 +1,20 @@
 package com.gb.member.global.client;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.anything;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
+import com.gb.member.global.exception.code.MemberErrorCode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
@@ -154,6 +159,25 @@ class RealIdpUserClientTest {
     }
 
     @Test
+    @DisplayName("11D member-idp-2 — provisionUser: 4xx 본문이 unique 위반이면 MEMBER4002(409)로 매핑(IdP 고아 진단 가능)")
+    void provisionUser_4xx_unique위반_MEMBER4002() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        RealIdpUserClient c = new RealIdpUserClient(
+                builder.build(), new ObjectMapper(), "http://localhost/dummy/api/v3", "test-admin-token");
+        // Authentik username(=email) 중복 응답 본문 형태 — 로컬 선점이 먼저 거르므로 이 응답은
+        // "IdP에만 사용자가 남은 상태"(프로비저닝 부분실패 고아 등)에서만 나온다.
+        server.expect(anything()).andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{\"username\":[\"This field must be unique.\"]}"));
+
+        assertThatThrownBy(() -> c.provisionUser("a@example.com", "홍길동", "P@ss1", "pub-1"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.EMAIL_ALREADY_EXISTS);
+    }
+
+    @Test
     @DisplayName("MEM-10 — provisionUser: IdP 사용자 생성이 5xx면 COMMON5000으로 매핑(연동 장애)")
     void provisionUser_5xx_COMMON5000() {
         RestClient.Builder builder = RestClient.builder();
@@ -166,5 +190,109 @@ class RealIdpUserClientTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INTERNAL_SERVER_ERROR);
+    }
+
+    // ──────────── 11D member-idp-1 — 프로비저닝 부분실패 보상 ────────────
+
+    @Test
+    @DisplayName("11D idp-1 — provisionUser: set_password 실패 시 방금 만든 사용자를 보상 DELETE 후 원에러 전파")
+    void provisionUser_setPassword실패_보상DELETE_후_원에러() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        RealIdpUserClient c = new RealIdpUserClient(
+                builder.build(), new ObjectMapper(), "http://localhost/dummy/api/v3", "test-admin-token");
+        // ① 사용자 생성 성공(pk=7) → ② set_password 500 → ③ 보상 DELETE /core/users/7/ (반드시 발행돼야 함)
+        server.expect(requestTo("http://localhost/dummy/api/v3/core/users/"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess(
+                        "{\"pk\":7,\"uuid\":\"77777777-7777-7777-7777-777777777777\"}",
+                        MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://localhost/dummy/api/v3/core/users/7/set_password/"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
+        server.expect(requestTo("http://localhost/dummy/api/v3/core/users/7/"))
+                .andExpect(method(HttpMethod.DELETE))
+                .andRespond(withStatus(HttpStatus.NO_CONTENT));
+
+        assertThatThrownBy(() -> c.provisionUser("a@example.com", "홍길동", "P@ss1", "pub-1"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INTERNAL_SERVER_ERROR);
+
+        // 세 요청(생성·set_password·보상 DELETE)이 모두 발행됐는지 — DELETE 누락이면 IdP 고아가 남는다.
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("11D idp-1 — provisionUser: 보상 DELETE 자체가 실패해도 원에러(4xx→COMMON4001)를 가리지 않는다")
+    void provisionUser_보상DELETE실패_원에러유지() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        RealIdpUserClient c = new RealIdpUserClient(
+                builder.build(), new ObjectMapper(), "http://localhost/dummy/api/v3", "test-admin-token");
+        server.expect(anything()).andRespond(withSuccess(
+                "{\"pk\":8,\"uuid\":\"88888888-8888-8888-8888-888888888888\"}", MediaType.APPLICATION_JSON));
+        server.expect(anything()).andRespond(withStatus(HttpStatus.BAD_REQUEST)); // ② 실패(입력 문제)
+        server.expect(method(HttpMethod.DELETE)).andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR)); // ③ 보상도 실패
+
+        // 보상 실패는 best-effort(로그만) — 응답은 ②의 원인 매핑(COMMON4001)이어야 한다.
+        assertThatThrownBy(() -> c.provisionUser("a@example.com", "홍길동", "P@ss1", "pub-1"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+
+        server.verify();
+    }
+
+    // ──────────── 11D member-idp-1·core-2 — 가입 로컬 실패 보상(deleteUserBestEffort) ────────────
+
+    @Test
+    @DisplayName("deleteUserBestEffort: uuid 정확 일치 1건이면 DELETE를 발행한다(가입 로컬 실패 회수)")
+    void deleteUserBestEffort_정확일치_DELETE발행() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        RealIdpUserClient c = new RealIdpUserClient(
+                builder.build(), new ObjectMapper(), "http://localhost/dummy/api/v3", "test-admin-token");
+        String uuid = "99999999-9999-9999-9999-999999999999";
+        server.expect(requestTo("http://localhost/dummy/api/v3/core/users/?uuid=" + uuid))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess(
+                        "{\"results\":[{\"pk\":9,\"username\":\"a@example.com\",\"uuid\":\"" + uuid + "\"}]}",
+                        MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://localhost/dummy/api/v3/core/users/9/"))
+                .andExpect(method(HttpMethod.DELETE))
+                .andRespond(withStatus(HttpStatus.NO_CONTENT));
+
+        assertThatCode(() -> c.deleteUserBestEffort(uuid)).doesNotThrowAnyException();
+
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("deleteUserBestEffort: 대상 없음(이미 삭제)이면 DELETE 없이 멱등 통과한다")
+    void deleteUserBestEffort_대상없음_멱등() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        RealIdpUserClient c = new RealIdpUserClient(
+                builder.build(), new ObjectMapper(), "http://localhost/dummy/api/v3", "test-admin-token");
+        server.expect(anything()).andRespond(withSuccess("{\"results\":[]}", MediaType.APPLICATION_JSON));
+
+        assertThatCode(() -> c.deleteUserBestEffort("99999999-9999-9999-9999-999999999999"))
+                .doesNotThrowAnyException();
+
+        server.verify(); // expect가 1개(GET)뿐이므로 DELETE가 발행됐다면 실패한다.
+    }
+
+    @Test
+    @DisplayName("deleteUserBestEffort: 조회 자체가 실패해도 예외를 던지지 않는다(best-effort — 원인 에러 우선)")
+    void deleteUserBestEffort_조회실패_무예외() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        RealIdpUserClient c = new RealIdpUserClient(
+                builder.build(), new ObjectMapper(), "http://localhost/dummy/api/v3", "test-admin-token");
+        server.expect(anything()).andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
+
+        assertThatCode(() -> c.deleteUserBestEffort("99999999-9999-9999-9999-999999999999"))
+                .doesNotThrowAnyException();
     }
 }

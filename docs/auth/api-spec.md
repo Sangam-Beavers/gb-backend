@@ -24,7 +24,7 @@
 | 로그아웃 | POST | `/api/v1/auth/logout` | ✅ | ⚠️ 방식 B 재정의 필요 (Stateless라 무효화 방식 재논의 — 로컬삭제/IdP end-session/블랙리스트) |
 | 재설정 링크 발송 | POST | `/api/v1/auth/password/reset-request` | ❌ | ⚠️ SMTP 선행 + 비번은 IdP 보관 → IdP 경유 재설정 |
 | 비밀번호 재설정 | POST | `/api/v1/auth/password/reset` | ❌ | ⚠️ SMTP 선행 + IdP set_password 경유 |
-| 서버 health check | GET | `/health` | ❌ | |
+| 서버 health check | GET | `/actuator/health` | ❌ | Spring Actuator 기본 경로(`management.endpoints` 노출 설정 — 루트 `/health` 재매핑 없음, 11A 정합) |
 | 이메일/닉네임 중복 확인 | GET | `/api/v1/members/check-*` | ❌ | ✅ 구현 완료 |
 
 ### 회원 (/members)
@@ -36,8 +36,8 @@
 | 내 프로필 조회 | GET | `/api/v1/members/me` | ✅ |
 | 프로필 수정 | PATCH | `/api/v1/members/me` | ✅ |
 | 프로필 사진 변경 (※ 미구현) | PATCH | `/api/v1/members/me/profile-image` | ✅ |
-| 인증 상태 조회 (※ 미구현) | GET | `/api/v1/members/me/verification` | ✅ |
-| 신분증 인증 요청 (※ 미구현) | POST | `/api/v1/members/me/verification` | ✅ |
+| 인증 상태 조회 | GET | `/api/v1/members/me/verification` | ✅ |
+| 신분증 인증 요청 | POST | `/api/v1/members/me/verification` | ✅ |
 | 언어 설정 조회 | GET | `/api/v1/members/me/language` | ✅ |
 | 언어 설정 변경 | PATCH | `/api/v1/members/me/language` | ✅ |
 | 탈퇴 | DELETE | `/api/v1/members/me` | ✅ |
@@ -164,6 +164,10 @@ message: "회원가입이 완료되었습니다."
 ## 6. 비밀번호 찾기/재설정 — ⚠️ 방식 B 재정의 + SMTP 선행 필요
 
 - 재설정 링크 발송: `POST /api/v1/auth/password/reset-request` (Body: `email`) → 이메일 발송. 200.
+  **요청 빈도 초과 시 `COMMON4291`(429) — 이메일 단위 rate-limit(`ratelimit:pwreset:{email}`, 1시간/5회,
+  MEM-04 메일 폭탄 차단. 키는 trim+소문자 정규화, Redis 장애 시 fail-open).** 가입 여부는 응답으로 노출하지
+  않으며(미가입도 200), 토큰·발송 이메일은 입력값이 아니라 **회원의 저장 이메일(가입 표기)** 을 사용한다
+  (IdP username 정확 일치 보장 — 11D member-idp-3).
 - 비밀번호 재설정: `POST /api/v1/auth/password/reset` (Body: `token`, `new_password`) → 200. 토큰 무효/만료 시 `400 MEMBER4004`.
 
 > 방식 B에서 비밀번호는 IdP가 보관하므로 재설정도 IdP를 경유한다(Authentik recovery flow 위임 또는
@@ -232,15 +236,18 @@ message: "회원가입이 완료되었습니다."
 | --- | --- | --- | --- |
 | `identity_document_type` | string | O | `ALIEN_REGISTRATION` / `NATIONAL_ID_KR` / `NATIONAL_ID_US` / `NATIONAL_ID_VN` / `NATIONAL_ID_PH` (이슈 #108 — 여권/일반 NATIONAL_ID 제거, 4개국 분기) |
 | `document_number` | string | O | 문서 번호 (서버에서 AES-256-GCM 암호화 저장, `EncryptedStringConverter` 자동 변환) |
-| `s3_key` | string | △ | 사전 업로드된 신분증 이미지 S3 key. **현재 선택 — OCR/이미지 업로드 도입 전 임시 정책(이슈 #152).** 미전송 시 null 저장, 향후 OCR 도입 시 필수(O)로 복구 |
+| `s3_key` | string | △ | 사전 업로드된 신분증 이미지 S3 key. **현재 선택 — OCR/이미지 업로드 도입 전 임시 정책(이슈 #152).** 미전송 시 null 저장, 향후 OCR 도입 시 필수(O)로 복구. **최대 500자**(컬럼 한도 — 초과 시 COMMON4001) |
 
 **Response 201** — `data`: `status`="APPROVED" (데모 정책 — 형식 검증 통과 시 즉시 승인), `submitted_at`(ISO 8601 UTC Z)
-message: "신분증 인증 요청이 접수되었습니다."
+message: 기본 생성 메시지("성공적으로 생성되었습니다." — 코드 `SuccessStatus.CREATED`)
+
+> **데모 즉시 승인**: 현 구현은 실 신원확인 API 없이 유형별 번호 형식(정규식) 검증 통과 시 **즉시 APPROVED + 배지 부여**한다(코드·DB·엔티티 전 계층 일관 — database.md `user_verifications` 주석 참조). 실 KYC/관리자 검토 단계를 도입하면 응답이 `status`="PENDING" + 안내문("신분증 인증 요청이 접수되었습니다. 검토 후 결과를 알려드립니다.")으로 바뀐다. (10D member-verification-2 — 명세를 데모 구현에 정렬)
 
 > 🆕 **사이드이펙트(이슈 #152):** APPROVED 시점에 wallet-service `POST /api/v1/wallets`를 호출해
 > 사용자당 1개의 전자지갑이 자동 개설된다(멱등). 이미 지갑이 있으면 그대로 유지. 지갑 생성 호출이
 > 실패해도 인증 자체는 성공으로 commit(fail-open) — 호출 실패는 WARN 로깅으로만 남고, 사용자는
-> 멱등 API로 추후 재호출/보정 가능.
+> 멱등 API로 추후 재호출/보정 가능. **호출은 인증 트랜잭션 커밋 "후"(tx 밖)에 수행한다** — 외부 HTTP가
+> 쓰기 tx·DB 커넥션을 보유하지 않는다(self-proxy tx 분리, community 댓글 작성과 동일 구조).
 
 **Error**
 | HTTP | code | message |
@@ -253,7 +260,7 @@ message: "신분증 인증 요청이 접수되었습니다."
 
 ## 11. 인증 상태 조회
 
-`GET /api/v1/members/me/verification` · Auth ✅ **(※ 미구현 — `user_verifications` 엔티티 부재)**
+`GET /api/v1/members/me/verification` · Auth ✅
 
 **Response 200** — `data`
 | 필드 | 타입 | nullable | 설명 |

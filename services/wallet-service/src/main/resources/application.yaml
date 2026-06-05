@@ -2,8 +2,9 @@ spring:
   application:
     name: wallet-service
   profiles:
-    # 기본 활성 프로파일. IDE/CLI에서 SPRING_PROFILES_ACTIVE 등으로 덮어쓸 수 있다.
-    active: dev
+    # 기본 활성 프로파일을 dev로 둔다(타 3서비스와 동일 패턴 — 11D config-build-3 정합).
+    # 운영/스테이징은 SPRING_PROFILES_ACTIVE 환경변수로 덮어쓴다.
+    active: ${SPRING_PROFILES_ACTIVE:dev}
   jackson:
     # 전역 설정: 모든 응답 JSON 필드명을 camelCase → snake_case로 직렬화 (명세 규칙).
     property-naming-strategy: SNAKE_CASE
@@ -21,6 +22,8 @@ management:
 wallet:
   charge:
     single-limit: 10000000   # 단일 거래 충전 한도(KRW). 초과 시 ACCOUNT4007(명세 §12)
+  exchange:
+    fee-rate: 0.005          # 환전 수수료율(KRW 환산액 기준, 임시 정책 — 운영 확정 시 교체). 미지정 시 ExchangeProperties 기본값(0.5%)
   account:
     # 계좌 인증(verify) rate-limit. 사용자(public_id) 단위 고정 윈도(WACC-02). 미지정 시 VerifyRateLimitProperties 기본값(60s/10회).
     verify-rate-limit:

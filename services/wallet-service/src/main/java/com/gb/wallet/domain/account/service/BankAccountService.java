@@ -45,11 +45,13 @@ public interface BankAccountService {
      * {@code @Transactional}이 적용되고, 락이 트랜잭션 커밋 시점까지 유지된다(같은 빈 내부 직접 호출은
      * AOP를 우회). 다른 컴포넌트에서 직접 호출하지 말 것.
      *
-     * @param bank       {@code registerAccount}가 {@code findByCode}로 검증한 은행(락 밖에서 확정).
-     * @param holderName {@code registerAccount}가 은행 inquiry로 받은 권위 예금주명(클라 입력 아님 — WACC-05).
+     * @param bank         {@code registerAccount}가 {@code findByCode}로 검증한 은행(락 밖에서 확정).
+     * @param holderName   {@code registerAccount}가 은행 inquiry로 받은 권위 예금주명(클라 입력 아님 — WACC-05).
+     * @param accountToken {@code registerAccount}가 은행 verify 재호출로 서버가 직접 발급받은 토큰
+     *                     (클라 입력 아님 — 10D wallet-account-charge-3, 토큰-계좌 바인딩 보장).
      */
     AccountResponse registerAccountLocked(String userPublicId, RegisterAccountRequest request,
-                                          Bank bank, String holderName);
+                                          Bank bank, String holderName, String accountToken);
 
     /**
      * 지정한 계좌를 주 계좌로 변경한다(PATCH /api/v1/accounts/{id}/primary). 기존 주 계좌는 자동 해제해

@@ -3,6 +3,7 @@ package com.gb.community.global.common.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.MappedSuperclass;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import lombok.Getter;
 
 /**
@@ -23,7 +24,7 @@ public abstract class BaseSoftDeleteEntity extends BaseEntity {
 
     /** 도메인 메서드로 soft delete 처리. 외부에서 setter로 임의 변경 금지. */
     public void softDelete() {
-        this.deletedAt = LocalDateTime.now();
+        this.deletedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public boolean isDeleted() {

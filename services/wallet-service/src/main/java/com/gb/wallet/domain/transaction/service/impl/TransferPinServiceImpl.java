@@ -64,9 +64,10 @@ public class TransferPinServiceImpl implements TransferPinService {
         // 0) 사용자 단위 고정 윈도 rate-limit — 무차별 대입 throttle bypass 차단(wallet-pin-redis-1).
         //    isLocked→BCrypt 대조→recordFailure는 비원자라, 동시 버스트가 모두 isLocked 게이트를 통과해
         //    잠금이 걸리기 전에 다수의 추측(BCrypt 대조)을 수행할 수 있다. 잠금 카운터와 별개로 *요청 빈도*를
-        //    윈도당 limit으로 캡해 버스트를 막는다(transfer/account-holder와 동일 패턴). 위조불가 userPublicId로
-        //    키잉. 초과 시 COMMON4291(429). Redis 장애 시 fail-open(통과). 잠금/마커보다 먼저 — 차단된 요청은
-        //    BCrypt 대조도 markVerified도 하지 않는다.
+        //    윈도당 limit으로 캡해 버스트를 막는다(transfer/account-holder와 동일 패턴). limit 기본값은 단기
+        //    잠금 임계(5회)와 동일하게 캡해 버스트 추측 상한이 잠금 임계를 넘지 못한다(10D wallet-pin-redis-2).
+        //    위조불가 userPublicId로 키잉. 초과 시 COMMON4291(429). Redis 장애 시 fail-open(통과). 잠금/마커보다
+        //    먼저 — 차단된 요청은 BCrypt 대조도 markVerified도 하지 않는다.
         boolean allowed = rateLimitHelper.tryAcquire(
                 PIN_VERIFY_RATE_LIMIT_KEY_PREFIX + userPublicId,
                 rateLimitProperties.limit(),

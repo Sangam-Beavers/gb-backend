@@ -108,7 +108,7 @@ class MemberServiceImplTest {
         assertThat(saved.getValue().getPublicId()).isEqualTo(idpPublicId.getValue());
         // 응답 publicId도 동일해야 한다.
         assertThat(response.getPublicId()).isEqualTo(idpPublicId.getValue());
-        // IdP가 준 sub가 assignAuthProviderId로 회원에 채워져야 한다(같은 인스턴스라 캡처 후에도 반영됨).
+        // IdP가 준 sub가 빌더로 채워진 "완전한 형상"으로 INSERT돼야 한다(sub 없는 row 상태 없음 — IdP-first).
         assertThat(saved.getValue().getAuthProviderId()).isEqualTo("idp-sub-uuid-9999");
 
         // 약관 동의 증적이 엔티티에 저장돼야 한다(동의값 → 저장 끝까지 검증, consent_agreed_at은 NOT NULL).
@@ -116,15 +116,17 @@ class MemberServiceImplTest {
         assertThat(saved.getValue().isPrivacyAgreed()).isTrue();
         assertThat(saved.getValue().getConsentAgreedAt()).isNotNull();
 
-        // MEM-02 회귀: 로컬 선점(saveAndFlush)이 IdP provision보다 *먼저* 실행돼야 한다(IdP 고아계정 방지의 핵심).
+        // IdP-first 회귀(11D member-idp-1·core-2 — MEM-02 재설계): IdP provision이 로컬 saveAndFlush보다
+        // *먼저* 실행돼야 한다. IdP 호출이 트랜잭션/락 밖으로 나가고(core-2), 로컬엔 sub까지 포함한
+        // 단일 INSERT만 남는 구조의 핵심 순서다.
         InOrder order = inOrder(memberRepository, idpUserClient);
-        order.verify(memberRepository).saveAndFlush(any(Member.class));
         order.verify(idpUserClient).provisionUser(any(), any(), any(), any());
+        order.verify(memberRepository).saveAndFlush(any(Member.class));
     }
 
     @Test
-    @DisplayName("MEM-02: provision 실패 시 예외 전파 + 로컬 선점(saveAndFlush)이 provision보다 먼저(실패 시 tx 롤백으로 로컬도 제거 → 고아 방지)")
-    void signup_provision실패_고아방지_순서() {
+    @DisplayName("IdP-first: provision 실패 시 예외 전파 + 로컬 INSERT 미진입(로컬 흔적 0 — 보상 불필요)")
+    void signup_provision실패_로컬흔적없음() {
         SignupRequest request = new SignupRequest();
         ReflectionTestUtils.setField(request, "email", "new@example.com");
         ReflectionTestUtils.setField(request, "password", "P@ssw0rd!");
@@ -136,18 +138,16 @@ class MemberServiceImplTest {
 
         when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
-        when(memberRepository.saveAndFlush(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(idpUserClient.provisionUser(any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("IdP unavailable"));
 
         assertThatThrownBy(() -> memberService.signup(request))
                 .isInstanceOf(RuntimeException.class);
 
-        // 로컬 선점이 provision보다 먼저였음을 보장한다 — provision 실패 시 @Transactional 롤백으로 ①에서 만든
-        // 로컬 row도 사라진다(로컬·IdP 모두 없음). 단위 테스트는 tx 경계 밖이라 "순서"를 회귀로 고정한다.
-        InOrder order = inOrder(memberRepository, idpUserClient);
-        order.verify(memberRepository).saveAndFlush(any(Member.class));
-        order.verify(idpUserClient).provisionUser(any(), any(), any(), any());
+        // IdP-first(11D core-2): provision이 실패하면 로컬엔 아무것도 만들어진 게 없어야 한다(INSERT 미진입).
+        // set_password 부분실패의 IdP 측 보상은 RealIdpUserClient 내부 소관(RealIdpUserClientTest에서 검증).
+        verify(memberRepository, never()).saveAndFlush(any(Member.class));
+        verify(idpUserClient, never()).deleteUserBestEffort(anyString());
     }
 
     @Test
@@ -171,8 +171,8 @@ class MemberServiceImplTest {
     }
 
     @Test
-    @DisplayName("WU-F8: existsBy 통과 후 동시 가입 race(saveAndFlush UNIQUE 위반) → COMMON4091, IdP provision 미호출(고아 방지)")
-    void signup_동시가입race_COMMON4091() {
+    @DisplayName("WU-F8/IdP-first: 동시 가입 race(saveAndFlush UNIQUE 위반) → COMMON4091 + 방금 만든 IdP 사용자 보상 회수")
+    void signup_동시가입race_COMMON4091_보상회수() {
         SignupRequest request = new SignupRequest();
         ReflectionTestUtils.setField(request, "email", "race@example.com");
         ReflectionTestUtils.setField(request, "password", "P@ssw0rd!");
@@ -183,17 +183,45 @@ class MemberServiceImplTest {
         // 약관 동의 필드는 일부러 미설정(null) — 프론트 미전송 상황을 본떠, Service가 동의로 처리하는지 검증한다.
         when(memberRepository.existsByEmail("race@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
-        // 선검사는 통과했으나 커밋 전 saveAndFlush에서 동시 가입 race가 UNIQUE를 위반.
+        when(idpUserClient.provisionUser(any(), any(), any(), any())).thenReturn("idp-sub-race-1");
+        // 선검사는 통과했으나 saveAndFlush에서 동시 가입 race가 UNIQUE를 위반(IdP-first라 주로 닉네임 race —
+        // 이메일 race는 IdP username unique가 먼저 직렬화해 provisionUser가 MEMBER4002로 끝난다).
         when(memberRepository.saveAndFlush(any(Member.class)))
-                .thenThrow(new DataIntegrityViolationException("Duplicate entry for key 'uk_members_email'"));
+                .thenThrow(new DataIntegrityViolationException("Duplicate entry for key 'uk_members_nickname'"));
 
         assertThatThrownBy(() -> memberService.signup(request))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS); // 중앙 핸들러(500) 대신 contextual 409
 
-        // race를 saveAndFlush(IdP 호출 전)에서 잡으므로 IdP 사용자(고아)는 만들어지지 않는다.
-        verify(idpUserClient, never()).provisionUser(any(), any(), any(), any());
+        // 11D member-idp-1: 로컬 INSERT가 실패했으므로 방금 만든 IdP 사용자를 회수해야
+        // 그 이메일이 IdP username unique에 막혀 영구 가입불가가 되지 않는다.
+        verify(idpUserClient).deleteUserBestEffort("idp-sub-race-1");
+    }
+
+    @Test
+    @DisplayName("IdP-first: 로컬 INSERT가 일반 장애(DB down)로 실패해도 IdP 사용자 보상 회수 후 원예외 전파")
+    void signup_로컬저장_일반장애_보상회수_원예외전파() {
+        SignupRequest request = new SignupRequest();
+        ReflectionTestUtils.setField(request, "email", "dbdown@example.com");
+        ReflectionTestUtils.setField(request, "password", "P@ssw0rd!");
+        ReflectionTestUtils.setField(request, "name", "홍길동");
+        ReflectionTestUtils.setField(request, "nickname", "gildong");
+        ReflectionTestUtils.setField(request, "nationality", "VN");
+        ReflectionTestUtils.setField(request, "language", "vi");
+        when(memberRepository.existsByEmail("dbdown@example.com")).thenReturn(false);
+        when(memberRepository.existsByNickname("gildong")).thenReturn(false);
+        when(idpUserClient.provisionUser(any(), any(), any(), any())).thenReturn("idp-sub-dbdown-1");
+        when(memberRepository.saveAndFlush(any(Member.class)))
+                .thenThrow(new RuntimeException("DB connection lost"));
+
+        // 원예외가 그대로 전파돼야 한다(중앙 핸들러가 500 처리) — 보상 호출이 예외를 삼키면 안 된다.
+        assertThatThrownBy(() -> memberService.signup(request))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("DB connection lost");
+
+        // IdP에만 사용자가 남은 채 끝나지 않도록 회수한다(11D member-idp-1).
+        verify(idpUserClient).deleteUserBestEffort("idp-sub-dbdown-1");
     }
 
     // ──────────────────── 소셜 가입 추가정보 보완 ────────────────────
@@ -366,7 +394,8 @@ class MemberServiceImplTest {
         PasswordResetEmailRequest request = new PasswordResetEmailRequest();
         ReflectionTestUtils.setField(request, "email", "user@example.com");
         when(passwordResetRateLimiter.tryAcquire("user@example.com")).thenReturn(true);
-        when(memberRepository.existsByEmail("user@example.com")).thenReturn(true);
+        when(memberRepository.findByEmail("user@example.com"))
+                .thenReturn(Optional.of(Member.builder().email("user@example.com").build()));
         when(passwordResetTokenStore.ttlMinutes()).thenReturn(30L);
 
         memberService.sendPasswordResetEmail(request);
@@ -379,12 +408,32 @@ class MemberServiceImplTest {
     }
 
     @Test
+    @DisplayName("11D member-idp-3: 혼합 케이스 입력이어도 토큰·메일은 회원의 저장 이메일(가입 표기 = IdP username)로 흐른다")
+    void sendPasswordResetEmail_혼합케이스_저장이메일사용() {
+        // 가입 표기는 "user@example.com"인데 사용자가 "User@Example.COM"으로 요청한 상황.
+        // (MySQL 기본 collation은 대소문자 무시라 findByEmail이 회원을 찾는다 — mock으로 본뜸.)
+        PasswordResetEmailRequest request = new PasswordResetEmailRequest();
+        ReflectionTestUtils.setField(request, "email", "User@Example.COM");
+        when(passwordResetRateLimiter.tryAcquire("User@Example.COM")).thenReturn(true);
+        when(memberRepository.findByEmail("User@Example.COM"))
+                .thenReturn(Optional.of(Member.builder().email("user@example.com").build()));
+        when(passwordResetTokenStore.ttlMinutes()).thenReturn(30L);
+
+        memberService.sendPasswordResetEmail(request);
+
+        // 입력 표기("User@Example.COM")가 아니라 저장 표기("user@example.com")가 토큰·발송에 쓰여야
+        // 재설정 단계의 IdP username 정확 일치(changePassword)가 깨지지 않는다.
+        verify(passwordResetTokenStore).save(anyString(), eq("user@example.com"));
+        verify(emailSender).send(eq("user@example.com"), anyString(), anyString());
+    }
+
+    @Test
     @DisplayName("재설정 메일: 미가입 이메일이면 조용히 종료(토큰/메일 없음 — 가입여부 노출 방지)")
     void sendPasswordResetEmail_미가입_조용히종료() {
         PasswordResetEmailRequest request = new PasswordResetEmailRequest();
         ReflectionTestUtils.setField(request, "email", "nobody@example.com");
         when(passwordResetRateLimiter.tryAcquire("nobody@example.com")).thenReturn(true);
-        when(memberRepository.existsByEmail("nobody@example.com")).thenReturn(false);
+        when(memberRepository.findByEmail("nobody@example.com")).thenReturn(Optional.empty());
 
         memberService.sendPasswordResetEmail(request);
 
@@ -406,7 +455,7 @@ class MemberServiceImplTest {
                 .isEqualTo(CommonErrorCode.TOO_MANY_REQUESTS);
 
         // rate-limit이 가입 여부 확인 *전*에 차단 — 가입조회/토큰/메일 모두 미진입.
-        verify(memberRepository, never()).existsByEmail(anyString());
+        verify(memberRepository, never()).findByEmail(anyString());
         verify(passwordResetTokenStore, never()).save(anyString(), anyString());
         verifyNoInteractions(emailSender, idpUserClient);
     }

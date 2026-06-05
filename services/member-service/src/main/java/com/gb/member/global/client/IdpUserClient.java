@@ -22,6 +22,11 @@ public interface IdpUserClient {
      * "이 사용자의 publicId"를 바로 알 수 있다(토큰 sub ↔ publicId 매핑). publicId는 우리가 만드는
      * 값이라 IdP는 모르므로, 가입 시 우리가 먼저 생성해 함께 넘긴다.
      *
+     * <p><b>부분실패 보상(11D member-idp-1):</b> 사용자 생성(①) 후 비밀번호 설정(②)이 실패하면 구현체가
+     * 방금 만든 사용자를 <b>내부에서 보상 DELETE</b>해 "비밀번호 없는 고아 + 이메일 영구 가입불가"를 막은 뒤
+     * 원래 에러를 전파한다. 따라서 이 메서드가 예외로 끝나면 IdP에 잔존물이 없는 것이 기본이다
+     * (보상 자체가 실패한 이중 실패만 예외 — error 로그로 수동 정리 유도).
+     *
      * @param email       로그인 아이디로 쓸 이메일(IdP username 겸용)
      * @param name        표시 이름
      * @param rawPassword 평문 비밀번호(IdP에만 저장된다 — 우리 DB에는 저장하지 않음)
@@ -29,6 +34,19 @@ public interface IdpUserClient {
      * @return IdP가 부여한 사용자 식별자(Authentik의 경우 user uuid)
      */
     String provisionUser(String email, String name, String rawPassword, String publicId);
+
+    /**
+     * 가입 보상 삭제(best-effort): 방금 {@link #provisionUser}로 만든 IdP 사용자를 회수한다.
+     *
+     * <p>IdP-first 가입(11D member-idp-1·core-2)에서 IdP 프로비저닝은 성공했으나 <b>로컬 INSERT가
+     * 실패</b>(닉네임 race·DB 장애)한 경우 호출한다 — 회수하지 않으면 그 이메일이 IdP username unique에
+     * 막혀 영구 가입불가가 된다. 대상은 이 가입 요청이 반환받은 식별자뿐이며, 구현체는 정확 일치 검증으로
+     * 타 사용자 오삭제를 차단한다. <b>어떤 실패도 던지지 않는다</b> — 호출 측의 원인 에러가 응답을 지배해야
+     * 하므로 보상 실패는 로그(수동 정리)로만 남긴다.
+     *
+     * @param authProviderId 회수 대상 사용자 식별자(= {@link #provisionUser} 반환값, Authentik user uuid)
+     */
+    void deleteUserBestEffort(String authProviderId);
 
     /**
      * 기존 IdP 사용자의 비밀번호를 새 값으로 변경한다(비밀번호 재설정용).

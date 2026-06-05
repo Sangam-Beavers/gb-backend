@@ -8,15 +8,23 @@ import com.gb.common.response.ErrorResponse;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.MessageSourceResolvable;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * 모든 서비스에 공통 적용되는 전역 예외 처리기.
@@ -71,6 +79,48 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * {@code @ModelAttribute}(쿼리 파라미터 객체) 바인딩·검증 실패({@link BindException}) → COMMON4001.
+     *
+     * <p>현재 컨트롤러는 전부 {@code @RequestBody @Valid}(→ {@link MethodArgumentNotValidException} —
+     * BindException의 하위 타입이라 더 구체적인 위 핸들러가 계속 우선 적용됨)와 {@code @Validated} +
+     * 단순 {@code @RequestParam}(→ {@link ConstraintViolationException})만 쓰므로 이 분기의 라이브 트리거는
+     * 없다. 향후 검색/필터 폼을 {@code @ModelAttribute} 객체로 받는 컨트롤러가 생기는 순간 그 바인딩 실패가
+     * catch-all 500(거짓 서버 오류)으로 떨어지는 잠복 회귀 벡터라 선제 차단한다(11D common-modules-1).
+     */
+    @ExceptionHandler(BindException.class)
+    public ResponseEntity<ErrorResponse> handleBindException(BindException e) {
+        ErrorCode errorCode = CommonErrorCode.INVALID_REQUEST;
+        String message = resolveValidationMessage(e, errorCode);
+        log.warn("Bind failed: code={}, message={}", errorCode.getCode(), message);
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(ApiResponse.fail(errorCode.getCode(), message));
+    }
+
+    /**
+     * 핸들러 메서드 내장 검증 실패({@link HandlerMethodValidationException}) → COMMON4001.
+     *
+     * <p>Spring 6.1(Boot 3.2)+의 내장 메서드 검증은 컨트롤러 클래스에 {@code @Validated}가 <b>없어도</b>
+     * 파라미터 제약(@NotBlank·@Max 등)을 검증하며, 위반 시 {@link ConstraintViolationException}이 아니라
+     * 이 예외를 던진다. 현재 전 컨트롤러가 {@code @Validated}를 보유해 ConstraintViolation 경로로 빠지므로
+     * 라이브 트리거는 없으나, {@code @Validated} 누락 컨트롤러가 추가되는 순간 파라미터 위반이 catch-all
+     * 500으로 떨어지는 잠복 회귀 벡터라 선제 차단한다(11D common-modules-1). 첫 위반의 기본 메시지를
+     * 노출한다(타 검증 핸들러와 동일 정책).
+     */
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    public ResponseEntity<ErrorResponse> handleHandlerMethodValidation(HandlerMethodValidationException e) {
+        ErrorCode errorCode = CommonErrorCode.INVALID_REQUEST;
+        String message = e.getAllErrors().stream()
+                .findFirst()
+                .map(MessageSourceResolvable::getDefaultMessage)
+                .orElse(errorCode.getMessage());
+        log.warn("Handler method validation failed: code={}, message={}", errorCode.getCode(), message);
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(ApiResponse.fail(errorCode.getCode(), message));
+    }
+
+    /**
      * 필수 요청 파라미터({@code @RequestParam} required) 누락, 필수 헤더({@code @RequestHeader} required)
      * 누락, {@code @PathVariable} 누락 등 Spring의 요청 바인딩 자체가 깨지는 케이스 → COMMON4001.
      *
@@ -101,6 +151,66 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleNotReadableOrTypeMismatch(Exception e) {
         ErrorCode errorCode = CommonErrorCode.INVALID_REQUEST;
         log.warn("Malformed request body/param: code={}, detail={}", errorCode.getCode(), e.getMessage());
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));
+    }
+
+    /**
+     * 매핑되지 않은 경로 → 404 COMMON4041(기존 코드 재사용, 신설 없음 — 10D common-modules-1).
+     *
+     * <p>{@link NoResourceFoundException}은 Boot 3.x 기본 경로(정적 리소스 폴백 매핑)에서, {@link
+     * NoHandlerFoundException}은 {@code throw-exception-if-no-handler-found} 활성 구성에서 발생한다 — 어느
+     * 구성이든 잡히도록 둘 다 묶는다. 이 분기가 없으면 catch-all로 떨어져 "없는 경로 호출"(클라이언트 잘못)이
+     * 500 COMMON5000(서버 오류·거짓 알람)으로 보였다. 요청 경로는 내부 구조 노출 우려로 응답엔 싣지 않고
+     * 로그로만 남긴다. (부수 효과: /swagger-ui 등 permitAll 하위의 미존재 정적 리소스도 이제 공통 envelope
+     * 404로 응답된다 — Swagger UI 정상 동작에는 영향 없음.)
+     */
+    @ExceptionHandler({NoHandlerFoundException.class, NoResourceFoundException.class})
+    public ResponseEntity<ErrorResponse> handleNoHandlerFound(Exception e) {
+        ErrorCode errorCode = CommonErrorCode.RESOURCE_NOT_FOUND;
+        log.warn("No handler/resource for request: code={}, detail={}", errorCode.getCode(), e.getMessage());
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));
+    }
+
+    /**
+     * 매핑된 경로에 허용되지 않은 HTTP 메서드 호출 → 405 COMMON4051(10D common-modules-1 신설).
+     * 예: GET 전용 경로에 POST. 클라이언트 잘못이므로 catch-all 500이 아닌 405로 응답한다.
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMethodNotSupported(HttpRequestMethodNotSupportedException e) {
+        ErrorCode errorCode = CommonErrorCode.METHOD_NOT_ALLOWED;
+        log.warn("Method not supported: code={}, detail={}", errorCode.getCode(), e.getMessage());
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));
+    }
+
+    /**
+     * 지원하지 않는 요청 본문 Content-Type → 415 COMMON4151(10D common-modules-1 신설).
+     * 예: {@code consumes=application/json} 엔드포인트에 text/plain 본문.
+     */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException e) {
+        ErrorCode errorCode = CommonErrorCode.UNSUPPORTED_MEDIA_TYPE;
+        log.warn("Media type not supported: code={}, detail={}", errorCode.getCode(), e.getMessage());
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));
+    }
+
+    /**
+     * 응답 콘텐츠 협상 실패(Accept가 생산 가능한 미디어 타입과 불일치) → 406 COMMON4061(10D common-modules-1 신설).
+     *
+     * <p>주의: 클라이언트 Accept가 JSON조차 거부하는 경우 이 JSON 본문 직렬화도 협상에 실패할 수 있다 — 그 경우
+     * Spring이 본문 없이 406 상태만 내려보낸다(상태 코드는 항상 보존, catch-all 500 오인만 제거).
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<ErrorResponse> handleMediaTypeNotAcceptable(HttpMediaTypeNotAcceptableException e) {
+        ErrorCode errorCode = CommonErrorCode.NOT_ACCEPTABLE;
+        log.warn("Media type not acceptable: code={}, detail={}", errorCode.getCode(), e.getMessage());
         return ResponseEntity
                 .status(errorCode.getHttpStatus())
                 .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));
@@ -139,7 +249,8 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));
     }
 
-    private String resolveValidationMessage(MethodArgumentNotValidException e, ErrorCode fallback) {
+    // MethodArgumentNotValidException은 BindException의 하위 타입이라 두 핸들러가 같은 추출 로직을 공유한다.
+    private String resolveValidationMessage(BindException e, ErrorCode fallback) {
         FieldError fieldError = e.getBindingResult().getFieldError();
         if (fieldError != null && fieldError.getDefaultMessage() != null) {
             return fieldError.getDefaultMessage();

@@ -17,11 +17,12 @@
 | 값 | 의미 |
 | --- | --- |
 | `LIFE_INFO` | 생활정보 |
-| `JOB` | 직업 추천 |
+| `JOB` | 취업 |
 | `VISA` | 비자 |
 | `COUNTRY` | 국가별 |
 | `RESIDENCE` | 거주 |
 | `QUESTION` | 질문 |
+| `FREE` | 자유게시판 |
 
 ---
 

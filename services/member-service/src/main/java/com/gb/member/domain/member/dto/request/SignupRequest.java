@@ -3,30 +3,38 @@ package com.gb.member.domain.member.dto.request;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+// @Size 상한 = members 컬럼 길이(database.md §members SSOT, 11D member-core-1) — 과길이 입력이
+//   INSERT 단계 500(DataIntegrityViolation)으로 떨어지지 않고 COMMON4001(400)로 거절되게 한다.
 @Getter
 @NoArgsConstructor
 public class SignupRequest {
 
     @NotBlank(message = "이메일은 필수입니다")
     @Email(message = "이메일 형식이 올바르지 않습니다")
+    @Size(max = 255, message = "이메일은 255자 이내여야 합니다")
     private String email;
 
     @NotBlank(message = "비밀번호는 필수입니다")
     private String password;
 
     @NotBlank(message = "이름은 필수입니다")
+    @Size(max = 100, message = "이름은 100자 이내여야 합니다")
     private String name;
 
     @NotBlank(message = "닉네임은 필수입니다")
+    @Size(max = 50, message = "닉네임은 50자 이내여야 합니다")
     private String nickname;
 
     @NotBlank(message = "국적은 필수입니다")
+    @Size(max = 10, message = "국적 코드는 10자 이내여야 합니다")
     private String nationality;
 
     @NotBlank(message = "주 사용 언어는 필수입니다")
+    @Size(max = 10, message = "언어 코드는 10자 이내여야 합니다")
     private String language;
 
     // 약관 동의. 명세 auth §2는 terms_agreed/privacy_agreed를 필수로 규정하나, 프론트가 아직 전송하지 않아

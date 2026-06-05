@@ -26,13 +26,16 @@ import com.gb.member.global.exception.code.MemberErrorCode;
 import org.mockito.Mockito;
 import java.time.LocalDateTime;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /**
@@ -51,6 +54,14 @@ class VerificationServiceImplTest {
     @Mock private WalletClient walletClient;
 
     @InjectMocks private VerificationServiceImpl verificationService;
+
+    @BeforeEach
+    void injectSelf() {
+        // 생성자 주입(@RequiredArgsConstructor)에선 @InjectMocks가 비-final self 필드를 채우지 않아 null.
+        // 단위 테스트는 프록시 없이 service 자신을 박아 submitVerification→submitVerificationTx 위임 체인을
+        // 그대로 탄다(@Transactional은 단위 테스트에서 no-op — community CommentServiceTest와 동일 처리).
+        ReflectionTestUtils.setField(verificationService, "self", verificationService);
+    }
 
     private static final String PUBLIC_ID = "11111111-1111-1111-1111-111111111111";
     private static final String VALID_ARC = "990101-5678901";   // 외국인등록번호: 뒤 첫자리 5(외국인 5~8)
@@ -142,7 +153,7 @@ class VerificationServiceImplTest {
         assertThat(member.isVerified()).isTrue();   // 배지 부여(dirty checking 대상)
 
         ArgumentCaptor<UserVerification> saved = ArgumentCaptor.forClass(UserVerification.class);
-        verify(verificationRepository).save(saved.capture());
+        verify(verificationRepository).saveAndFlush(saved.capture());
         assertThat(saved.getValue().getDocumentType()).isEqualTo(IdentityDocumentType.ALIEN_REGISTRATION);
         assertThat(saved.getValue().getStatus()).isEqualTo(VerificationStatus.APPROVED);
         assertThat(saved.getValue().getReviewedAt()).isNotNull();
@@ -168,7 +179,7 @@ class VerificationServiceImplTest {
         assertThat(member.isVerified()).isTrue();
 
         ArgumentCaptor<UserVerification> saved = ArgumentCaptor.forClass(UserVerification.class);
-        verify(verificationRepository).save(saved.capture());
+        verify(verificationRepository).saveAndFlush(saved.capture());
         assertThat(saved.getValue().getS3Key()).isNull();   // 그대로 null 저장
 
         verify(walletClient).createWalletFor(PUBLIC_ID);
@@ -190,8 +201,25 @@ class VerificationServiceImplTest {
 
         assertThat(response.getStatus()).isEqualTo("APPROVED");
         assertThat(member.isVerified()).isTrue();
-        verify(verificationRepository).save(any());     // 인증은 저장됨
+        verify(verificationRepository).saveAndFlush(any());     // 인증은 저장됨(10D 백스톱 — saveAndFlush)
         verify(walletClient).createWalletFor(PUBLIC_ID);   // 호출 자체는 시도됐음
+    }
+
+    @Test
+    @DisplayName("hoist 회귀: 지갑 개설(외부 HTTP)은 인증 DB 본문(saveAndFlush) '뒤' — tx 메서드 밖 호출 순서 고정")
+    void submit_지갑개설은_본문_커밋_후() {
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(false);
+
+        VerificationRequest request = request("ALIEN_REGISTRATION", VALID_ARC, "verifications/x/front.jpg");
+        verificationService.submitVerification(PUBLIC_ID, request);
+
+        // submitVerificationTx(검증·저장·배지)가 끝난 "다음" walletClient를 호출해야 한다 — 운영에선 이 순서가
+        // "tx 커밋 후 외부 HTTP"를 의미한다(외부 호출이 쓰기 tx·커넥션을 잡지 않음, community createComment와 동일).
+        InOrder order = Mockito.inOrder(verificationRepository, walletClient);
+        order.verify(verificationRepository).saveAndFlush(any());
+        order.verify(walletClient).createWalletFor(PUBLIC_ID);
     }
 
     @Test
@@ -209,7 +237,7 @@ class VerificationServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
 
-        verify(verificationRepository, never()).save(any());
+        verify(verificationRepository, never()).saveAndFlush(any());
         assertThat(member.isVerified()).isFalse();
         verifyNoInteractions(walletClient);   // APPROVED 실패 → 지갑 생성 시도 없음(#152)
     }
@@ -248,7 +276,7 @@ class VerificationServiceImplTest {
         verify(walletClient).createWalletFor(PUBLIC_ID);
 
         ArgumentCaptor<UserVerification> saved = ArgumentCaptor.forClass(UserVerification.class);
-        verify(verificationRepository).save(saved.capture());
+        verify(verificationRepository).saveAndFlush(saved.capture());
         assertThat(saved.getValue().getDocumentNumber()).isEqualTo("079199012345");
     }
 
@@ -267,7 +295,7 @@ class VerificationServiceImplTest {
         assertThat(response.getStatus()).isEqualTo("APPROVED");
 
         ArgumentCaptor<UserVerification> saved = ArgumentCaptor.forClass(UserVerification.class);
-        verify(verificationRepository).save(saved.capture());
+        verify(verificationRepository).saveAndFlush(saved.capture());
         assertThat(saved.getValue().getDocumentNumber()).isEqualTo("A1B2C3D4E5F6G7H8");
     }
 
@@ -285,7 +313,7 @@ class VerificationServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
 
-        verify(verificationRepository, never()).save(any());
+        verify(verificationRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -302,9 +330,31 @@ class VerificationServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
 
-        verify(verificationRepository, never()).save(any());
+        verify(verificationRepository, never()).saveAndFlush(any());
         assertThat(member.isVerified()).isFalse();
         verifyNoInteractions(walletClient);   // 중복 거절 → 지갑 생성 시도 없음(#152)
+    }
+
+    @Test
+    @DisplayName("동시 제출 race: existsBy 통과 후 saveAndFlush가 무결성 위반을 던지면 COMMON4091, 배지 미부여 (10D member-verification-1)")
+    void submit_동시요청_race_saveAndFlush_무결성위반_COMMON4091() {
+        // 자기 동시요청 둘이 모두 existsBy=false를 통과한 race(TOCTOU). 활성 인증 부분 UNIQUE(별도 DDL) 위반이
+        // saveAndFlush에서 터지면 가입(member-5)과 동일하게 generic COMMON4091로 변환되고, markVerified()에
+        // 도달하지 않아 배지 중복 부여도 차단된다(MemberServiceImplTest WU-F8과 동일 패턴).
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(false);
+        when(verificationRepository.saveAndFlush(any(UserVerification.class)))
+                .thenThrow(new DataIntegrityViolationException("uk_user_verifications_active"));
+
+        VerificationRequest request = request("ALIEN_REGISTRATION", VALID_ARC, "verifications/x/front.jpg");
+
+        assertThatThrownBy(() -> verificationService.submitVerification(PUBLIC_ID, request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
+
+        assertThat(member.isVerified()).as("race 패자는 배지를 받지 않는다").isFalse();
     }
 
     @Test

@@ -1,6 +1,11 @@
 spring:
   application:
     name: member-service
+  # 기본 활성 프로파일을 dev로 둔다(타 3서비스와 정합 — 10D config-build-2). 미지정 시 application-dev.yml
+  # (datasource/redis/mail/oauth2/crypto)이 로드되지 않아 기동이 실패한다. 운영/스테이징은
+  # SPRING_PROFILES_ACTIVE 환경변수로 덮어쓴다(community/document와 동일 패턴).
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
   jackson:
     property-naming-strategy: SNAKE_CASE
 

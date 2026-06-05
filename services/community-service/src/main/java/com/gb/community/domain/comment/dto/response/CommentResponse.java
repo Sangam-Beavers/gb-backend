@@ -19,6 +19,11 @@ import lombok.Getter;
  * <p>boolean 필드명을 {@code authorIsVerified}로 둬 게터 {@code isAuthorIsVerified()} → 프로퍼티
  * {@code authorIsVerified} → {@code author_is_verified}로 변환되게 한다(필드명을 'is'로 시작하면 'is'가
  * 떨어져 어긋나는 함정 회피 — PostDetailResponse와 동일).
+ *
+ * <p>{@code is_author}는 "요청자 == 작성자" 여부 — 프론트가 수정·삭제 버튼 노출을 판단한다.
+ * 명세 필드명이 is-접두라 boxed {@code Boolean}으로 둔다: primitive면 위 함정으로 {@code author}가 되고,
+ * Boolean이면 게터 {@code getIsAuthor()} → 프로퍼티 {@code isAuthor} → {@code is_author}로 정확히 나간다.
+ * 작성 응답에서는 요청자가 곧 작성자이므로 항상 true다.
  */
 @Getter
 public class CommentResponse {
@@ -46,19 +51,23 @@ public class CommentResponse {
     @Schema(description = "작성자 인증 배지 여부", example = "true")
     private final boolean authorIsVerified;
 
+    @Schema(description = "요청자가 작성자 본인인지 여부(수정·삭제 버튼 노출 판단용)", example = "false")
+    private final Boolean isAuthor;
+
     @Schema(description = "작성 시각(ISO 8601, UTC Z)", example = "2026-05-26T04:15:30Z")
     private final String createdAt;
 
     @Builder
     private CommentResponse(String publicId, String postPublicId, String parentCommentPublicId,
                             String content, String authorNickname, boolean authorIsVerified,
-                            String createdAt) {
+                            Boolean isAuthor, String createdAt) {
         this.publicId = publicId;
         this.postPublicId = postPublicId;
         this.parentCommentPublicId = parentCommentPublicId;
         this.content = content;
         this.authorNickname = authorNickname;
         this.authorIsVerified = authorIsVerified;
+        this.isAuthor = isAuthor;
         this.createdAt = createdAt;
     }
 
@@ -67,8 +76,13 @@ public class CommentResponse {
      *
      * <p>{@code postPublicId}는 서비스가 이미 확보한 게시글 public_id를 넘긴다 — 댓글마다
      * {@code comment.getPost().getPublicId()}로 LAZY 로딩하지 않기 위함(같은 게시글이라 값도 동일).
+     *
+     * @param requesterUserPublicId 요청자(인증 JWT public_id). 작성자와 비교해 {@code is_author}를 계산한다 —
+     *                              삭제의 본인 검증과 동일한 public_id equals 비교. 작성 흐름은 요청자가
+     *                              곧 작성자라 항상 true가 된다.
      */
-    public static CommentResponse from(Comment comment, MemberInfo author, String postPublicId) {
+    public static CommentResponse from(Comment comment, MemberInfo author, String postPublicId,
+                                       String requesterUserPublicId) {
         return CommentResponse.builder()
                 .publicId(comment.getPublicId())
                 .postPublicId(postPublicId)
@@ -76,6 +90,7 @@ public class CommentResponse {
                 .content(comment.getContent())
                 .authorNickname(author.nickname())
                 .authorIsVerified(author.isVerified())
+                .isAuthor(comment.getUserPublicId().equals(requesterUserPublicId))
                 .createdAt(UtcTime.toUtcZ(comment.getCreatedAt()))
                 .build();
     }

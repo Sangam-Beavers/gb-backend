@@ -90,8 +90,8 @@ IdP → code 반환 (등록된 redirect_uri로)
 ├─ [인증]
 │    ├─ 인증 상태 조회  GET /api/v1/members/me/verification
 │    └─ 신분증 인증 요청 POST /api/v1/members/me/verification
-│         → user_verifications INSERT (status=PENDING)
-│         → 관리자 검토 후 APPROVED 시 members.is_verified=TRUE
+│         → user_verifications INSERT (status=APPROVED — 데모: 형식 검증 통과 시 즉시 승인, api-spec §10)
+│         → members.is_verified=TRUE 즉시 반영 (관리자 검토 단계는 실 KYC 도입 시 — 그때 PENDING 복귀)
 │
 └─ 탈퇴  DELETE /api/v1/members/me  (soft delete: members.deleted_at SET)
 ```
@@ -103,4 +103,4 @@ IdP → code 반환 (등록된 redirect_uri로)
 - 로그인 실패 누적 차단(Rate Limit) → ⚠️ 방식 B에선 로그인이 IdP에서 일어나므로 적용 위치 재검토(팀 논의).
 - 로그아웃된 토큰 무효화 → ⚠️ 방식 B 재정의 필요(로컬삭제 / IdP end-session / 블랙리스트 중 택1, §2 참고). 블랙리스트 채택 시에만 "블랙리스트 조회 후 401" 적용.
 - 미인증 계정의 충전/송금/환전 시도 → 해당 도메인에서 차단(인증 배지 확인).
-- 신분증 인증은 비동기(관리자 검토). 요청 직후 상태는 PENDING.
+- 신분증 인증은 데모 즉시 승인 — 형식(정규식) 검증 통과 시 바로 APPROVED + 배지 부여(api-spec §10·database.md user_verifications 주석). 실 KYC/관리자 검토 도입 시 비동기 PENDING으로 전환.

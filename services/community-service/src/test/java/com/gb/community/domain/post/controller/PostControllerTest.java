@@ -21,6 +21,7 @@ import com.gb.common.exception.CommonErrorCode;
 import com.gb.common.security.RestAuthenticationEntryPoint;
 import com.gb.community.domain.post.dto.response.PostDetailResponse;
 import com.gb.community.domain.post.dto.response.PostListResponse;
+import com.gb.community.domain.post.dto.response.PostSummaryResponse;
 import com.gb.community.domain.post.service.PostService;
 import com.gb.community.global.config.WebConfig;
 import com.gb.community.global.exception.code.CommunityErrorCode;
@@ -107,6 +108,7 @@ class PostControllerTest {
                 .andExpect(jsonPath("$.data.category").value("JOB"))
                 .andExpect(jsonPath("$.data.author_nickname").value("Minh"))
                 .andExpect(jsonPath("$.data.author_is_verified").value(true))
+                .andExpect(jsonPath("$.data.is_author").value(true)) // 작성 응답은 항상 true(명세 §2)
                 .andExpect(jsonPath("$.data.created_at").value("2026-05-30T04:15:30Z"));
 
         verify(postService).createPost(eq(USER), any());
@@ -121,6 +123,36 @@ class PostControllerTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "category", "JOB",
                                 "content", "본문"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(postService);
+    }
+
+    @Test
+    @DisplayName("11D community-1 — POST 400: content 10,001자(@Size 초과) → COMMON4001, service 미호출(TEXT 컬럼 INSERT 전 차단)")
+    void create_content_상한초과() throws Exception {
+        mockMvc.perform(post("/api/v1/community/posts")
+                        .with(authedJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "category", "JOB",
+                                "title", "제목",
+                                "content", "가".repeat(10_001)))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(postService);
+    }
+
+    @Test
+    @DisplayName("11D community-1 — PATCH 400: content 10,001자(@Size 초과) → COMMON4001, service 미호출(작성과 동일 상한)")
+    void update_content_상한초과() throws Exception {
+        mockMvc.perform(patch("/api/v1/community/posts/{id}", PID)
+                        .with(authedJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "content", "가".repeat(10_001)))))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("COMMON4001"));
 
@@ -185,21 +217,37 @@ class PostControllerTest {
     // ----- GET /posts/{id} -----
 
     @Test
-    @DisplayName("GET /{id} 200: 정상 단건 조회")
+    @DisplayName("GET /{id} 200: 정상 단건 조회 — is_author가 정확히 'is_author' 키로 직렬화(Boolean 게터 함정 회귀 가드)")
     void getPost_정상() throws Exception {
-        given(postService.getPost(PID)).willReturn(stubDetail());
+        given(postService.getPost(USER, PID)).willReturn(stubDetail());
 
         mockMvc.perform(get("/api/v1/community/posts/{id}", PID)
                         .with(authedJwt()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.public_id").value(PID))
-                .andExpect(jsonPath("$.data.author_is_verified").value(true));
+                .andExpect(jsonPath("$.data.author_is_verified").value(true))
+                // primitive boolean이었다면 'is'가 떨어져 $.data.author로 나간다 — 키 이름 자체를 단언.
+                .andExpect(jsonPath("$.data.is_author").value(true))
+                .andExpect(jsonPath("$.data.author").doesNotExist());
+
+        verify(postService).getPost(USER, PID); // 요청자(public_id claim)가 서비스로 전달됨
+    }
+
+    @Test
+    @DisplayName("GET /{id} 401: 토큰은 유효하나 public_id claim 누락 → AUTH4011 — 단건도 is_author 계산에 본인 식별을 쓰므로 resolver fail-fast")
+    void getPost_publicIdClaim_누락_401() throws Exception {
+        mockMvc.perform(get("/api/v1/community/posts/{id}", PID)
+                        .with(jwtWithoutPublicId()))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verifyNoInteractions(postService);
     }
 
     @Test
     @DisplayName("GET /{id} 404: service가 COMMUNITY4001 던지면 → 404 + code")
     void getPost_없음_404() throws Exception {
-        given(postService.getPost(PID))
+        given(postService.getPost(USER, PID))
                 .willThrow(new BusinessException(CommunityErrorCode.POST_NOT_FOUND));
 
         mockMvc.perform(get("/api/v1/community/posts/{id}", PID)
@@ -211,17 +259,47 @@ class PostControllerTest {
     // ----- GET /posts (list) -----
 
     @Test
-    @DisplayName("GET 200: 목록 조회 → posts 배열 + 페이지 메타(snake_case)")
+    @DisplayName("GET 200: 목록 조회 → posts 배열 + 페이지 메타(snake_case), 요청자(public_id)가 서비스로 전달, "
+            + "타인 글 항목의 is_author=false가 정확히 'is_author' 키로 직렬화")
     void getPosts_정상() throws Exception {
-        given(postService.getPosts(any(), any(), any(), eq(0), eq(20)))
-                .willReturn(PostListResponse.of(List.of(), 0, 20, 0, 0));
+        // 타인 글 1건 — 목록 항목(PostSummaryResponse)의 is_author=false 직렬화까지 검증한다
+        // (Boolean false도 NON_NULL류 정책에 걸리지 않고 키가 나가야 프론트가 버튼 비노출을 판단할 수 있다).
+        PostSummaryResponse otherPost = PostSummaryResponse.builder()
+                .publicId(PID)
+                .category("JOB")
+                .title("제목")
+                .contentPreview("미리보기")
+                .authorNickname("Sokha")
+                .isAuthor(false)
+                .likeCount(0)
+                .commentCount(0)
+                .createdAt("2026-05-30T04:15:30Z")
+                .build();
+        given(postService.getPosts(eq(USER), any(), any(), any(), eq(0), eq(20)))
+                .willReturn(PostListResponse.of(List.of(otherPost), 0, 20, 1, 1));
 
         mockMvc.perform(get("/api/v1/community/posts")
                         .with(authedJwt()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.posts").isArray())
-                .andExpect(jsonPath("$.data.total_elements").value(0));
+                // primitive boolean이었다면 'is'가 떨어져 author 키로 나간다 — 키 이름 자체를 단언.
+                .andExpect(jsonPath("$.data.posts[0].is_author").value(false))
+                .andExpect(jsonPath("$.data.posts[0].author").doesNotExist())
+                .andExpect(jsonPath("$.data.total_elements").value(1));
+
+        verify(postService).getPosts(eq(USER), any(), any(), any(), eq(0), eq(20));
+    }
+
+    @Test
+    @DisplayName("GET 401: 토큰은 유효하나 public_id claim 누락 → AUTH4011 — 목록도 이제 본인 식별(is_author)을 쓰므로 resolver fail-fast")
+    void getPosts_publicIdClaim_누락_401() throws Exception {
+        mockMvc.perform(get("/api/v1/community/posts")
+                        .with(jwtWithoutPublicId()))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verifyNoInteractions(postService);
     }
 
     @Test
@@ -262,7 +340,8 @@ class PostControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.public_id").value(PID))
-                .andExpect(jsonPath("$.data.author_is_verified").value(true));
+                .andExpect(jsonPath("$.data.author_is_verified").value(true))
+                .andExpect(jsonPath("$.data.is_author").value(true)); // 수정은 본인 검증 통과 흐름 — 항상 true
 
         verify(postService).updatePost(eq(USER), eq(PID), any());
     }
@@ -329,6 +408,7 @@ class PostControllerTest {
                 .content("본문")
                 .authorNickname("Minh")
                 .authorIsVerified(true)
+                .isAuthor(true)
                 .likeCount(0)
                 .commentCount(0)
                 .createdAt("2026-05-30T04:15:30Z")

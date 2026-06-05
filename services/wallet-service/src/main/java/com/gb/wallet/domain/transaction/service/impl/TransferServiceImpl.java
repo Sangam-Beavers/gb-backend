@@ -667,6 +667,10 @@ public class TransferServiceImpl implements TransferService {
         }
 
         // (4) 송신자 본명 조회(MemberClient fail-open). 본인이라 호출 실패 시 null이어도 영수증 자체는 응답.
+        // TODO(RealMemberClient 전환 시): 이 호출은 readOnly tx "안"의 외부 호출이라 HTTP 장애 시 DB 커넥션을
+        //   read-timeout까지 점유한다(11D transfer-2 — 무락·단건 조회라 영향 소, 현 MockMemberClient는
+        //   인프로세스라 무해). 전환 이슈에서 DB 조회(1~3,5)를 짧은 tx로 분리하고 본 호출을 tx 밖으로
+        //   hoist할 것 — tx.getWallet()이 LAZY라 단순 NOT_SUPPORTED 전환은 불가, 값 추출 후 분리 필요.
         String senderName = fetchMemberNameSafe(userPublicId);
 
         // (5) 도메인별 부가 데이터 조달.

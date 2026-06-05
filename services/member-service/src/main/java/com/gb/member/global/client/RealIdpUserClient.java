@@ -5,7 +5,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
+import com.gb.member.global.exception.code.MemberErrorCode;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,9 +35,11 @@ import org.springframework.web.client.RestClientResponseException;
  * <p>이 호출은 로그인 중계와 달리 <b>관리자 토큰</b>(Authorization: Bearer)이 필요하다.
  * 토큰은 평문 금지: {@code auth.idp.admin-token}으로 받되 실제 값은 환경변수(AUTH_ADMIN_TOKEN)로만 주입한다.
  *
- * <p>IdP 응답 에러는 상태로 분기한다: 4xx(이메일/username 충돌 등 클라이언트 입력 문제)는
+ * <p>IdP 응답 에러는 상태로 분기한다: 4xx(클라이언트 입력 문제)는
  * {@link CommonErrorCode#INVALID_REQUEST}(400), 5xx·연결 실패(서버측 연동 장애)는
  * {@link CommonErrorCode#INTERNAL_SERVER_ERROR}(500)로 변환한다(CLAUDE §6).
+ * 단 프로비저닝의 username(=email) unique 위반 4xx만은
+ * {@link MemberErrorCode#EMAIL_ALREADY_EXISTS}(MEMBER4002, 409)로 매핑한다(11D member-idp-2).
  *
  * <p>주의(설정 의존): 반환하는 {@code uuid}가 로그인 토큰의 {@code sub}와 일치하려면 Authentik
  * Provider의 subject mode를 "Based on the User's UUID"로 맞춰야 한다. 기본값(hashed id)이면
@@ -69,12 +73,16 @@ public class RealIdpUserClient implements IdpUserClient {
 
     @Override
     public String provisionUser(String email, String name, String rawPassword, String publicId) {
+        // 1) 사용자 생성. username은 이메일로 통일(Authentik에서 username은 필수·고유).
+        // 본문은 ObjectMapper로 직접 JSON 문자열로 만들어 보낸다(컨버터 환경 차이로 Map이
+        // 빈 본문으로 직렬화되는 문제를 피하기 위해 — String은 항상 그대로 전송된다).
+        // attributes.public_id: 우리 회원 식별자를 IdP에 저장 → 토큰 custom claim(public_id)으로 노출.
+        // 이 단계 실패는 IdP에 아무것도 안 생긴 상태라 보상 없이 매핑만 해서 전파한다.
+        // (잔존 한계: 생성 "응답 유실"(read-timeout)은 생성 여부를 알 수 없어 보상하지 못한다 — 그 고아는
+        //  재가입 시 unique 위반 → MEMBER4002로 진단되며 수동 정리 대상. 11D member-idp-1 비고)
+        CreateUserResponse created;
         try {
-            // 1) 사용자 생성. username은 이메일로 통일(Authentik에서 username은 필수·고유).
-            // 본문은 ObjectMapper로 직접 JSON 문자열로 만들어 보낸다(컨버터 환경 차이로 Map이
-            // 빈 본문으로 직렬화되는 문제를 피하기 위해 — String은 항상 그대로 전송된다).
-            // attributes.public_id: 우리 회원 식별자를 IdP에 저장 → 토큰 custom claim(public_id)으로 노출.
-            CreateUserResponse created = restClient.post()
+            created = restClient.post()
                     .uri(apiBaseUri + "/core/users/")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)
                     .contentType(MediaType.APPLICATION_JSON)
@@ -87,13 +95,34 @@ public class RealIdpUserClient implements IdpUserClient {
                             "attributes", Map.of("public_id", publicId))))
                     .retrieve()
                     .body(CreateUserResponse.class);
-
-            if (created == null || created.pk() == null || created.uuid() == null) {
-                log.error("Authentik 사용자 생성 응답이 비어 있습니다. email={}", email);
-                throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+        } catch (RestClientResponseException e) {
+            // IdP 응답 에러 — username(=email) unique 위반이면 "이미 사용 중인 이메일"(MEMBER4002, 409)로
+            // 매핑해 진단 가능하게 한다(11D member-idp-2). IdP-first 가입에서 이 충돌은 ① 동시 같은 이메일
+            // 가입의 패자(IdP unique가 직렬화) 또는 ② 과거 부분실패로 IdP에만 남은 고아다.
+            // 그 외 4xx(입력 문제)→COMMON4001, 5xx→COMMON5000.
+            log.error("Authentik 사용자 생성 실패: email={}, status={}, msg={}",
+                    email, e.getStatusCode(), e.getMessage());
+            if (e.getStatusCode().is4xxClientError() && isUniqueViolation(e)) {
+                throw new BusinessException(MemberErrorCode.EMAIL_ALREADY_EXISTS);
             }
+            throw new BusinessException(idpStatusToError(e));
+        } catch (RestClientException e) {
+            // 연결 실패·타임아웃 등(응답 없음) → 서버측 연동 장애 → COMMON5000.
+            log.error("Authentik 사용자 생성 연결 실패: email={}, msg={}", email, e.getMessage());
+            throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+        }
 
-            // 2) 비밀번호 설정(별도 엔드포인트). 성공 시 204.
+        if (created == null || created.pk() == null || created.uuid() == null) {
+            log.error("Authentik 사용자 생성 응답이 비어 있습니다. email={}", email);
+            throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+        }
+
+        // 2) 비밀번호 설정(별도 엔드포인트). 성공 시 204.
+        //    여기서 실패하면 ①에서 만든 "비밀번호 없는 사용자"가 IdP 고아로 남아 그 이메일이 영구
+        //    가입불가가 된다(11D member-idp-1). 방금 이 요청에서 만든 사용자(pk 확보)이므로 보상
+        //    DELETE로 회수한 뒤 원래 에러를 전파한다. 연결 실패(응답 유실)로 set_password가 실제로는
+        //    성공했더라도 가입 자체가 실패로 끝나므로 삭제가 안전하다(재가입으로 깨끗하게 재생성).
+        try {
             restClient.post()
                     .uri(apiBaseUri + "/core/users/" + created.pk() + "/set_password/")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)
@@ -101,19 +130,101 @@ public class RealIdpUserClient implements IdpUserClient {
                     .body(toJson(Map.of("password", rawPassword)))
                     .retrieve()
                     .toBodilessEntity();
-
-            return created.uuid();
-
         } catch (RestClientResponseException e) {
-            // IdP 응답 에러 — 4xx(이메일/username 충돌 등 입력 문제)→COMMON4001, 5xx→COMMON5000.
-            log.error("Authentik 사용자 프로비저닝 실패: email={}, status={}, msg={}",
+            log.error("Authentik 비밀번호 설정 실패(사용자 생성 직후) — 보상 삭제 시도: email={}, status={}, msg={}",
                     email, e.getStatusCode(), e.getMessage());
+            deleteCreatedUserBestEffort(created.pk(), email);
             throw new BusinessException(idpStatusToError(e));
         } catch (RestClientException e) {
-            // 연결 실패·타임아웃 등(응답 없음) → 서버측 연동 장애 → COMMON5000.
-            log.error("Authentik 사용자 프로비저닝 연결 실패: email={}, msg={}", email, e.getMessage());
+            log.error("Authentik 비밀번호 설정 연결 실패(사용자 생성 직후) — 보상 삭제 시도: email={}, msg={}",
+                    email, e.getMessage());
+            deleteCreatedUserBestEffort(created.pk(), email);
             throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
         }
+
+        return created.uuid();
+    }
+
+    /**
+     * 프로비저닝 보상 삭제(11D member-idp-1): 같은 요청에서 방금 생성한 사용자(pk)를 DELETE로 회수해
+     * "비밀번호 없는 고아 + 이메일 영구 가입불가"를 막는다. <b>이 요청이 만든 사용자만</b> 지우므로
+     * 기존/타 사용자 오삭제 위험이 없다. 비활성화가 아니라 DELETE인 이유: Authentik username unique는
+     * 비활성 사용자도 점유하므로 삭제해야 이메일이 풀린다. 실패해도 던지지 않는다(원인 에러 우선) —
+     * error 로그로 수동 정리를 유도한다.
+     */
+    private void deleteCreatedUserBestEffort(Integer pk, String email) {
+        try {
+            restClient.delete()
+                    .uri(apiBaseUri + "/core/users/{pk}/", pk)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)
+                    .retrieve()
+                    .toBodilessEntity();
+            log.info("Authentik 보상 삭제 완료(프로비저닝 부분실패 회수): email={}, pk={}", email, pk);
+        } catch (RuntimeException e) {
+            log.error("Authentik 보상 삭제 실패 — IdP 고아 잔존, 수동 정리 필요: email={}, pk={}, msg={}",
+                    email, pk, e.getMessage());
+        }
+    }
+
+    /**
+     * 가입 보상 삭제(11D member-idp-1·core-2 — IdP-first 가입의 로컬 실패 회수): 방금 프로비저닝한
+     * 사용자를 uuid로 찾아 DELETE로 회수한다. 로컬 INSERT가 실패(닉네임 race·DB 장애)했을 때 Service가
+     * 호출하며, 대상은 <b>이 가입 요청이 반환받은 uuid</b>뿐이다. {@code deactivateUser}와 동일한
+     * "정확 일치 1건" 방어를 적용하고(엉뚱한 사용자 오삭제 차단), 어떤 실패도 던지지 않는다(best-effort —
+     * 호출 측의 원인 에러(COMMON4091 등)가 우선). 실패 시 error 로그로 수동 정리를 유도한다.
+     */
+    @Override
+    public void deleteUserBestEffort(String authProviderId) {
+        if (authProviderId == null || authProviderId.isBlank()) {
+            log.error("IdP 보상 삭제 불가: authProviderId가 비어 있습니다.");
+            return;
+        }
+        try {
+            // 1) uuid → pk 해석(deactivateUser와 동일 패턴).
+            UserListResponse list = restClient.get()
+                    .uri(apiBaseUri + "/core/users/?uuid={uuid}", authProviderId)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)
+                    .retrieve()
+                    .body(UserListResponse.class);
+            if (list == null || list.results() == null) {
+                log.error("IdP 보상 삭제: 사용자 조회 실패(빈 응답) — 고아 잔존 가능, 수동 정리 필요. uuid={}",
+                        authProviderId);
+                return;
+            }
+            List<UserEntry> matched = list.results().stream()
+                    .filter(u -> authProviderId.equals(u.uuid()) && u.pk() != null)
+                    .toList();
+            if (matched.isEmpty()) {
+                log.warn("IdP 보상 삭제: 대상 없음(이미 삭제 — 멱등 통과). uuid={}", authProviderId);
+                return;
+            }
+            if (matched.size() > 1) {
+                log.error("IdP 보상 삭제: uuid 정확 일치가 2건 이상 — 오삭제 방지 위해 중단, 수동 정리 필요. "
+                        + "uuid={}, count={}", authProviderId, matched.size());
+                return;
+            }
+
+            // 2) DELETE로 회수(비활성화는 username unique를 계속 점유하므로 부적합).
+            restClient.delete()
+                    .uri(apiBaseUri + "/core/users/{pk}/", matched.get(0).pk())
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)
+                    .retrieve()
+                    .toBodilessEntity();
+            log.info("IdP 보상 삭제 완료(가입 로컬 실패 회수): uuid={}", authProviderId);
+        } catch (RuntimeException e) {
+            log.error("IdP 보상 삭제 실패 — IdP 고아 잔존, 수동 정리 필요: uuid={}, msg={}",
+                    authProviderId, e.getMessage());
+        }
+    }
+
+    /**
+     * Authentik 4xx 본문이 username/email unique 위반을 가리키는지 판별한다 — 중복 시 본문에 "unique" 문구가
+     * 담긴다(예: {@code {"username":["This field must be unique."]}}). 외부 본문 의존이라 보수적 포함 검사만
+     * 하며, 미일치 시 기존 매핑(COMMON4001)으로 폴백돼 거짓양성 위험이 없다(11D member-idp-2).
+     */
+    private boolean isUniqueViolation(RestClientResponseException e) {
+        String body = e.getResponseBodyAsString();
+        return body.toLowerCase(Locale.ROOT).contains("unique");
     }
 
     @Override

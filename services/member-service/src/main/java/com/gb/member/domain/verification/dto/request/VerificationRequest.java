@@ -41,11 +41,13 @@ public class VerificationRequest {
     private String documentNumber;
 
     /**
-     * 사전 업로드된 신분증 이미지의 S3 key. <b>현재(OCR 미도입) 선택값.</b> 길이 제한은 DB 컬럼과 동일한 500자.
-     * 미전송(null) 또는 빈 문자열 허용 — 형식 검증 통과만으로 인증된다(이슈 #152).
+     * 사전 업로드된 신분증 이미지의 S3 key. <b>현재(OCR 미도입) 선택값.</b> 길이 제한은 DB 컬럼과 동일한 500자
+     * — 형식 검증 없이 평문 그대로 저장되는 길이-경계 필드라 @Size로 컬럼 한도를 입력단에서 막는다
+     * (초과 시 COMMON5000(500)이 아닌 COMMON4001(400), 10D member-verification-5).
+     * 미전송(null) 또는 빈 문자열 허용 — 형식 검증 통과만으로 인증된다(이슈 #152). OCR 도입 시 필수 복구.
      */
-    @Schema(description = "사전 업로드된 신분증 이미지의 S3 key (선택 — OCR 도입 전 임시 정책)",
-            example = "verifications/a1b2c3d4/front.jpg", nullable = true)
+    @Schema(description = "사전 업로드된 신분증 이미지의 S3 key (선택 — OCR 도입 전 임시 정책, 최대 500자)",
+            example = "verifications/a1b2c3d4/front.jpg", nullable = true, maxLength = 500)
     @Size(max = 500, message = "s3_key는 500자 이내여야 합니다")
     private String s3Key;
 }

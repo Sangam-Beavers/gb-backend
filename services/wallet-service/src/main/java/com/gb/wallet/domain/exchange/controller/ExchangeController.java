@@ -112,7 +112,8 @@ public class ExchangeController {
                             schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404", description = "EXCHANGE4001 - 존재하지 않는 환전 내역입니다. "
-                            + "(타인/타 유형의 idempotency_key 재사용 시 멱등 재반환을 차단 — 존재 미노출)",
+                            + "(타인/타 유형의 idempotency_key 재사용 시 멱등 재반환을 차단 — 존재 미노출) / "
+                            + "WALLET4001 - 존재하지 않는 지갑입니다. (요청자 지갑 부재 — 방어)",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(

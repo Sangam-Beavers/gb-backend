@@ -77,15 +77,23 @@ class CommentControllerTest {
     private static final String CID = "c1d2e3f4-0000-0000-0000-000000000001";
     private static final String VALID_CONTENT = "좋은 정보 감사합니다!";
 
-    /** 인증된 요청용 JWT 주입. getComments는 본인 식별을 쓰지 않지만 보호 엔드포인트라 토큰이 필요하다. */
+    /** 인증된 요청용 JWT 주입(public_id claim = USER). getComments도 is_author 계산에 본인 식별을 쓴다. */
     private static RequestPostProcessor authedJwt() {
         return jwt().jwt(j -> j.claim("public_id", USER));
     }
 
+    /**
+     * 토큰은 유효하나 {@code public_id} claim이 없는 JWT(=IdP Property Mapping 누락 시나리오).
+     * CurrentUserPublicIdArgumentResolver가 AUTH4011로 fail-fast 하는 경로 검증용(PostControllerTest와 동일).
+     */
+    private static RequestPostProcessor jwtWithoutPublicId() {
+        return jwt().jwt(j -> j.claim("sub", "no-mapping"));
+    }
+
     @Test
-    @DisplayName("GET 200: 댓글 목록 → comments 배열 + 페이지 메타(snake_case), parent_comment_public_id는 null")
+    @DisplayName("GET 200: 댓글 목록 → comments 배열 + 페이지 메타(snake_case), is_author가 정확히 'is_author' 키로 직렬화")
     void getComments_정상() throws Exception {
-        given(commentService.getComments(eq(PID), eq(0), eq(20)))
+        given(commentService.getComments(eq(PID), eq(USER), eq(0), eq(20)))
                 .willReturn(CommentListResponse.of(List.of(stubComment()), 0, 20, 1, 1));
 
         mockMvc.perform(get("/api/v1/community/posts/{id}/comments", PID)
@@ -99,19 +107,22 @@ class CommentControllerTest {
                 .andExpect(jsonPath("$.data.comments[0].content").value("댓글 내용"))
                 .andExpect(jsonPath("$.data.comments[0].author_nickname").value("Minh"))
                 .andExpect(jsonPath("$.data.comments[0].author_is_verified").value(true))
+                // primitive boolean이었다면 'is'가 떨어져 author 키로 나간다 — 키 이름 자체를 단언.
+                .andExpect(jsonPath("$.data.comments[0].is_author").value(true))
+                .andExpect(jsonPath("$.data.comments[0].author").doesNotExist())
                 .andExpect(jsonPath("$.data.comments[0].created_at").value("2026-05-26T04:15:30Z"))
                 .andExpect(jsonPath("$.data.page").value(0))
                 .andExpect(jsonPath("$.data.size").value(20))
                 .andExpect(jsonPath("$.data.total_elements").value(1))
                 .andExpect(jsonPath("$.data.total_pages").value(1));
 
-        verify(commentService).getComments(PID, 0, 20);
+        verify(commentService).getComments(PID, USER, 0, 20); // 요청자(public_id claim)가 서비스로 전달됨
     }
 
     @Test
     @DisplayName("GET 404: service가 COMMUNITY4001 던지면 → 404 + code")
     void getComments_게시글없음_404() throws Exception {
-        given(commentService.getComments(eq(PID), any(Integer.class), any(Integer.class)))
+        given(commentService.getComments(eq(PID), eq(USER), any(Integer.class), any(Integer.class)))
                 .willThrow(new BusinessException(CommunityErrorCode.POST_NOT_FOUND));
 
         mockMvc.perform(get("/api/v1/community/posts/{id}/comments", PID)
@@ -155,6 +166,17 @@ class CommentControllerTest {
         verifyNoInteractions(commentService);
     }
 
+    @Test
+    @DisplayName("GET 401: 토큰은 유효하나 public_id claim 누락 → AUTH4011 — 댓글 목록도 is_author 계산에 본인 식별을 쓰므로 resolver fail-fast")
+    void getComments_publicIdClaim_누락_401() throws Exception {
+        mockMvc.perform(get("/api/v1/community/posts/{id}/comments", PID)
+                        .with(jwtWithoutPublicId()))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verifyNoInteractions(commentService);
+    }
+
     // ----- POST /posts/{id}/comments (댓글 작성, CC-T1) -----
 
     @Test
@@ -175,6 +197,7 @@ class CommentControllerTest {
                 .andExpect(jsonPath("$.data.content").value("댓글 내용"))
                 .andExpect(jsonPath("$.data.author_nickname").value("Minh"))
                 .andExpect(jsonPath("$.data.author_is_verified").value(true))
+                .andExpect(jsonPath("$.data.is_author").value(true)) // 작성 응답은 항상 true(명세 §6)
                 .andExpect(jsonPath("$.data.created_at").value("2026-05-26T04:15:30Z"));
 
         // @RequestBody 바인딩 검증: 보낸 content가 그대로 서비스로 전달됐는지 캡처해 확인
@@ -335,6 +358,7 @@ class CommentControllerTest {
                 .content("댓글 내용")
                 .authorNickname("Minh")
                 .authorIsVerified(true)
+                .isAuthor(true)
                 .createdAt("2026-05-26T04:15:30Z")
                 .build();
     }

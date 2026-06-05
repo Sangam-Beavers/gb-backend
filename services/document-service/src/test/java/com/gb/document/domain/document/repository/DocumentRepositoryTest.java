@@ -7,6 +7,7 @@ import com.gb.document.domain.document.entity.Document;
 import com.gb.document.domain.document.entity.DocumentStatus;
 import com.gb.document.global.config.JpaConfig;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -61,14 +62,16 @@ class DocumentRepositoryTest {
         em.flush();
 
         // @LastModifiedDate가 persist 시점 값을 덮어쓰므로 과거 시각은 native UPDATE로 박는다(CLAUDE.md §10).
-        LocalDateTime past = LocalDateTime.now().minusHours(1);
+        // 저장 시각 규약 = UTC(JpaConfig utcDateTimeProvider, 10D 시각 통일) — 테스트의 기준 시각도 UTC로
+        // 잡아야 KST 등 비-UTC JVM에서 audited 값(UTC)과 9시간 어긋나지 않는다.
+        LocalDateTime past = LocalDateTime.now(ZoneOffset.UTC).minusHours(1);
         setUpdatedAt(stale.getId(), past);
         setUpdatedAt(doneOld.getId(), past);
         setUpdatedAt(failOld.getId(), past);
         em.clear();
 
         List<Document> result = documentRepository.findAllByStatusAndUpdatedAtBefore(
-                DocumentStatus.ANALYZING, LocalDateTime.now().minusMinutes(30));
+                DocumentStatus.ANALYZING, LocalDateTime.now(ZoneOffset.UTC).minusMinutes(30));
 
         assertThat(result).extracting(Document::getPublicId).containsExactly("stale");
     }

@@ -34,12 +34,13 @@ class PinVerifyRateLimitPropertiesTest {
     }
 
     @Test
-    @DisplayName("설정 미지정(null)이면 기본값(60s/10회)으로 보정되고 제약을 통과한다")
+    @DisplayName("설정 미지정(null)이면 기본값(60s/5회 — 단기 잠금 임계와 동일, 10D wallet-pin-redis-2)으로 보정되고 제약을 통과한다")
     void 미지정시_기본값_보정_및_통과() {
         PinVerifyRateLimitProperties props = new PinVerifyRateLimitProperties(null, null);
 
         assertThat(props.windowSeconds()).isEqualTo(60);
-        assertThat(props.limit()).isEqualTo(10);
+        // 잠금 임계(5회 실패/10분)보다 느슨하면 동시 버스트가 잠금 전 최대 limit회까지 추측 가능 — 임계와 동일하게 캡.
+        assertThat(props.limit()).isEqualTo(5);
         assertThat(validator.validate(props)).isEmpty();
     }
 
