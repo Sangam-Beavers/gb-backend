@@ -234,14 +234,19 @@ message: "회원가입이 완료되었습니다."
 **Request Body**
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `identity_document_type` | string | O | `ALIEN_REGISTRATION` / `PASSPORT` / `NATIONAL_ID` |
+| `identity_document_type` | string | O | `ALIEN_REGISTRATION` / `NATIONAL_ID_KR` / `NATIONAL_ID_US` / `NATIONAL_ID_VN` / `NATIONAL_ID_PH` (이슈 #108 — 여권/일반 NATIONAL_ID 제거, 4개국 분기) |
 | `document_number` | string | O | 문서 번호 (서버에서 AES-256-GCM 암호화 저장, `EncryptedStringConverter` 자동 변환) |
-| `s3_key` | string | O | 사전 업로드된 신분증 이미지 S3 key (**최대 500자** — 컬럼 한도, 초과 시 COMMON4001) |
+| `s3_key` | string | △ | 사전 업로드된 신분증 이미지 S3 key. **현재 선택 — OCR/이미지 업로드 도입 전 임시 정책(이슈 #152).** 미전송 시 null 저장, 향후 OCR 도입 시 필수(O)로 복구. **최대 500자**(컬럼 한도 — 초과 시 COMMON4001) |
 
-**Response 201** — `data`: `status`="APPROVED", `submitted_at`(ISO 8601 UTC Z)
-message: 기본 생성 메시지("성공적으로 생성되었습니다.")
+**Response 201** — `data`: `status`="APPROVED" (데모 정책 — 형식 검증 통과 시 즉시 승인), `submitted_at`(ISO 8601 UTC Z)
+message: 기본 생성 메시지("성공적으로 생성되었습니다." — 코드 `SuccessStatus.CREATED`)
 
 > **데모 즉시 승인**: 현 구현은 실 신원확인 API 없이 유형별 번호 형식(정규식) 검증 통과 시 **즉시 APPROVED + 배지 부여**한다(코드·DB·엔티티 전 계층 일관 — database.md `user_verifications` 주석 참조). 실 KYC/관리자 검토 단계를 도입하면 응답이 `status`="PENDING" + 안내문("신분증 인증 요청이 접수되었습니다. 검토 후 결과를 알려드립니다.")으로 바뀐다. (10D member-verification-2 — 명세를 데모 구현에 정렬)
+
+> 🆕 **사이드이펙트(이슈 #152):** APPROVED 시점에 wallet-service `POST /api/v1/wallets`를 호출해
+> 사용자당 1개의 전자지갑이 자동 개설된다(멱등). 이미 지갑이 있으면 그대로 유지. 지갑 생성 호출이
+> 실패해도 인증 자체는 성공으로 commit(fail-open) — 호출 실패는 WARN 로깅으로만 남고, 사용자는
+> 멱등 API로 추후 재호출/보정 가능.
 
 **Error**
 | HTTP | code | message |

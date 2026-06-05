@@ -127,11 +127,10 @@ MySQL 접근 횟수 = 세션당 1회 (맨 첫 질문 때만, 백엔드가 요약
 
 [`../architecture.md`](../architecture.md) §7: WAF → API GW → ALB → Spring Security(2차 인가) → DB. 인가는 Spring 레이어 책임이며 Lambda는 인가 레이어가 아니다.
 
-> ⚠️ **현재 인증 미구현 — 다른 API와 동일하게 임시 처리한다.** [`../conventions.md`](../conventions.md) §14에 따라, 챗봇 컨트롤러도 지금 단계에서는 JWT 추출이 아니라 `@RequestHeader("X-User-Public-Id")` + `// TODO`로 본인 식별자를 받는다. "백엔드 2차 인가로 본인 문서인지 검증"은 **최종 목표**이고, 현재 구현은 헤더로 받은 `userPublicId`와 문서 소유자를 비교하는 형태다.
+> ✅ **인증 적용 완료 — 다른 API와 동일하게 처리한다.** [`../conventions.md`](../conventions.md) §14에 따라 챗봇 컨트롤러는 OAuth2 Resource Server가 검증한 JWT의 custom claim `public_id`를 `@CurrentUserPublicId String userPublicId` 로 받는다. "백엔드 2차 인가로 본인 문서인지 검증"은 이 값과 문서 소유자(`document.userPublicId`)를 비교하는 형태다.
 
 ```java
-// 백엔드 ChatController (인증 구현 후 JWT 추출로 교체)
-// TODO: 인증 구현 후 JWT(sub)에서 userPublicId 추출로 교체. 현재는 헤더 임시 수신.
+// 백엔드 ChatController
 var doc = documentRepo.findByPublicId(documentId)
             .orElseThrow(() -> new BusinessException(DocumentErrorCode.DOCUMENT_NOT_FOUND)); // DOCUMENT4001 / 404
 if (!doc.getUserPublicId().equals(userPublicId)) {
@@ -368,7 +367,7 @@ save_to_dynamo(session_id, user_public_id, document_public_id, message, reply, e
 왜 외부 MCP 자체 어댑터 안 만들었나?
                      자체 MCP 패턴은 이미 MCP1/2 두 번 시연. Tavily 가 표준 MCP 서버를 운영하므로
                      중간 어댑터는 over-engineering. 코드/운영 비용 0, 발표 narrative 도 강력.
-권한 검증 어디?       백엔드(architecture §7). 현재 인증 미구현이라 X-User-Public-Id 헤더 임시처리.
+권한 검증 어디?       백엔드(architecture §7). OAuth2 Resource Server가 JWT 검증, `@CurrentUserPublicId`로 본인 식별자 추출 후 문서 소유자 비교.
 분석결과 왜 MySQL?    사용자가 조회하는 관계형 데이터, 기존에 이미 있음. 챗봇은 요약만 필요→백엔드가 페이로드.
 챗봇이 분석결과 계속 읽나? 아니. 첫 턴 요약 1회. 이후 messages 맥락에 묻어 따라다님. MySQL 재접근 0.
 대화내역 왜 DynamoDB? 챗봇이 매 턴 직접 R/W, 같은 계정B→크로스계정0, SSE와 맞음, 서버리스 구조 유지.

@@ -46,13 +46,13 @@ class TransactionServiceImplTest {
     @Test
     @DisplayName("getMyTransactions: page/size를 최근순(created_at DESC) PageRequest로 전달한다")
     void getMyTransactions_PageRequest_정렬() {
-        when(transactionRepository.findByWallet_UserPublicId(eq(USER), any(Pageable.class)))
+        when(transactionRepository.findByMineSendingOrReceiving(eq(USER), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(), PageRequest.of(2, 15), 0));
 
         service.getMyTransactions(USER, 2, 15);
 
         ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
-        verify(transactionRepository).findByWallet_UserPublicId(eq(USER), captor.capture());
+        verify(transactionRepository).findByMineSendingOrReceiving(eq(USER), captor.capture());
         Pageable pageable = captor.getValue();
         assertThat(pageable.getPageNumber()).isEqualTo(2);
         assertThat(pageable.getPageSize()).isEqualTo(15);
@@ -65,13 +65,13 @@ class TransactionServiceImplTest {
     @DisplayName("getMyTransactions: 전 유형 거래를 항목으로 매핑하고 페이지 메타를 채운다")
     void getMyTransactions_전유형_매핑() {
         Wallet wallet = Wallet.builder().publicId("w-1").userPublicId(USER).status(WalletStatus.ACTIVE).build();
-        Transaction charge = tx("c-1", wallet, TransactionType.CHARGE, new BigDecimal("500000"),
+        Transaction charge = tx("c-1", wallet, null, TransactionType.CHARGE, new BigDecimal("500000"),
                 CurrencyType.KRW, BigDecimal.ZERO, null, null, null);
-        Transaction remittance = tx("r-1", wallet, TransactionType.REMITTANCE, new BigDecimal("100000"),
+        Transaction remittance = tx("r-1", wallet, null, TransactionType.REMITTANCE, new BigDecimal("100000"),
                 CurrencyType.KRW, new BigDecimal("3000"), "홍길동", null, null);
-        Transaction exchange = tx("e-1", wallet, TransactionType.EXCHANGE, new BigDecimal("100000"),
+        Transaction exchange = tx("e-1", wallet, null, TransactionType.EXCHANGE, new BigDecimal("100000"),
                 CurrencyType.KRW, new BigDecimal("500"), null, new BigDecimal("72.1014"), CurrencyType.USD);
-        when(transactionRepository.findByWallet_UserPublicId(eq(USER), any(Pageable.class)))
+        when(transactionRepository.findByMineSendingOrReceiving(eq(USER), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(charge, remittance, exchange), PageRequest.of(0, 20), 3));
 
         TransactionListResponse response = service.getMyTransactions(USER, 0, 20);
@@ -79,6 +79,9 @@ class TransactionServiceImplTest {
         assertThat(response.getTransactions()).hasSize(3);
         assertThat(response.getTransactions()).extracting(TransactionHistoryItemResponse::getType)
                 .containsExactly("CHARGE", "REMITTANCE", "EXCHANGE");
+        // 모두 본인이 송신자(wallet=USER)라 direction=OUT.
+        assertThat(response.getTransactions()).extracting(TransactionHistoryItemResponse::getDirection)
+                .containsExactly("OUT", "OUT", "OUT");
 
         TransactionHistoryItemResponse chargeItem = response.getTransactions().get(0);
         assertThat(chargeItem.getPublicId()).isEqualTo("c-1");
@@ -102,9 +105,33 @@ class TransactionServiceImplTest {
     }
 
     @Test
+    @DisplayName("getMyTransactions: INTERNAL_TRANSFER 송신자=OUT, 수신자=IN으로 direction을 매핑한다")
+    void getMyTransactions_internalTransfer_OUT_IN_매핑() {
+        Wallet me = Wallet.builder().publicId("w-me").userPublicId(USER).status(WalletStatus.ACTIVE).build();
+        Wallet other = Wallet.builder().publicId("w-other").userPublicId("other-uuid")
+                .status(WalletStatus.ACTIVE).build();
+
+        // ① 내가 송신자(wallet=me), 상대(other)에게 보낸 거래 → 본인 기준 OUT
+        Transaction sent = tx("it-out", me, other, TransactionType.INTERNAL_TRANSFER,
+                new BigDecimal("10000"), CurrencyType.KRW, BigDecimal.ZERO, null, null, null);
+        // ② 내가 수신자(receiverWallet=me), 상대(other)가 보낸 거래 → 본인 기준 IN
+        Transaction received = tx("it-in", other, me, TransactionType.INTERNAL_TRANSFER,
+                new BigDecimal("20000"), CurrencyType.KRW, BigDecimal.ZERO, null, null, null);
+        when(transactionRepository.findByMineSendingOrReceiving(eq(USER), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(sent, received), PageRequest.of(0, 20), 2));
+
+        TransactionListResponse response = service.getMyTransactions(USER, 0, 20);
+
+        assertThat(response.getTransactions()).extracting(TransactionHistoryItemResponse::getPublicId)
+                .containsExactly("it-out", "it-in");
+        assertThat(response.getTransactions()).extracting(TransactionHistoryItemResponse::getDirection)
+                .containsExactly("OUT", "IN");
+    }
+
+    @Test
     @DisplayName("getMyTransactions: 거래가 없으면 WALLET4001을 던지지 않고 빈 배열 + 메타를 반환한다")
     void getMyTransactions_빈_결과() {
-        when(transactionRepository.findByWallet_UserPublicId(eq(USER), any(Pageable.class)))
+        when(transactionRepository.findByMineSendingOrReceiving(eq(USER), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
 
         TransactionListResponse response = service.getMyTransactions(USER, 0, 20);
@@ -117,22 +144,26 @@ class TransactionServiceImplTest {
     }
 
     @Test
-    @DisplayName("getMyTransactions: 요청자 본인의 user_public_id로만 조회한다")
+    @DisplayName("getMyTransactions: 요청자 본인의 user_public_id로만 조회한다(OR 조회 호출)")
     void getMyTransactions_본인만_조회() {
-        when(transactionRepository.findByWallet_UserPublicId(eq(USER), any(Pageable.class)))
+        when(transactionRepository.findByMineSendingOrReceiving(eq(USER), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
 
         service.getMyTransactions(USER, 0, 20);
 
-        verify(transactionRepository).findByWallet_UserPublicId(eq(USER), any(Pageable.class));
+        verify(transactionRepository).findByMineSendingOrReceiving(eq(USER), any(Pageable.class));
     }
 
-    private Transaction tx(String publicId, Wallet wallet, TransactionType type, BigDecimal amount,
-                           CurrencyType currency, BigDecimal fee, String receiverName,
+    /**
+     * 헬퍼. {@code receiverWallet} 파라미터 추가 — INTERNAL_TRANSFER의 수신자 시점(direction=IN) 검증 위해.
+     */
+    private Transaction tx(String publicId, Wallet wallet, Wallet receiverWallet, TransactionType type,
+                           BigDecimal amount, CurrencyType currency, BigDecimal fee, String receiverName,
                            BigDecimal receiveAmount, CurrencyType receiveCurrency) {
         Transaction t = Transaction.builder()
                 .publicId(publicId)
                 .wallet(wallet)
+                .receiverWallet(receiverWallet)
                 .type(type)
                 .amount(amount)
                 .currencyCode(currency)

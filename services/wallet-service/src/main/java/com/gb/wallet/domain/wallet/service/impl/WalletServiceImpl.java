@@ -4,6 +4,7 @@ import com.gb.common.exception.BusinessException;
 import com.gb.wallet.domain.wallet.dto.response.ExchangeRateWidgetResponse;
 import com.gb.wallet.domain.wallet.dto.response.WalletBalanceResponse;
 import com.gb.wallet.domain.wallet.dto.response.WalletMeResponse;
+import com.gb.wallet.domain.wallet.dto.response.WalletResponse;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.entity.WalletBalance;
 import com.gb.wallet.domain.wallet.repository.WalletBalanceRepository;
@@ -22,6 +23,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,6 +35,45 @@ public class WalletServiceImpl implements WalletService {
     private final WalletRepository walletRepository;
     private final WalletBalanceRepository walletBalanceRepository;
     private final ExchangeRateClient exchangeRateClient;
+
+    /**
+     * 사용자당 1개의 지갑을 보장(멱등). 신분증 인증 APPROVED 시 member-service가 호출한다(이슈 #152).
+     *
+     * <p>흐름: ① 기존 지갑이 있으면 그대로 반환 → ② 없으면 {@code wallets} INSERT +
+     * {@code wallet_balances(KRW, 0)} 1행을 같은 트랜잭션으로 작성. 동시에 두 번 호출되면 한 쪽이
+     * {@code user_public_id UNIQUE} 위반으로 떨어지는데, 이를 catch하고 재조회로 흡수해 멱등을 지킨다.
+     *
+     * <p>KRW 외 통화 잔액은 첫 환전 시 lazy 생성한다(기존 환전 로직과 정합).
+     */
+    @Override
+    @Transactional
+    public WalletResponse createOrGetWallet(String userPublicId) {
+        // 1) 이미 있으면 그대로 반환 (멱등).
+        return walletRepository.findByUserPublicId(userPublicId)
+                .map(WalletResponse::from)
+                .orElseGet(() -> WalletResponse.from(createNewWalletWithKrwBalance(userPublicId)));
+    }
+
+    /**
+     * 신규 지갑 + KRW 0원 잔액 행을 같은 트랜잭션에서 작성한다. 동시 호출로 인한
+     * {@code wallets.user_public_id UNIQUE} 위반은 잡아서 재조회로 흡수한다(race window 멱등).
+     */
+    private Wallet createNewWalletWithKrwBalance(String userPublicId) {
+        try {
+            Wallet wallet = walletRepository.saveAndFlush(Wallet.create(userPublicId));
+            walletBalanceRepository.save(WalletBalance.builder()
+                    .wallet(wallet)
+                    .currencyCode(CurrencyType.KRW)
+                    .balance(BigDecimal.ZERO)
+                    .build());
+            return wallet;
+        } catch (DataIntegrityViolationException race) {
+            // findByUserPublicId(상단)와 saveAndFlush 사이에 다른 트랜잭션이 먼저 생성한 경우.
+            // user_public_id UNIQUE에 걸리며, 이때는 기존 지갑을 재조회해 반환(멱등 흡수).
+            return walletRepository.findByUserPublicId(userPublicId)
+                    .orElseThrow(() -> race); // 진짜로 없으면 원 예외를 다시 던진다(예외적 케이스).
+        }
+    }
 
     @Override
     public WalletBalanceResponse getMyBalances(String userPublicId) {

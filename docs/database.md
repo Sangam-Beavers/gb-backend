@@ -112,7 +112,7 @@
 | `user_id` | BIGINT | FK → members.id, NOT NULL | member 내부 참조 → BIGINT FK |
 | `document_type` | VARCHAR(30) | NOT NULL | 신분증 유형 (ALIEN_REGISTRATION/PASSPORT/NATIONAL_ID) ※ API에선 `identity_document_type` |
 | `document_number` | VARCHAR(255) | NOT NULL | **AES-256-GCM 암호화 저장** (`EncryptedStringConverter`가 영속 시점에 자동 변환 — `Base64(IV \|\| ciphertext \|\| tag)`. 평문 100자 + GCM 28B + Base64 오버헤드 흡수). 운영 키는 환경변수 `GB_CRYPTO_KEY`로 주입. 운영 전환 시 KMS Envelope Encryption으로 교체 예정(별도 이슈) |
-| `s3_key` | VARCHAR(500) | NOT NULL | 신분증 이미지 S3 경로 |
+| `s3_key` | VARCHAR(500) | NULL | 신분증 이미지 S3 경로. **현재 선택(NULL 허용) — OCR/이미지 업로드 도입 전 임시 정책(이슈 #152).** 향후 OCR 도입 시 NOT NULL로 복구 + 마이그레이션 |
 | `status` | VARCHAR(20) | NOT NULL, DEFAULT 'PENDING' | PENDING/APPROVED/REJECTED |
 | `reviewed_at` | DATETIME | NULL | |
 | `created_at` | DATETIME | NOT NULL | |

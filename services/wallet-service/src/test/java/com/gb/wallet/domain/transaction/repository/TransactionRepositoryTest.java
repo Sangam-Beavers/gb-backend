@@ -252,6 +252,46 @@ class TransactionRepositoryTest {
     }
 
     @Test
+    @DisplayName("findByMineSendingOrReceiving: 본인이 송신자 또는 수신자인 거래를 모두 조회(전 유형/상태) — 타 user 제외")
+    void findByMineSendingOrReceiving_송수신_모두_포함() {
+        Wallet userA = persistWallet("orcuser-aaaa");
+        Wallet userB = persistWallet("orcuser-bbbb");
+        Wallet outsider = persistWallet("orcuser-cccc");
+
+        // A가 송신자 — 본인 wallet 거래 (다양한 유형)
+        persistTransfer(userA, null, CurrencyType.KRW, TransactionType.CHARGE,
+                TransactionStatus.COMPLETED, LocalDateTime.of(2026, 7, 1, 9, 0));
+        persistTransfer(userA, userB, CurrencyType.KRW, TransactionType.INTERNAL_TRANSFER,
+                TransactionStatus.COMPLETED, LocalDateTime.of(2026, 7, 2, 9, 0)); // A→B 송신
+        // A가 수신자 — receiverWallet=A인 INTERNAL_TRANSFER (B→A)
+        persistTransfer(userB, userA, CurrencyType.KRW, TransactionType.INTERNAL_TRANSFER,
+                TransactionStatus.COMPLETED, LocalDateTime.of(2026, 7, 3, 9, 0)); // B→A 수신
+        // A가 수신자 — FAILED여도 포함(상태 필터 없음)
+        persistTransfer(userB, userA, CurrencyType.KRW, TransactionType.INTERNAL_TRANSFER,
+                TransactionStatus.FAILED, LocalDateTime.of(2026, 7, 4, 9, 0));
+        // 노이즈: A와 무관 (outsider→B), 결과에 섞이면 안 됨
+        persistTransfer(outsider, userB, CurrencyType.KRW, TransactionType.INTERNAL_TRANSFER,
+                TransactionStatus.COMPLETED, LocalDateTime.of(2026, 7, 5, 9, 0));
+        em.flush();
+        em.clear();
+
+        Page<Transaction> page = transactionRepository.findByMineSendingOrReceiving(
+                "orcuser-aaaa", PageRequest.of(0, 20, Sort.by(Sort.Direction.DESC, "createdAt")));
+
+        assertThat(page.getTotalElements())
+                .as("A 송신 2건 + A 수신 2건(FAILED 포함), outsider→B 제외")
+                .isEqualTo(4L);
+        // 최근순(7-4 FAILED, 7-3 B→A, 7-2 A→B, 7-1 CHARGE)
+        assertThat(page.getContent())
+                .extracting(Transaction::getType, Transaction::getStatus)
+                .containsExactly(
+                        tuple(TransactionType.INTERNAL_TRANSFER, TransactionStatus.FAILED),
+                        tuple(TransactionType.INTERNAL_TRANSFER, TransactionStatus.COMPLETED),
+                        tuple(TransactionType.INTERNAL_TRANSFER, TransactionStatus.COMPLETED),
+                        tuple(TransactionType.CHARGE, TransactionStatus.COMPLETED));
+    }
+
+    @Test
     @DisplayName("findByWallet_UserPublicIdAndType(EXCHANGE): 본인 EXCHANGE만 최근순 — 타 유형(CHARGE/REMITTANCE)·타 user 제외")
     void findByWallet_UserPublicIdAndType_EXCHANGE_필터_정렬() {
         Wallet userA = persistWallet("exuser-aaaa");

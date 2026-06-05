@@ -238,7 +238,7 @@ com.gb.{서비스}/
   대화기록은 계정 B DynamoDB에 저장되며 본체 MySQL 스키마는 건드리지 않는다. 신규 에러코드 없이 `AUTH4011`(인증)·`COMMON4031`(권한)·`DOCUMENT4001` 재사용.
   **SSE는 Spring MVC `SseEmitter`로 구현(WebFlux 도입 금지 — tech-stack §2).** 상세: `docs/document-analysis/ai-chatbot-mcp.md`.
 
-  > ⚠️ 챗봇 컨트롤러도 본인 식별이 필요하므로 다른 API와 동일하게 §9의 `@RequestHeader("X-User-Public-Id")` + TODO 임시처리를 따른다. "백엔드 2차 인가"는 최종 목표 표현이고 현재 구현은 헤더 방식이다.
+  > ⚠️ 챗봇 컨트롤러도 본인 식별이 필요하므로 다른 API와 동일하게 §9의 `@CurrentUserPublicId` 로 받는다. "백엔드 2차 인가"는 분석 결과 소유자 검증을 가리키며, 인증 자체는 JWT(Authentik/Cognito) 기반으로 완료된 상태다.
 
 ---
 
@@ -291,13 +291,9 @@ com.gb.{서비스}/
   @CurrentUserPublicId String userPublicId   // = jwt.getClaimAsString("public_id")
   ```
   값을 쓰지 않는 엔드포인트(목록·마스터 조회 등)는 파라미터를 생략하고 `authenticated()`로만 보호한다.
-- **적용 현황:** member · wallet · community = 적용 완료. **document-service만 아직 헤더 임시처리**
-  (`@RequestHeader("X-User-Public-Id")` + 아래 TODO)이며, 동일 패턴으로 후속 전환 예정:
-  ```java
-  // TODO: 인증 전환 후 JWT claim(public_id) 추출(@CurrentUserPublicId)로 교체.
-  //       현재는 헤더(X-User-Public-Id)로 임시 수신.
-  @RequestHeader("X-User-Public-Id") String userPublicId
-  ```
+- **적용 현황:** member · wallet · community · document **전 서비스 적용 완료.** 모든 컨트롤러는
+  `@CurrentUserPublicId String userPublicId` 로 본인 식별자를 받는다. `@RequestHeader("X-User-Public-Id")`
+  임시 처리는 더 이상 사용하지 않는다(Javadoc 회고 외엔 코드에 존재하지 않음).
 
 ---
 
