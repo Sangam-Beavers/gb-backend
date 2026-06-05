@@ -25,10 +25,11 @@ public class Member extends BaseEntity {
     private String publicId;    // 대외 식별자(UUID). 응답·URL에는 이 값만 노출
 
     // 방식 B(OIDC): 외부 IdP(개발=Authentik / 운영=Cognito)가 발급한 JWT의 sub를 저장해
-    // "토큰의 sub → 우리 회원"을 매핑한다.
-    // TODO: ROPC 로그인 연동 시 가입 단계에서 IdP sub를 받아 채우고 NOT NULL/저장 시점을 확정한다.
-    //       (database.md §2 users.auth_provider_id = UNIQUE NOT NULL)
-    @Column(unique = true)
+    // "토큰의 sub → 우리 회원"을 매핑한다. 가입이 IdP-first 단일 INSERT(11D member-idp-1·core-2,
+    // MemberServiceImpl.signup 참조)라 INSERT 시점에 항상 값을 가지므로 NOT NULL을 확정한다
+    // (database.md §members = UNIQUE NOT NULL 일치). 기존 dev 컬럼의 물리 NULL 허용은 ddl-auto:update가
+    // 조이지 않으므로 신규 생성 환경부터 반영된다(커밋된 행은 종전 설계에서도 전부 non-null).
+    @Column(unique = true, nullable = false)
     private String authProviderId;
 
     // 컬럼 길이 = database.md §members SSOT (11D member-core-1). 입력 상한은 DTO @Size가 같은 값으로
@@ -113,16 +114,8 @@ public class Member extends BaseEntity {
         this.consentAgreedAt = consentAgreedAt;
     }
 
-    /**
-     * IdP 프로비저닝 후 부여받은 식별자(sub)를 1회 채운다(MEM-02). 이메일 가입은 "로컬 row 선점(save) →
-     * IdP provision → 그 결과(sub) 채우기" 순서로 처리해, IdP 호출 전에 이메일/닉네임 UNIQUE 경합을 먼저
-     * 걸러 <b>IdP 고아계정</b>을 막는다(provision 실패 시 트랜잭션 롤백으로 로컬 row도 사라짐). authProviderId가
-     * provision 후에야 정해지므로 save 시점엔 비어 있고(현재 컬럼 nullable — 엔티티 상단 NOT NULL TODO 참조),
-     * 같은 트랜잭션 안에서 이 메서드로 채운 뒤 커밋한다(커밋된 상태는 항상 non-null).
-     */
-    public void assignAuthProviderId(String authProviderId) {
-        this.authProviderId = authProviderId;
-    }
+    // (제거됨) assignAuthProviderId — 과거 "로컬 선점 → IdP → sub UPDATE"(MEM-02) 설계의 잔재.
+    //   가입이 IdP-first 단일 INSERT로 재설계되면서(11D member-idp-1·core-2) sub는 빌더로만 채워진다.
 
     /** 주 사용 언어 변경. updatedAt은 Auditing(dirty checking)으로 자동 갱신된다. */
     public void changeLanguage(String language) {

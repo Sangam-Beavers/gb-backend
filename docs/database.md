@@ -71,7 +71,7 @@
 | --- | --- | --- | --- |
 | `id` | BIGINT | PK, AI | 내부 식별자. **member 내부 전용, 경계 밖 노출 금지** |
 | `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | 대외 UUID. 타 도메인은 이 값으로만 회원 참조 |
-| `auth_provider_id` | VARCHAR(255) | UNIQUE, NOT NULL | JWT sub. 개발(Authentik)/운영(Cognito) 공통 컬럼. ※ 현 엔티티는 임시 nullable — 가입이 "로컬 선점 → IdP provision → 같은 tx에서 채움" 순서라 INSERT 시점엔 비어 있고 커밋된 행은 항상 non-null(엔티티 TODO: ROPC 연동 시 NOT NULL 확정) |
+| `auth_provider_id` | VARCHAR(255) | UNIQUE, NOT NULL | JWT sub. 개발(Authentik)/운영(Cognito) 공통 컬럼. 가입이 IdP-first 단일 INSERT(11D member-idp-1·core-2)라 INSERT 시점에 항상 채워짐 — 엔티티 `nullable=false` 일치(기존 dev 컬럼의 물리 NULL 허용만 ddl-auto가 안 조여 잔존, 행 데이터는 전부 non-null) |
 | `email` | VARCHAR(255) | UNIQUE, NOT NULL | 이메일 |
 | `name` | VARCHAR(100) | NOT NULL | 이름 |
 | `nickname` | VARCHAR(50) | NOT NULL | 닉네임 |
