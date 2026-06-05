@@ -184,7 +184,9 @@ public class TransferServiceImpl implements TransferService {
                 .collect(Collectors.toMap(Wallet::getId, Wallet::getUserPublicId));
 
         // 5) 각 수신자에 대해 MemberClient 호출 → RecipientItem 변환. projection 순서(최근순) 유지.
-        // TODO: member-service 도입 시 N번 호출은 batch API(예: GET /members?ids=...)로 최적화.
+        // TODO: member-service 배치 API(GET /members/display-info?public_ids=..., auth §13-1)가 생겼다 —
+        //   후속 이슈에서 wallet MemberClient에 getMembers(배치)를 추가해 이 루프의 N회 호출(≤10)을
+        //   1회로 줄일 것(community MemberClient.getMembers 계약 미러링).
         List<RecipientItem> items = recent.stream()
                 .map(p -> {
                     String receiverUserId = userPublicIdByWallet.get(p.getReceiverWalletId());
@@ -667,10 +669,10 @@ public class TransferServiceImpl implements TransferService {
         }
 
         // (4) 송신자 본명 조회(MemberClient fail-open). 본인이라 호출 실패 시 null이어도 영수증 자체는 응답.
-        // TODO(RealMemberClient 전환 시): 이 호출은 readOnly tx "안"의 외부 호출이라 HTTP 장애 시 DB 커넥션을
-        //   read-timeout까지 점유한다(11D transfer-2 — 무락·단건 조회라 영향 소, 현 MockMemberClient는
-        //   인프로세스라 무해). 전환 이슈에서 DB 조회(1~3,5)를 짧은 tx로 분리하고 본 호출을 tx 밖으로
-        //   hoist할 것 — tx.getWallet()이 LAZY라 단순 NOT_SUPPORTED 전환은 불가, 값 추출 후 분리 필요.
+        // TODO(tx 경계 분리): 이 호출은 readOnly tx "안"의 외부 HTTP 호출이라 장애 시 DB 커넥션을
+        //   read-timeout(기본 10s)까지 점유한다(11D transfer-2 — 무락·단건 조회라 영향 소). RealMemberClient
+        //   전환이 완료돼 실제 HTTP가 됐으므로, 후속 이슈에서 DB 조회(1~3,5)를 짧은 tx로 분리하고 본 호출을
+        //   tx 밖으로 hoist할 것 — tx.getWallet()이 LAZY라 단순 NOT_SUPPORTED 전환은 불가, 값 추출 후 분리 필요.
         String senderName = fetchMemberNameSafe(userPublicId);
 
         // (5) 도메인별 부가 데이터 조달.

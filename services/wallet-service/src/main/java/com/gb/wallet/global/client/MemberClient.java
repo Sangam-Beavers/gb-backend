@@ -6,8 +6,13 @@ import java.util.Optional;
  * member-service에서 회원 정보를 가져오는 클라이언트 계약.
  * MSA 경계를 넘어가는 호출이라 식별자는 user_public_id(UUID) 또는 이메일을 사용한다.
  *
- * <p>TODO: member-service 구현 후 실제 HTTP/feign 기반 RealMemberClient(@Profile prod)로 교체.
- *       현재는 개발용 {@link MockMemberClient}(@Profile({"dev", "stage"}))만 존재.
+ * <p>구현체(프로파일별 정확히 1개 — member-service 표시정보 API(auth §13)를 호출):
+ * <ul>
+ *   <li>{@link RealMemberClient} — {@code @Profile("!dev & !test")}(stage·prod). HTTP + JWT 릴레이.
+ *       getMember=fail-open("Unknown" 폴백) / findByEmail=fail-fast(404 MEMBER4001→empty, 그 외 COMMON5000).</li>
+ *   <li>{@link DevMemberClient} — {@code @Profile("dev")}. fixture 5명 우선, 미스만 Real 로직에 위임.</li>
+ *   <li>test — 빈 없음. 단위는 {@code @Mock}, 컨텍스트 로딩은 {@code @MockitoBean}.</li>
+ * </ul>
  */
 public interface MemberClient {
 
