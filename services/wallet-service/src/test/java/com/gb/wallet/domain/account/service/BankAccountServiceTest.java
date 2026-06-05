@@ -226,6 +226,24 @@ class BankAccountServiceTest {
     }
 
     @Test
+    @DisplayName("registerAccount: 은행 예금주명이 컬럼 한도(100자) 초과면 COMMON5000, 락/등록 본문 미진입(ACCOUNT4004 오매핑 방지)")
+    void registerAccount_예금주명_길이초과_COMMON5000() {
+        RegisterAccountRequest request = registerRequest("004", "1234567890", "tok-abc");
+        given(bankRepository.findByCode("004")).willReturn(Optional.of(bank("004", "KB국민은행")));
+        // 은행이 holder_name 컬럼 한도(VARCHAR(100))를 넘는 예금주명을 돌려준 경우.
+        given(bankClient.inquiry("004", "1234567890")).willReturn(new AccountHolder("가".repeat(101)));
+
+        assertThatThrownBy(() -> service.registerAccount(USER_PUBLIC_ID, request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(CommonErrorCode.INTERNAL_SERVER_ERROR);
+
+        // 길이 선검사는 락 획득 이전 → 락도 등록 본문(self.registerAccountLocked)도 진입하지 않는다.
+        verify(distributedLockHelper, never()).tryLock(REGISTER_LOCK_KEY);
+        verify(self, never()).registerAccountLocked(any(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("registerAccount: 락 획득 실패(tryLock=null)면 COMMON5031(503), 등록 본문 미진입")
     void registerAccount_락실패_COMMON5031() {
         RegisterAccountRequest request = registerRequest("004", "1234567890", "tok-abc");

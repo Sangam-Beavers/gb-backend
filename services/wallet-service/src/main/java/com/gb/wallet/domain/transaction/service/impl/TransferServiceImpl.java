@@ -456,6 +456,13 @@ public class TransferServiceImpl implements TransferService {
                 }
                 return executeInternalTransferPath(userPublicId, idempotencyKey, request, currency, transferType);
             } catch (DataIntegrityViolationException race) {
+                // 멱등 Layer 3: idempotency_key UNIQUE 충돌(진짜 동시 race)만 첫 결과 재반환으로 흡수한다.
+                //   같은 키의 prior가 실제로 존재할 때만 race로 간주하고, prior가 없으면 idempotency 충돌이
+                //   아닌 미상의 무결성 위반이므로 원 예외를 그대로 전파한다 — broad catch가 모든 위반을
+                //   readPriorTransaction(→COMMON5000)으로 뭉개 진짜 원인을 가리지 않도록 좁힌다(WTX 위생).
+                if (transactionRepository.findByIdempotencyKey(idempotencyKey).isEmpty()) {
+                    throw race;
+                }
                 return self.readPriorTransaction(idempotencyKey, userPublicId, transferType, scopeId);
             } catch (PessimisticLockingFailureException lockContention) {
                 if (++attempt >= MAX_TRANSFER_ATTEMPTS) {
@@ -652,6 +659,13 @@ public class TransferServiceImpl implements TransferService {
             throw new BusinessException(TransferErrorCode.TRANSFER_NOT_FOUND);
         }
 
+        // (3') 상태 검증 — 명세 §7-1은 "완료된 송금"만 확인증 대상이다. 현재 모든 송금 INSERT가 COMPLETED라
+        //     노출 결함은 없으나, 향후 2-phase saga 등으로 PENDING/FAILED 행이 생겨도 미완료 송금이 확인증으로
+        //     새지 않도록 방어한다(미존재·권한·유형과 동일하게 정보 누설 방지로 TRANSFER4001 모호 매핑).
+        if (tx.getStatus() != TransactionStatus.COMPLETED) {
+            throw new BusinessException(TransferErrorCode.TRANSFER_NOT_FOUND);
+        }
+
         // (4) 송신자 본명 조회(MemberClient fail-open). 본인이라 호출 실패 시 null이어도 영수증 자체는 응답.
         String senderName = fetchMemberNameSafe(userPublicId);
 
@@ -755,6 +769,12 @@ public class TransferServiceImpl implements TransferService {
                     .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
             Wallet receiverWallet = walletRepository.findById(receiverWalletId)
                     .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
+
+            // (1') WTX-05 대칭 — 락 밖 pre-check(executeInternalTransferPath) 이후 관리자 status 전환으로
+            //      지갑이 SUSPENDED/CLOSED가 됐을 수 있어, 락 안에서 ACTIVE를 재검증한다(TOCTOU 차단).
+            //      REMITTANCE in-tx 경로(executeRemittanceInTransaction)가 송신자를 재검증하는 것과 대칭.
+            requireActiveWallet(senderWallet);
+            requireActiveWallet(receiverWallet);
 
             // (2) 수신자 잔액 행 0원 보장 — REQUIRES_NEW로 독립 커밋(이미 있으면 no-op, 동시 생성 race 흡수).
             //     이래야 (3)의 FOR UPDATE가 존재하지 않는 행을 잠그려다 실패하지 않는다.

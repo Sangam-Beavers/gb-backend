@@ -569,6 +569,25 @@ class TransferServiceTest {
         verifyNoInteractions(bankAccountRepository, memberClient);
     }
 
+    @Test
+    @DisplayName("getReceipt: status != COMPLETED(미완료 송금) → TRANSFER4001 (완료 송금만 확인증 대상)")
+    void getReceipt_미완료상태_TRANSFER4001() {
+        Wallet sender = wallet(1L, SENDER_PUBLIC_ID);
+        com.gb.wallet.domain.transaction.entity.Transaction tx = buildTx(
+                sender, com.gb.wallet.global.common.enums.TransactionType.INTERNAL_TRANSFER, "Linh", null);
+        // 본인·유형은 통과하되 상태만 미완료(PENDING)로 둬 status 게이트만 단독 검증한다.
+        ReflectionTestUtils.setField(tx, "status",
+                com.gb.wallet.global.common.enums.TransactionStatus.PENDING);
+        given(transactionRepository.findByPublicId(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
+
+        assertThatThrownBy(() -> transferService.getReceipt(SENDER_PUBLIC_ID, TX_PUBLIC_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(TransferErrorCode.TRANSFER_NOT_FOUND);
+
+        verifyNoInteractions(bankAccountRepository, memberClient);
+    }
+
     // ==========================================================================
     // validateScheduled(userPublicId, request) — 정기 송금 대상 유효성 검증
     // ==========================================================================

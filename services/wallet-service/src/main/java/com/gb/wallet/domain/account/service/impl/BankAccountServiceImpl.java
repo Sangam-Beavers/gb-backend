@@ -107,6 +107,14 @@ public class BankAccountServiceImpl implements BankAccountService {
         String holderName = bankClient.inquiry(request.getBankCode(), request.getAccountNumber())
                 .accountHolderName();
 
+        // 은행 권위 예금주명을 신뢰하되, holder_name 컬럼 한도(VARCHAR(100), BankAccount.holderName)를 넘으면
+        //   saveAndFlush에서 데이터 잘림 → DataIntegrityViolation이 registerAccountLocked의 catch에서
+        //   ACCOUNT4004(409 '이미 등록')로 오분류된다. 저장 불가한 업스트림 응답은 여기서 선검사해 정직하게
+        //   서버 오류(COMMON5000)로 끊는다(MockBankClient는 null만 거부, 실 은행에선 극히 드문 방어 경로).
+        if (holderName == null || holderName.length() > 100) {
+            throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+        }
+
         RLock lock = distributedLockHelper.tryLock(REGISTER_LOCK_KEY_PREFIX + userPublicId);
         if (lock == null) {
             // 락 획득 실패 → 503(fail-closed): "잠깐 거부"가 "조용히 중복 생성"보다 안전.

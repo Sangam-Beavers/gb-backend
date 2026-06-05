@@ -427,6 +427,30 @@ class TransferServiceImplExecuteTest {
     }
 
     @Test
+    @DisplayName("WTX-05 대칭: INTERNAL 락 밖 pre-check(ACTIVE) 통과 후 in-tx 재조회가 SUSPENDED → WALLET4003(TOCTOU 차단), 저장 미진입")
+    void execute_INTERNAL_intx재조회_비활성_WALLET4003() {
+        stubCacheMiss();
+        stubDbMiss();
+        // 락 밖 pre-check: findByUserPublicId는 ACTIVE를 반환(통과).
+        stubWalletLookups(wallet(SENDER_WALLET_ID, SENDER_USER), wallet(RECEIVER_WALLET_ID, RECEIVER_USER));
+        stubLockAcquired(lock());
+        // in-tx 재조회(findById): 그 사이 송신자 지갑이 SUSPENDED로 전환됐다고 가정 → 락 안 재검증이 막아야 한다.
+        given(walletRepository.findById(SENDER_WALLET_ID))
+                .willReturn(Optional.of(suspendedWallet(SENDER_WALLET_ID, SENDER_USER)));
+        given(walletRepository.findById(RECEIVER_WALLET_ID))
+                .willReturn(Optional.of(wallet(RECEIVER_WALLET_ID, RECEIVER_USER)));
+
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(WalletErrorCode.WALLET_INACTIVE);
+
+        // 락 안 재검증에서 끊겨 잔액 변경·거래 저장은 일어나지 않는다.
+        verify(transactionRepository, never()).save(any());
+        verify(auditLogRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("WTX-05: REMITTANCE 송신자 지갑 SUSPENDED → WALLET4003, payout/Writer 미호출")
     void execute_REMITTANCE_송신자_비활성_WALLET4003() {
         stubCacheMiss();
@@ -678,7 +702,8 @@ class TransferServiceImplExecuteTest {
         Transaction prior = priorTransaction(sender);
 
         stubCacheMiss();
-        // findByIdempotencyKey: Layer 2 첫 호출은 empty(통과), readPriorTransaction 두 번째 호출은 prior 반환
+        // findByIdempotencyKey: Layer 2 첫 호출은 empty(통과), 이후 catch 가드 + readPriorTransaction은 prior 반환
+        // (catch가 prior 존재를 확인해 진짜 idempotency race만 흡수하도록 좁혔다 — 마지막 willReturn이 반복됨).
         given(transactionRepository.findByIdempotencyKey(KEY))
                 .willReturn(Optional.empty()).willReturn(Optional.of(prior));
         stubWalletLookups(sender, receiver);
@@ -695,12 +720,38 @@ class TransferServiceImplExecuteTest {
         assertThat(result.amount()).isEqualTo("10000.0000");
         assertThat(result.status()).isEqualTo("COMPLETED");
 
-        // findByIdempotencyKey 2회 — Layer 2 검사 + readPriorTransaction
-        verify(transactionRepository, times(2)).findByIdempotencyKey(KEY);
+        // findByIdempotencyKey 3회 — Layer 2 검사 + catch 가드(진짜 race 확인) + readPriorTransaction
+        verify(transactionRepository, times(3)).findByIdempotencyKey(KEY);
         // audit log는 race 전에 save가 터져 저장되지 않음
         verify(auditLogRepository, never()).save(any());
         // 회귀 가드: INTERNAL_TRANSFER 분기는 REMITTANCE 흔적을 박지 않는다.
         verify(remittanceAttemptWriter, never()).record(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Layer 3 좁힘: idempotency_key 충돌이 아닌 무결성 위반(prior 없음)은 readPrior로 뭉개지 않고 원 예외를 전파")
+    void execute_무결성위반_prior없음_원예외전파() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        WalletBalance receiverBalance = balance(receiver, BigDecimal.ZERO);
+
+        stubCacheMiss();
+        // Layer 2 통과(empty) + catch 가드도 empty → 같은 키의 prior가 없으므로 idempotency race가 아니다.
+        given(transactionRepository.findByIdempotencyKey(KEY)).willReturn(Optional.empty());
+        stubWalletLookups(sender, receiver);
+        stubLockAcquired(lock());
+        stubBalanceLocks(sender, receiver, senderBalance, receiverBalance);
+        // save에서 미상의(비-idempotency) 무결성 위반 발생.
+        given(transactionRepository.save(any(Transaction.class)))
+                .willThrow(new DataIntegrityViolationException("non-idempotency constraint"));
+
+        // broad catch가 COMMON5000으로 뭉개지 않고 원 DataIntegrityViolationException이 그대로 전파된다.
+        assertThatThrownBy(() -> service.execute(SENDER_USER, KEY, request("10000.0000")))
+                .isInstanceOf(DataIntegrityViolationException.class);
+
+        // prior가 없으니 readPriorTransaction의 rebuild 경로(첫 결과 재반환)는 타지 않는다(원 예외 전파).
+        verify(auditLogRepository, never()).save(any());
     }
 
     // ===== 분산 락 =====

@@ -43,8 +43,9 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
      * {@code idempotency_key}가 지정된 prefix로 시작하는 거래를 페이지로 조회한다.
      *
      * <p>정기 송금 회차 이력 조회({@code GET /api/v1/transfers/scheduled/{id}/history})에서 사용한다 —
-     * 스케줄러가 회차마다 {@code "scheduled:{public_id}:{today}"} 형태로 idempotency_key를 박으므로,
-     * {@code "scheduled:{public_id}:"} prefix로 검색하면 해당 정기 송금의 모든 회차가 나온다.
+     * 스케줄러가 회차마다 {@code "scheduled:{public_id}:{nextRunDate}"} 형태로 idempotency_key를 박으므로
+     * (이중송금 방지의 SSOT는 실행 예정일 nextRunDate — today 아님), {@code "scheduled:{public_id}:"} prefix로
+     * 검색하면 해당 정기 송금의 모든 회차가 나온다.
      *
      * <p>UNIQUE 인덱스의 prefix 검색이라 RDBMS가 인덱스를 활용한다 (LIKE 'prefix%' 패턴).
      * 정렬은 {@link Pageable}에 위임 (현 정책: created_at DESC = executed_at DESC).

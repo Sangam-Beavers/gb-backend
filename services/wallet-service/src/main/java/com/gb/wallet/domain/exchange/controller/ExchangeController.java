@@ -75,6 +75,11 @@ public class ExchangeController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401", description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "422", description = "EXCHANGE4003 - 환전 금액이 너무 작아 수령액이 0으로 "
+                            + "반올림됩니다(견적 생성 시 fail-fast).",
+                    content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ApiResponse<QuoteResponse> createQuote(
@@ -111,7 +116,8 @@ public class ExchangeController {
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "422", description = "WALLET4002 - 지갑 잔액이 부족합니다.",
+                    responseCode = "422", description = "WALLET4002 - 지갑 잔액이 부족합니다. / "
+                            + "WALLET4003 - 비활성 지갑입니다.",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class)))
     })
