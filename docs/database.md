@@ -1,7 +1,7 @@
 # 데이터베이스 설계 (Database)
 
 > **DB:** MySQL 8.0 (Aurora MySQL = 운영/스테이징 · 온프렘 MySQL = 개발, 공통 스키마)
-> **총 테이블 수:** 15개
+> **총 테이블 수:** 16개
 > **AI 분석 결과:** MySQL `document_results`에 **직접 저장** — **DynamoDB 미사용**
 > Claude Code는 Entity/Repository를 만들 때 이 스키마와 참조 규칙을 그대로 따른다.
 
@@ -71,7 +71,7 @@
 | --- | --- | --- | --- |
 | `id` | BIGINT | PK, AI | 내부 식별자. **member 내부 전용, 경계 밖 노출 금지** |
 | `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | 대외 UUID. 타 도메인은 이 값으로만 회원 참조 |
-| `auth_provider_id` | VARCHAR(255) | UNIQUE, NOT NULL | JWT sub. 개발(Authentik)/운영(Cognito) 공통 컬럼 |
+| `auth_provider_id` | VARCHAR(255) | UNIQUE, NOT NULL | JWT sub. 개발(Authentik)/운영(Cognito) 공통 컬럼. ※ 현 엔티티는 임시 nullable — 가입이 "로컬 선점 → IdP provision → 같은 tx에서 채움" 순서라 INSERT 시점엔 비어 있고 커밋된 행은 항상 non-null(엔티티 TODO: ROPC 연동 시 NOT NULL 확정) |
 | `email` | VARCHAR(255) | UNIQUE, NOT NULL | 이메일 |
 | `name` | VARCHAR(100) | NOT NULL | 이름 |
 | `nickname` | VARCHAR(50) | NOT NULL | 닉네임 |
@@ -441,14 +441,17 @@
 | 송금 rate-limit (user 단위) | `ratelimit:transfer:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 초과 시 TRANSFER4006(429), Redis 장애 시 fail-open | 윈도(기본 60초, 30회) |
 | PIN 검증 rate-limit (user 단위, wallet-pin-redis-1) | `ratelimit:pin-verify:{userPublicId}` | `INCR` + 첫 증가 시 `EXPIRE 60`. 무차별 대입 버스트(isLocked→대조→record TOCTOU)를 윈도당 limit으로 캡. 초과 시 COMMON4291(429), Redis 장애 시 fail-open | 윈도(기본 60초, 5회 — 단기 잠금 임계와 동일하게 캡, 10D wallet-pin-redis-2) |
 | 송금 PIN 실패 카운터 (user 단위) | `pin:fail:{userPublicId}` | `INCR`(첫 실패 시 `EXPIRE 600`). 5회 도달 시 잠금 키 설정 후 카운트 삭제 | 10분(윈도) |
-| 송금 PIN 잠금 (user 단위) | `pin:lock:{userPublicId}` | `SET locked EX 600`(5회 연속 실패 시). 존재하면 PIN 검증 TRANSFER4008(429) | 10분 |
+| 송금 PIN 24h 누적 실패 카운터 (user 단위, WSCH-06) | `pin:fail24h:{userPublicId}` | `INCR` + 첫 증가 시 `PEXPIRE`(atomic Lua). 단기 잠금이 `pin:fail`을 리셋해도 24h 유지 — 누적 15회(=5회×3사이클) 도달 시 `pin:lock`을 24h로 설정(장기 에스컬레이션, 일일 시도 총량 캡) | 24시간(윈도) |
+| 송금 PIN 잠금 (user 단위) | `pin:lock:{userPublicId}` | `SET locked EX 600`(5회 연속 실패 시) 또는 `EX 86400`(24h 누적 15회 시). 존재하면 PIN 검증 TRANSFER4008(429) | 10분(단기) / 24시간(누적 에스컬레이션) |
 | 송금 PIN 검증 마커 (user 단위, TX-PIN) | `pin:verified:{userPublicId}` | `SET verified EX 180`(pin-verify 성공 시). 송금 실행·정기송금 설정이 `GETDEL`로 **원자 소비(단일사용)** — 없으면 TRANSFER4010(428). 1회 검증=1회 인가. Redis 장애 시 **fail-closed**(송금 차단). PIN 재설정 시 무효화 | 180초 |
-| 토큰 블랙리스트 | `blacklist:{token}` | `SET ... 1 EX <남은만료>` | 토큰 만료까지 |
-| 로그인 실패 카운터 | `login:fail:user:{userPublicId}` | `INCR` + `EXPIRE 300` | 5분 |
-| 비밀번호 재설정 토큰 (member) | `pwreset:{token}` | `SET <email> EX 1800`. 검증 시 조회해 없으면 만료/무효(MEMBER4004), 사용 후 삭제(재사용 방지) | 30분 |
-| 게시글 조회수 | `view:post:{postPublicId}` | `INCR` (배치로 DB 동기화) | — |
+| 토큰 블랙리스트 *(계획 — 미구현)* | `blacklist:{token}` | `SET ... 1 EX <남은만료>`. 방식 B 로그아웃 재정의(auth api-spec 요약표) 확정 시 도입 여부 결정 | 토큰 만료까지 |
+| 로그인 실패 카운터 *(계획 — 미구현)* | `login:fail:user:{userPublicId}` | `INCR` + `EXPIRE 300`. 로그인이 IdP 직접 수행(방식 B)이라 백엔드 도입 여부 미정 | 5분 |
+| 비밀번호 재설정 토큰 (member) | `pwreset:{token}` | `SET <email> EX 1800`. 검증 시 `GETDEL` 원자 소비 — 없으면 만료/무효(MEMBER4004). email은 회원의 저장 이메일(가입 표기, member-idp-3) | 30분 |
+| 비밀번호 재설정 rate-limit (email 단위, MEM-04) | `ratelimit:pwreset:{email}` | `INCR` + 첫 증가 시 `PEXPIRE`(atomic Lua). 키는 trim+소문자 정규화(대소문자 변형 우회 차단). 초과 시 COMMON4291(429), Redis 장애 시 fail-open. 메일 폭탄 차단 | 1시간(윈도, 5회) |
+| 게시글 조회수 *(계획 — 미구현)* | `view:post:{postPublicId}` | `INCR` (배치로 DB 동기화) | — |
 | 환율 캐시 | `rate:{from}-{to}` | `SET ... <rate> EX 60` | 60초 |
-| 세션 캐시 | `session:{id}` | TTL 30분 | 30분 |
+| 전일 환율 백업 (stage/prod, 등락률 계산) | `rate:KRW-{currency}:prev` | exchange-updater가 매일 자정 새 값을 쓰기 전 직전 값을 이 키로 백업. 위젯 등락률 = 현재값 vs prev 비교(없으면 0 처리) | updater 정책 의존 |
+| 세션 캐시 *(계획 — 미구현)* | `session:{id}` | TTL 30분. 방식 B(stateless 검증)라 도입 여부 미정 | 30분 |
 
 > ⚠️ 잔액(balance)은 Redis에 캐싱하지 않는다.
 >

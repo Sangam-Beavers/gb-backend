@@ -24,7 +24,7 @@
 | 로그아웃 | POST | `/api/v1/auth/logout` | ✅ | ⚠️ 방식 B 재정의 필요 (Stateless라 무효화 방식 재논의 — 로컬삭제/IdP end-session/블랙리스트) |
 | 재설정 링크 발송 | POST | `/api/v1/auth/password/reset-request` | ❌ | ⚠️ SMTP 선행 + 비번은 IdP 보관 → IdP 경유 재설정 |
 | 비밀번호 재설정 | POST | `/api/v1/auth/password/reset` | ❌ | ⚠️ SMTP 선행 + IdP set_password 경유 |
-| 서버 health check | GET | `/health` | ❌ | |
+| 서버 health check | GET | `/actuator/health` | ❌ | Spring Actuator 기본 경로(`management.endpoints` 노출 설정 — 루트 `/health` 재매핑 없음, 11A 정합) |
 | 이메일/닉네임 중복 확인 | GET | `/api/v1/members/check-*` | ❌ | ✅ 구현 완료 |
 
 ### 회원 (/members)
