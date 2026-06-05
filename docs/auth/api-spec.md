@@ -246,7 +246,8 @@ message: 기본 생성 메시지("성공적으로 생성되었습니다." — �
 > 🆕 **사이드이펙트(이슈 #152):** APPROVED 시점에 wallet-service `POST /api/v1/wallets`를 호출해
 > 사용자당 1개의 전자지갑이 자동 개설된다(멱등). 이미 지갑이 있으면 그대로 유지. 지갑 생성 호출이
 > 실패해도 인증 자체는 성공으로 commit(fail-open) — 호출 실패는 WARN 로깅으로만 남고, 사용자는
-> 멱등 API로 추후 재호출/보정 가능.
+> 멱등 API로 추후 재호출/보정 가능. **호출은 인증 트랜잭션 커밋 "후"(tx 밖)에 수행한다** — 외부 HTTP가
+> 쓰기 tx·DB 커넥션을 보유하지 않는다(self-proxy tx 분리, community 댓글 작성과 동일 구조).
 
 **Error**
 | HTTP | code | message |
