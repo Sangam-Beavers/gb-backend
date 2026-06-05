@@ -18,6 +18,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
@@ -91,7 +93,8 @@ public class ExchangeController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201", description = "환전 완료."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "EXCHANGE4002 - 환율 견적이 만료되었습니다.",
+                    responseCode = "400", description = "EXCHANGE4002 - 환율 견적이 만료되었습니다. / "
+                            + "COMMON4001 - 입력값 검증 실패(quote_public_id 누락·Idempotency-Key 헤더 누락/blank/100자 초과).",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -114,7 +117,10 @@ public class ExchangeController {
     })
     public ApiResponse<ExchangeResponse> execute(
             @CurrentUserPublicId String userPublicId,
-            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            // 충전(AccountController)·송금(TransferController)과 동일하게 헤더 형식을 검증한다.
+            // blank/100자 초과는 ConstraintViolationException → GlobalExceptionHandler가 COMMON4001(400)로 변환
+            // (클래스의 @Validated가 @RequestHeader 제약을 활성화). 미검증 시 빈 키로 견적 소비·oversize 시 500 누출 방지.
+            @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 100) String idempotencyKey,
             @Valid @RequestBody ExchangeExecuteRequest request) {
         return ApiResponse.success(exchangeService.execute(userPublicId, idempotencyKey, request));
     }

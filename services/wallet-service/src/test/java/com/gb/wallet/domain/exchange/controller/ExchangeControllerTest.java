@@ -215,6 +215,34 @@ class ExchangeControllerTest {
     }
 
     @Test
+    @DisplayName("POST /exchanges 400: Idempotency-Key 헤더 blank(@NotBlank) → COMMON4001, service 미호출")
+    void execute_멱등헤더_blank() throws Exception {
+        mockMvc.perform(post("/api/v1/exchanges")
+                        .with(authedJwt())
+                        .header("Idempotency-Key", "")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("quote_public_id", "quote-1"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(exchangeService);
+    }
+
+    @Test
+    @DisplayName("POST /exchanges 400: Idempotency-Key 헤더 100자 초과(@Size) → COMMON4001, service 미호출")
+    void execute_멱등헤더_초과() throws Exception {
+        mockMvc.perform(post("/api/v1/exchanges")
+                        .with(authedJwt())
+                        .header("Idempotency-Key", "x".repeat(101))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("quote_public_id", "quote-1"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(exchangeService);
+    }
+
+    @Test
     @DisplayName("POST /exchanges 400: quote_public_id 누락(@NotBlank) → COMMON4001, service 미호출")
     void execute_견적식별자_누락() throws Exception {
         mockMvc.perform(post("/api/v1/exchanges")

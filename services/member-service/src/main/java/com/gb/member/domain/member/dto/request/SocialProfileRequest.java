@@ -1,7 +1,9 @@
 package com.gb.member.domain.member.dto.request;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -28,4 +30,16 @@ public class SocialProfileRequest {
     @Schema(description = "주 사용 언어 (BCP 47 소문자, 예: vi)", example = "vi")
     @NotBlank(message = "주 사용 언어는 필수입니다")
     private String language;
+
+    // 약관 동의(필수). 소셜 가입도 members row를 최초 생성하는 "가입"이므로 이메일 가입(SignupRequest)과 동일하게
+    // 동의를 수집·저장한다(명세 auth §2). @NotNull로 누락, @AssertTrue로 false를 막는다(둘 다 위반 시 COMMON4001).
+    @Schema(description = "이용약관 동의(필수, true)", example = "true")
+    @NotNull(message = "이용약관 동의 여부는 필수입니다")
+    @AssertTrue(message = "이용약관에 동의해야 가입할 수 있습니다")
+    private Boolean termsAgreed;
+
+    @Schema(description = "개인정보 처리방침 동의(필수, true)", example = "true")
+    @NotNull(message = "개인정보 처리방침 동의 여부는 필수입니다")
+    @AssertTrue(message = "개인정보 처리방침에 동의해야 가입할 수 있습니다")
+    private Boolean privacyAgreed;
 }

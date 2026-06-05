@@ -82,6 +82,8 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", "gildong");
         ReflectionTestUtils.setField(request, "nationality", "VN");
         ReflectionTestUtils.setField(request, "language", "vi");
+        ReflectionTestUtils.setField(request, "termsAgreed", true);
+        ReflectionTestUtils.setField(request, "privacyAgreed", true);
 
         when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
@@ -110,6 +112,11 @@ class MemberServiceImplTest {
         // IdP가 준 sub가 assignAuthProviderId로 회원에 채워져야 한다(같은 인스턴스라 캡처 후에도 반영됨).
         assertThat(saved.getValue().getAuthProviderId()).isEqualTo("idp-sub-uuid-9999");
 
+        // 약관 동의 증적이 엔티티에 저장돼야 한다(동의값 → 저장 끝까지 검증, consent_agreed_at은 NOT NULL).
+        assertThat(saved.getValue().isTermsAgreed()).isTrue();
+        assertThat(saved.getValue().isPrivacyAgreed()).isTrue();
+        assertThat(saved.getValue().getConsentAgreedAt()).isNotNull();
+
         // MEM-02 회귀: 로컬 선점(saveAndFlush)이 IdP provision보다 *먼저* 실행돼야 한다(IdP 고아계정 방지의 핵심).
         InOrder order = inOrder(memberRepository, idpUserClient);
         order.verify(memberRepository).saveAndFlush(any(Member.class));
@@ -126,6 +133,8 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", "gildong");
         ReflectionTestUtils.setField(request, "nationality", "VN");
         ReflectionTestUtils.setField(request, "language", "vi");
+        ReflectionTestUtils.setField(request, "termsAgreed", true);
+        ReflectionTestUtils.setField(request, "privacyAgreed", true);
 
         when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
@@ -173,6 +182,8 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", "gildong");
         ReflectionTestUtils.setField(request, "nationality", "VN");
         ReflectionTestUtils.setField(request, "language", "vi");
+        ReflectionTestUtils.setField(request, "termsAgreed", true);
+        ReflectionTestUtils.setField(request, "privacyAgreed", true);
         when(memberRepository.existsByEmail("race@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
         // 선검사는 통과했으나 커밋 전 saveAndFlush에서 동시 가입 race가 UNIQUE를 위반.
@@ -195,6 +206,8 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", nickname);
         ReflectionTestUtils.setField(request, "nationality", nationality);
         ReflectionTestUtils.setField(request, "language", language);
+        ReflectionTestUtils.setField(request, "termsAgreed", true);
+        ReflectionTestUtils.setField(request, "privacyAgreed", true);
         return request;
     }
 
@@ -228,6 +241,10 @@ class MemberServiceImplTest {
         assertThat(m.getNickname()).isEqualTo("gildong");
         assertThat(m.getNationality()).isEqualTo("VN");
         assertThat(m.getLanguage()).isEqualTo("vi");
+        // 소셜 가입도 약관 동의 증적을 저장해야 한다(consent_agreed_at NOT NULL — 미설정 시 INSERT 깨짐 회귀 방지).
+        assertThat(m.isTermsAgreed()).isTrue();
+        assertThat(m.isPrivacyAgreed()).isTrue();
+        assertThat(m.getConsentAgreedAt()).isNotNull();
         // 소셜 보완은 IdP에 사용자를 새로 만들지 않는다(이미 IdP에 존재).
         verifyNoInteractions(idpUserClient);
     }

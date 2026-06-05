@@ -20,6 +20,7 @@ import com.gb.member.global.exception.code.MemberErrorCode;
 import com.gb.member.global.mail.EmailSender;
 import com.gb.member.global.redis.PasswordResetRateLimiter;
 import com.gb.member.global.redis.PasswordResetTokenStore;
+import java.time.LocalDateTime;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -70,6 +71,10 @@ public class MemberServiceImpl implements MemberService {
                     .nickname(request.getNickname())
                     .nationality(request.getNationality())
                     .language(request.getLanguage())
+                    // 약관 동의 증적: 동의는 DTO @AssertTrue로 강제되므로 항상 true이나, 동의 사실과 시각을 함께 보관한다(명세 §2).
+                    .termsAgreed(request.getTermsAgreed())
+                    .privacyAgreed(request.getPrivacyAgreed())
+                    .consentAgreedAt(LocalDateTime.now())
                     .build());
         } catch (DataIntegrityViolationException race) {
             // 위 existsBy를 통과한 동시 가입 race가 email/nickname/publicId UNIQUE에 걸린 경우. 어느 제약인지
@@ -125,6 +130,10 @@ public class MemberServiceImpl implements MemberService {
                 .nationality(request.getNationality())
                 .language(request.getLanguage())
                 .authProviderId(authProviderId)
+                // 소셜 가입도 약관 동의 증적을 남긴다(이메일 가입과 동일 — consent_agreed_at은 NOT NULL).
+                .termsAgreed(request.getTermsAgreed())
+                .privacyAgreed(request.getPrivacyAgreed())
+                .consentAgreedAt(LocalDateTime.now())
                 .build();
 
         // saveAndFlush로 INSERT를 이 메서드 안에서 강제해, 위 existsBy를 통과한 동시 호출 race의 UNIQUE 위반
