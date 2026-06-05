@@ -8,9 +8,11 @@ import com.gb.common.response.ErrorResponse;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.MessageSourceResolvable;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
@@ -19,6 +21,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
@@ -70,6 +73,48 @@ public class GlobalExceptionHandler {
                 .map(ConstraintViolation::getMessage)
                 .orElse(errorCode.getMessage());
         log.warn("Constraint violation: code={}, message={}", errorCode.getCode(), message);
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(ApiResponse.fail(errorCode.getCode(), message));
+    }
+
+    /**
+     * {@code @ModelAttribute}(쿼리 파라미터 객체) 바인딩·검증 실패({@link BindException}) → COMMON4001.
+     *
+     * <p>현재 컨트롤러는 전부 {@code @RequestBody @Valid}(→ {@link MethodArgumentNotValidException} —
+     * BindException의 하위 타입이라 더 구체적인 위 핸들러가 계속 우선 적용됨)와 {@code @Validated} +
+     * 단순 {@code @RequestParam}(→ {@link ConstraintViolationException})만 쓰므로 이 분기의 라이브 트리거는
+     * 없다. 향후 검색/필터 폼을 {@code @ModelAttribute} 객체로 받는 컨트롤러가 생기는 순간 그 바인딩 실패가
+     * catch-all 500(거짓 서버 오류)으로 떨어지는 잠복 회귀 벡터라 선제 차단한다(11D common-modules-1).
+     */
+    @ExceptionHandler(BindException.class)
+    public ResponseEntity<ErrorResponse> handleBindException(BindException e) {
+        ErrorCode errorCode = CommonErrorCode.INVALID_REQUEST;
+        String message = resolveValidationMessage(e, errorCode);
+        log.warn("Bind failed: code={}, message={}", errorCode.getCode(), message);
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(ApiResponse.fail(errorCode.getCode(), message));
+    }
+
+    /**
+     * 핸들러 메서드 내장 검증 실패({@link HandlerMethodValidationException}) → COMMON4001.
+     *
+     * <p>Spring 6.1(Boot 3.2)+의 내장 메서드 검증은 컨트롤러 클래스에 {@code @Validated}가 <b>없어도</b>
+     * 파라미터 제약(@NotBlank·@Max 등)을 검증하며, 위반 시 {@link ConstraintViolationException}이 아니라
+     * 이 예외를 던진다. 현재 전 컨트롤러가 {@code @Validated}를 보유해 ConstraintViolation 경로로 빠지므로
+     * 라이브 트리거는 없으나, {@code @Validated} 누락 컨트롤러가 추가되는 순간 파라미터 위반이 catch-all
+     * 500으로 떨어지는 잠복 회귀 벡터라 선제 차단한다(11D common-modules-1). 첫 위반의 기본 메시지를
+     * 노출한다(타 검증 핸들러와 동일 정책).
+     */
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    public ResponseEntity<ErrorResponse> handleHandlerMethodValidation(HandlerMethodValidationException e) {
+        ErrorCode errorCode = CommonErrorCode.INVALID_REQUEST;
+        String message = e.getAllErrors().stream()
+                .findFirst()
+                .map(MessageSourceResolvable::getDefaultMessage)
+                .orElse(errorCode.getMessage());
+        log.warn("Handler method validation failed: code={}, message={}", errorCode.getCode(), message);
         return ResponseEntity
                 .status(errorCode.getHttpStatus())
                 .body(ApiResponse.fail(errorCode.getCode(), message));
@@ -204,7 +249,8 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.fail(errorCode.getCode(), errorCode.getMessage()));
     }
 
-    private String resolveValidationMessage(MethodArgumentNotValidException e, ErrorCode fallback) {
+    // MethodArgumentNotValidException은 BindException의 하위 타입이라 두 핸들러가 같은 추출 로직을 공유한다.
+    private String resolveValidationMessage(BindException e, ErrorCode fallback) {
         FieldError fieldError = e.getBindingResult().getFieldError();
         if (fieldError != null && fieldError.getDefaultMessage() != null) {
             return fieldError.getDefaultMessage();
