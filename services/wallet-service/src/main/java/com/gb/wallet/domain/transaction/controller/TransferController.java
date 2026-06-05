@@ -76,6 +76,8 @@ public class TransferController {
             "{\"success\":false,\"code\":\"TRANSFER4005\",\"message\":\"지원하지 않는 통화 조합입니다.\"}";
     private static final String EX_WALLET4002 =
             "{\"success\":false,\"code\":\"WALLET4002\",\"message\":\"지갑 잔액이 부족합니다.\"}";
+    private static final String EX_TRANSFER4006 =
+            "{\"success\":false,\"code\":\"TRANSFER4006\",\"message\":\"송금 요청 횟수를 초과했습니다.\"}";
     private static final String EX_TRANSFER4009 =
             "{\"success\":false,\"code\":\"TRANSFER4009\",\"message\":\"송금 PIN이 설정되지 않았습니다.\"}";
     private static final String EX_TRANSFER4010 =
@@ -321,6 +323,13 @@ public class TransferController {
                     content = @Content(
                             schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "TRANSFER4010", value = EX_TRANSFER4010))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "429",
+                    description = "TRANSFER4006 - 송금 요청 횟수를 초과했습니다 (user 단위 rate-limit, 기본 60초/30회 — "
+                            + "명세 §6-3. 멱등 재요청(Layer1/2 hit)은 신규 처리가 아니라 토큰을 소비하지 않는다, WTX-04).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "TRANSFER4006", value = EX_TRANSFER4006))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류(예상치 못한 예외).",

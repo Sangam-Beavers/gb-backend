@@ -2,8 +2,9 @@ spring:
   application:
     name: wallet-service
   profiles:
-    # 기본 활성 프로파일. IDE/CLI에서 SPRING_PROFILES_ACTIVE 등으로 덮어쓸 수 있다.
-    active: dev
+    # 기본 활성 프로파일을 dev로 둔다(타 3서비스와 동일 패턴 — 11D config-build-3 정합).
+    # 운영/스테이징은 SPRING_PROFILES_ACTIVE 환경변수로 덮어쓴다.
+    active: ${SPRING_PROFILES_ACTIVE:dev}
   jackson:
     # 전역 설정: 모든 응답 JSON 필드명을 camelCase → snake_case로 직렬화 (명세 규칙).
     property-naming-strategy: SNAKE_CASE
