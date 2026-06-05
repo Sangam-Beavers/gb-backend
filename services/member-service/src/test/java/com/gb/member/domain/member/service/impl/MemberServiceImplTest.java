@@ -366,7 +366,8 @@ class MemberServiceImplTest {
         PasswordResetEmailRequest request = new PasswordResetEmailRequest();
         ReflectionTestUtils.setField(request, "email", "user@example.com");
         when(passwordResetRateLimiter.tryAcquire("user@example.com")).thenReturn(true);
-        when(memberRepository.existsByEmail("user@example.com")).thenReturn(true);
+        when(memberRepository.findByEmail("user@example.com"))
+                .thenReturn(Optional.of(Member.builder().email("user@example.com").build()));
         when(passwordResetTokenStore.ttlMinutes()).thenReturn(30L);
 
         memberService.sendPasswordResetEmail(request);
@@ -379,12 +380,32 @@ class MemberServiceImplTest {
     }
 
     @Test
+    @DisplayName("11D member-idp-3: 혼합 케이스 입력이어도 토큰·메일은 회원의 저장 이메일(가입 표기 = IdP username)로 흐른다")
+    void sendPasswordResetEmail_혼합케이스_저장이메일사용() {
+        // 가입 표기는 "user@example.com"인데 사용자가 "User@Example.COM"으로 요청한 상황.
+        // (MySQL 기본 collation은 대소문자 무시라 findByEmail이 회원을 찾는다 — mock으로 본뜸.)
+        PasswordResetEmailRequest request = new PasswordResetEmailRequest();
+        ReflectionTestUtils.setField(request, "email", "User@Example.COM");
+        when(passwordResetRateLimiter.tryAcquire("User@Example.COM")).thenReturn(true);
+        when(memberRepository.findByEmail("User@Example.COM"))
+                .thenReturn(Optional.of(Member.builder().email("user@example.com").build()));
+        when(passwordResetTokenStore.ttlMinutes()).thenReturn(30L);
+
+        memberService.sendPasswordResetEmail(request);
+
+        // 입력 표기("User@Example.COM")가 아니라 저장 표기("user@example.com")가 토큰·발송에 쓰여야
+        // 재설정 단계의 IdP username 정확 일치(changePassword)가 깨지지 않는다.
+        verify(passwordResetTokenStore).save(anyString(), eq("user@example.com"));
+        verify(emailSender).send(eq("user@example.com"), anyString(), anyString());
+    }
+
+    @Test
     @DisplayName("재설정 메일: 미가입 이메일이면 조용히 종료(토큰/메일 없음 — 가입여부 노출 방지)")
     void sendPasswordResetEmail_미가입_조용히종료() {
         PasswordResetEmailRequest request = new PasswordResetEmailRequest();
         ReflectionTestUtils.setField(request, "email", "nobody@example.com");
         when(passwordResetRateLimiter.tryAcquire("nobody@example.com")).thenReturn(true);
-        when(memberRepository.existsByEmail("nobody@example.com")).thenReturn(false);
+        when(memberRepository.findByEmail("nobody@example.com")).thenReturn(Optional.empty());
 
         memberService.sendPasswordResetEmail(request);
 
@@ -406,7 +427,7 @@ class MemberServiceImplTest {
                 .isEqualTo(CommonErrorCode.TOO_MANY_REQUESTS);
 
         // rate-limit이 가입 여부 확인 *전*에 차단 — 가입조회/토큰/메일 모두 미진입.
-        verify(memberRepository, never()).existsByEmail(anyString());
+        verify(memberRepository, never()).findByEmail(anyString());
         verify(passwordResetTokenStore, never()).save(anyString(), anyString());
         verifyNoInteractions(emailSender, idpUserClient);
     }

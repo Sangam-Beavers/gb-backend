@@ -31,22 +31,25 @@ public class Member extends BaseEntity {
     @Column(unique = true)
     private String authProviderId;
 
-    @Column(nullable = false, unique = true)
+    // 컬럼 길이 = database.md §members SSOT (11D member-core-1). 입력 상한은 DTO @Size가 같은 값으로
+    //   먼저 막는다(초과 입력이 INSERT 단계 500으로 떨어지지 않게). dev의 기존 VARCHAR(255) 컬럼은
+    //   ddl-auto:update가 축소하지 않으므로 신규 생성 환경부터 길이가 반영된다(기능 영향 없음).
+    @Column(nullable = false, unique = true, length = 255)
     private String email;       // 로그인 아이디
 
     // 방식 B: 비밀번호는 IdP가 보유·검증한다(우리 DB 저장 안 함). password 컬럼은 두지 않는다.
 
-    @Column(nullable = false)
+    @Column(nullable = false, length = 100)
     private String name;        // 이름
 
-    @Column(nullable = false, unique = true)
+    @Column(nullable = false, unique = true, length = 50)
     private String nickname;    // 닉네임 (중복 안 됨)
 
-    @Column(nullable = false)
-    private String nationality; // 국적
+    @Column(nullable = false, length = 10)
+    private String nationality; // 국적 (ISO 3166-1 alpha-2)
 
-    @Column(nullable = false)
-    private String language;    // 주 사용 언어
+    @Column(nullable = false, length = 10)
+    private String language;    // 주 사용 언어 (BCP 47 소문자)
 
     // 약관 동의 증적(컴플라이언스). 가입 시 필수 동의를 받았다는 사실과 시각을 보관한다(명세 auth §2).
     // 동의는 가입 단계에서 @AssertTrue로 강제되므로 저장 값은 항상 true이나, "언제 동의했는지"도 함께 남긴다.

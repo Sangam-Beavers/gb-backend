@@ -50,9 +50,10 @@ public class PasswordResetRateLimiter {
      *
      * <p><b>키 정규화(MEM2 회귀):</b> Redis 키는 byte-exact라 {@code "A@x"}/{@code "a@x"}/{@code "a@x "}가
      * 서로 다른 버킷이 되어 한도를 우회(피해자 메일 폭탄)할 수 있다. 키 생성 시 {@code trim().toLowerCase}로
-     * 정규화해 같은 이메일의 대소문자·공백 변형을 한 버킷으로 모은다. ({@code existsByEmail}은 MySQL 기본
+     * 정규화해 같은 이메일의 대소문자·공백 변형을 한 버킷으로 모은다. ({@code findByEmail}은 MySQL 기본
      * collation으로 이미 대소문자 무시라 여기서만 정규화하면 충분하다. 토큰 저장·{@code changePassword}로
-     * 흐르는 이메일은 IdP username 정확 일치 때문에 원본 케이스를 유지해야 하므로 본 정규화는 키에 한정한다.)
+     * 흐르는 이메일은 입력값이 아니라 <b>회원의 저장 이메일</b>(가입 표기 = IdP username과 byte-exact 일치)을
+     * 사용한다 — 11D member-idp-3. 본 정규화는 rate-limit 키에 한정한다.)
      */
     public boolean tryAcquire(String email) {
         try {

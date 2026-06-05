@@ -67,6 +67,10 @@ public class MemberController {
                     responseCode = "200", description = "요청 접수(가입된 이메일이면 메일 발송)."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400", description = "COMMON4001 - 요청 값이 올바르지 않습니다(이메일 형식 등).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "429", description = "COMMON4291 - 요청 횟수를 초과했습니다(이메일 단위 rate-limit, "
+                            + "1시간/5회 — MEM-04 메일 폭탄 차단. Redis 장애 시 fail-open).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ApiResponse<Void> sendPasswordResetEmail(@Valid @RequestBody PasswordResetEmailRequest request) {

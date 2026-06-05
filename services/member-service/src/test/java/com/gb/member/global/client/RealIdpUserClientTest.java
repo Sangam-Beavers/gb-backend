@@ -8,6 +8,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
+import com.gb.member.global.exception.code.MemberErrorCode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -151,6 +152,25 @@ class RealIdpUserClientTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+    }
+
+    @Test
+    @DisplayName("11D member-idp-2 — provisionUser: 4xx 본문이 unique 위반이면 MEMBER4002(409)로 매핑(IdP 고아 진단 가능)")
+    void provisionUser_4xx_unique위반_MEMBER4002() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        RealIdpUserClient c = new RealIdpUserClient(
+                builder.build(), new ObjectMapper(), "http://localhost/dummy/api/v3", "test-admin-token");
+        // Authentik username(=email) 중복 응답 본문 형태 — 로컬 선점이 먼저 거르므로 이 응답은
+        // "IdP에만 사용자가 남은 상태"(프로비저닝 부분실패 고아 등)에서만 나온다.
+        server.expect(anything()).andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{\"username\":[\"This field must be unique.\"]}"));
+
+        assertThatThrownBy(() -> c.provisionUser("a@example.com", "홍길동", "P@ss1", "pub-1"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.EMAIL_ALREADY_EXISTS);
     }
 
     @Test

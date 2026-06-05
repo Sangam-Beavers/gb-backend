@@ -22,6 +22,7 @@ import com.gb.member.global.redis.PasswordResetRateLimiter;
 import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -183,19 +184,25 @@ public class MemberServiceImpl implements MemberService {
 
         // 가입 여부 노출 방지(보안): 미가입 이메일이어도 예외/다른 응답 없이 조용히 종료한다.
         // (공격자가 응답 차이로 "이 이메일 가입돼 있나"를 알아내지 못하게 — 호출 측은 항상 200을 받는다.)
-        if (!memberRepository.existsByEmail(email)) {
+        // 회원을 "조회"해 저장 이메일(가입 당시 표기)을 쓴다(11D member-idp-3): MySQL 기본 collation은
+        // 대소문자 무시라 혼합 케이스 입력으로도 회원이 찾아지는데, 입력값을 그대로 토큰에 실으면 재설정
+        // 단계의 IdP username "정확 일치" 조회(changePassword)가 0건이 되어 500으로 깨진다. IdP username은
+        // 가입 표기와 byte-exact 동일하므로 토큰·발송 모두 저장 이메일로 통일한다.
+        Optional<Member> member = memberRepository.findByEmail(email);
+        if (member.isEmpty()) {
             return;
         }
+        String canonicalEmail = member.get().getEmail();
 
         // 일회용 재설정 토큰 생성 → Redis에 TTL 저장(토큰→email). 만료는 Redis가 자동 처리.
         String token = UUID.randomUUID().toString();
-        passwordResetTokenStore.save(token, email);
+        passwordResetTokenStore.save(token, canonicalEmail);
 
         // 재설정 링크를 메일로 발송. 링크는 프론트 비번재설정 페이지로 향한다(토큰을 쿼리로 전달).
         // 유효 시간 문구는 토큰 TTL 단일 출처에서 가져온다(MEM-08 — 리터럴 분리로 인한 불일치 방지).
         String link = passwordResetBaseUrl + "?token=" + token;
         emailSender.send(
-                email,
+                canonicalEmail,
                 "[Global Bridge] 비밀번호 재설정 안내",
                 "아래 링크에서 비밀번호를 재설정해주세요(" + passwordResetTokenStore.ttlMinutes()
                         + "분 내 유효):\n\n" + link

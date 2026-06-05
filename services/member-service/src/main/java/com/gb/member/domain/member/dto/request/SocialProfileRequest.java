@@ -3,6 +3,7 @@ package com.gb.member.domain.member.dto.request;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -18,16 +19,20 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class SocialProfileRequest {
 
-    @Schema(description = "닉네임 (앱 전체에서 중복 불가)", example = "gildong")
+    // @Size 상한 = members 컬럼 길이(database.md §members SSOT, 11D member-core-1) — SignupRequest와 동일.
+    @Schema(description = "닉네임 (앱 전체에서 중복 불가)", example = "gildong", maxLength = 50)
     @NotBlank(message = "닉네임은 필수입니다")
+    @Size(max = 50, message = "닉네임은 50자 이내여야 합니다")
     private String nickname;
 
-    @Schema(description = "국적 (ISO 3166-1 alpha-2, 예: VN)", example = "VN")
+    @Schema(description = "국적 (ISO 3166-1 alpha-2, 예: VN)", example = "VN", maxLength = 10)
     @NotBlank(message = "국적은 필수입니다")
+    @Size(max = 10, message = "국적 코드는 10자 이내여야 합니다")
     private String nationality;
 
-    @Schema(description = "주 사용 언어 (BCP 47 소문자, 예: vi)", example = "vi")
+    @Schema(description = "주 사용 언어 (BCP 47 소문자, 예: vi)", example = "vi", maxLength = 10)
     @NotBlank(message = "주 사용 언어는 필수입니다")
+    @Size(max = 10, message = "언어 코드는 10자 이내여야 합니다")
     private String language;
 
     // 약관 동의. 소셜 가입도 members row를 최초 생성하는 "가입"이라 이메일 가입(SignupRequest)과 동일 정책이다.

@@ -5,7 +5,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
+import com.gb.member.global.exception.code.MemberErrorCode;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,9 +35,11 @@ import org.springframework.web.client.RestClientResponseException;
  * <p>이 호출은 로그인 중계와 달리 <b>관리자 토큰</b>(Authorization: Bearer)이 필요하다.
  * 토큰은 평문 금지: {@code auth.idp.admin-token}으로 받되 실제 값은 환경변수(AUTH_ADMIN_TOKEN)로만 주입한다.
  *
- * <p>IdP 응답 에러는 상태로 분기한다: 4xx(이메일/username 충돌 등 클라이언트 입력 문제)는
+ * <p>IdP 응답 에러는 상태로 분기한다: 4xx(클라이언트 입력 문제)는
  * {@link CommonErrorCode#INVALID_REQUEST}(400), 5xx·연결 실패(서버측 연동 장애)는
  * {@link CommonErrorCode#INTERNAL_SERVER_ERROR}(500)로 변환한다(CLAUDE §6).
+ * 단 프로비저닝의 username(=email) unique 위반 4xx만은
+ * {@link MemberErrorCode#EMAIL_ALREADY_EXISTS}(MEMBER4002, 409)로 매핑한다(11D member-idp-2).
  *
  * <p>주의(설정 의존): 반환하는 {@code uuid}가 로그인 토큰의 {@code sub}와 일치하려면 Authentik
  * Provider의 subject mode를 "Based on the User's UUID"로 맞춰야 한다. 기본값(hashed id)이면
@@ -105,15 +109,31 @@ public class RealIdpUserClient implements IdpUserClient {
             return created.uuid();
 
         } catch (RestClientResponseException e) {
-            // IdP 응답 에러 — 4xx(이메일/username 충돌 등 입력 문제)→COMMON4001, 5xx→COMMON5000.
+            // IdP 응답 에러 — username(=email) unique 위반이면 "이미 사용 중인 이메일"(MEMBER4002, 409)로
+            // 매핑해 진단 가능하게 한다(11D member-idp-2). 로컬 선점(saveAndFlush)이 중복을 먼저 거르므로
+            // 여기 도달하는 충돌은 IdP에만 사용자가 남은 상태(프로비저닝 부분실패 고아 등 — member-idp-1)다.
+            // 그 외 4xx(입력 문제)→COMMON4001, 5xx→COMMON5000.
             log.error("Authentik 사용자 프로비저닝 실패: email={}, status={}, msg={}",
                     email, e.getStatusCode(), e.getMessage());
+            if (e.getStatusCode().is4xxClientError() && isUniqueViolation(e)) {
+                throw new BusinessException(MemberErrorCode.EMAIL_ALREADY_EXISTS);
+            }
             throw new BusinessException(idpStatusToError(e));
         } catch (RestClientException e) {
             // 연결 실패·타임아웃 등(응답 없음) → 서버측 연동 장애 → COMMON5000.
             log.error("Authentik 사용자 프로비저닝 연결 실패: email={}, msg={}", email, e.getMessage());
             throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /**
+     * Authentik 4xx 본문이 username/email unique 위반을 가리키는지 판별한다 — 중복 시 본문에 "unique" 문구가
+     * 담긴다(예: {@code {"username":["This field must be unique."]}}). 외부 본문 의존이라 보수적 포함 검사만
+     * 하며, 미일치 시 기존 매핑(COMMON4001)으로 폴백돼 거짓양성 위험이 없다(11D member-idp-2).
+     */
+    private boolean isUniqueViolation(RestClientResponseException e) {
+        String body = e.getResponseBodyAsString();
+        return body.toLowerCase(Locale.ROOT).contains("unique");
     }
 
     @Override
