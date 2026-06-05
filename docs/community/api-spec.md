@@ -47,7 +47,7 @@
 | `posts[].category` | string | N | 카테고리 |
 | `posts[].title` | string | N | 제목 |
 | `posts[].content_preview` | string | N | 본문 미리보기 |
-| `posts[].author_nickname` | string | N | 작성자 닉네임 |
+| `posts[].author_nickname` | string | N | 작성자 닉네임. 미존재·탈퇴·member-service 장애 시 `"Unknown"` 폴백(표시용 fail-open — auth §13-1) |
 | `posts[].is_author` | boolean | N | 요청자(JWT public_id)=작성자 여부. 수정·삭제 버튼 노출 판단용 |
 | `posts[].like_count` | integer | N | 좋아요 수 |
 | `posts[].comment_count` | integer | N | 댓글 수 |
@@ -79,7 +79,7 @@
 | `category` | string | N | 카테고리 |
 | `title` | string | N | 제목 |
 | `content` | string | N | 본문 |
-| `author_nickname` | string | N | 작성자 닉네임 |
+| `author_nickname` | string | N | 작성자 닉네임. 미존재·탈퇴·member-service 장애 시 `"Unknown"` 폴백(표시용 fail-open) |
 | `is_author` | boolean | N | 요청자=작성자 여부. 작성 응답에선 항상 true |
 | `like_count` | integer | N | 좋아요 수(생성 시 0) |
 | `comment_count` | integer | N | 댓글 수(생성 시 0) |
@@ -141,7 +141,7 @@
 | `post_public_id` | string | N | 게시글 UUID |
 | `parent_comment_public_id` | string | Y | 부모 댓글 UUID. **현 사이클은 항상 null** (대댓글 미지원) |
 | `content` | string | N | 댓글 내용 |
-| `author_nickname` | string | N | 작성자 닉네임 (MemberClient 조회) |
+| `author_nickname` | string | N | 작성자 닉네임 (MemberClient 조회. 미존재·탈퇴·장애 시 `"Unknown"` 폴백 — 표시용 fail-open) |
 | `author_is_verified` | boolean | N | 작성자 인증 배지 여부 |
 | `is_author` | boolean | N | 요청자=작성자 여부. 작성 응답에선 항상 true |
 | `created_at` | string | N | 작성 시각 (ISO 8601 UTC `Z`) |
@@ -163,7 +163,7 @@
 
 `GET /api/v1/community/posts/{id}/comments?page=&size=` · Auth ✅
 
-특정 게시글에 달린 댓글을 **최신순(최근 작성 순, created_at DESC)** 으로 페이지네이션해 반환한다. 삭제된 댓글(`deleted_at IS NOT NULL`)은 결과에서 제외된다. 작성자 표시 정보(닉네임/인증 배지)는 MemberClient로 조회해 채운다(DB 직접 SELECT 없음 — MSA 경계, CLAUDE.md §7). 각 항목의 `is_author` 계산에 본인 식별(JWT `public_id` claim)을 사용한다 — claim 누락 시 401 AUTH4011(resolver fail-fast).
+특정 게시글에 달린 댓글을 **최신순(최근 작성 순, created_at DESC)** 으로 페이지네이션해 반환한다. 삭제된 댓글(`deleted_at IS NOT NULL`)은 결과에서 제외된다. 작성자 표시 정보(닉네임/인증 배지)는 MemberClient로 조회해 채운다(DB 직접 SELECT 없음 — MSA 경계, CLAUDE.md §7. member-service 표시정보 배치 API(auth §13-1) 1회 호출이며, 미존재·탈퇴·장애 시 해당 작성자만 `"Unknown"`/false 폴백 — 표시용 fail-open이라 목록 응답 자체는 200을 유지한다). 각 항목의 `is_author` 계산에 본인 식별(JWT `public_id` claim)을 사용한다 — claim 누락 시 401 AUTH4011(resolver fail-fast).
 
 **대댓글은 본 사이클 범위 밖** — 모든 항목의 `parent_comment_public_id`는 항상 null이다(§6과 동일 항목 형태).
 
@@ -185,7 +185,7 @@
 | `comments[].post_public_id` | string | N | 게시글 UUID |
 | `comments[].parent_comment_public_id` | string | Y | 부모 댓글 UUID. **현 사이클은 항상 null** (대댓글 미지원) |
 | `comments[].content` | string | N | 댓글 내용 |
-| `comments[].author_nickname` | string | N | 작성자 닉네임 (MemberClient 조회) |
+| `comments[].author_nickname` | string | N | 작성자 닉네임 (MemberClient 조회. 미존재·탈퇴·장애 시 `"Unknown"` 폴백 — 표시용 fail-open) |
 | `comments[].author_is_verified` | boolean | N | 작성자 인증 배지 여부 |
 | `comments[].is_author` | boolean | N | 요청자(JWT public_id)=작성자 여부. 수정·삭제 버튼 노출 판단용 |
 | `comments[].created_at` | string | N | 작성 시각 (ISO 8601 UTC `Z`) |

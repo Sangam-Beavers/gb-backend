@@ -214,14 +214,22 @@ com.gb.{서비스}/
   인터페이스에만 의존하므로, Mock ↔ 실제 구현을 갈아끼워도 **Service 코드는 바뀌지 않는다.**
   - 인터페이스 `XxxClient` (예: `MemberClient`, `BankClient`), 응답 DTO는 호출 대상의 응답 형태를 모사.
   - 구현체: `MockXxxClient`(`@Profile("dev")`) = 미구현/개발용, `RealXxxClient`(`@Profile("!dev")`) = 실제 호출.
+    대상이 구현된 뒤 **dev에서 fixture와 실호출을 병행**하려면 `RealXxxClient`(`@Profile("!dev & !test")`) +
+    `DevXxxClient`(`@Profile("dev")`, fixture 우선 → 미스만 Real 인스턴스에 위임) 데코레이터 변형을 쓴다
+    (현재 예: 양쪽 `MemberClient`). test 프로파일은 빈을 등록하지 않고 단위는 `@Mock`,
+    컨텍스트 로딩은 `@MockitoBean`으로 가린다. HTTP 호출·실패 정책 로직은 Real 1벌에만 둔다.
   - **MSA 경계 데이터는 DB 직접 참조 금지.** 다른 서비스의 엔티티/테이블을 직접 SELECT하거나, 회원 정보를
     자기 스키마에 중복 저장하지 않는다. 반드시 client(=API 호출)로 받는다.
   - 조회 결과가 "없을 수 있는" 경우, 용도에 따라 반환 정책을 다르게 한다: 표시용 보조 조회는 fallback이
     편할 수 있으나, **검증(존재 확인) 용도는 `Optional`로 받아 없으면 예외**(예: validate-member → MEMBER4001)로
     명확히 처리한다. 운영 구현체는 조용한 가짜 데이터보다 fail-fast를 권장(금융 데이터 정합성).
-  - **현재 예시:** `member-service` 미구현이라 `MemberClient` + `MockMemberClient`(고정 데이터)로 처리.
-    member-service 구현 후 `RealMemberClient`(@Profile !dev)만 추가하면 Service 변경 없이 전환된다.
-    진짜 호출 전환 시 건별 호출이 N번 발생할 수 있으므로 batch 조회 API 도입을 검토(`// TODO` 표시).
+  - **현재 예시:** member-service의 표시정보 API(auth §13 — `display-info` 배치/`by-email`) 신설로
+    community/wallet 모두 `RealMemberClient`(`@Profile("!dev & !test")`, **현재 요청 JWT를 그대로 릴레이**) +
+    `DevMemberClient`(`@Profile("dev")`, 시드 fixture 우선 → 미스만 Real 위임)로 전환 완료. base URL은
+    환경변수 `MEMBER_API_BASE_URL`(→`member.api.base-url`). 실패 정책은 메서드별 분리 —
+    표시용(getMember/getMembers)=fail-open("Unknown" 폴백 + WARN), 검증용(findByEmail)=fail-fast
+    (404 MEMBER4001만 empty, 그 외 COMMON5000). 배치 N+1은 community가 `getMembers` 1회 호출로 해소했고,
+    wallet recent-recipients의 건별 호출(≤10)은 후속에서 배치 전환 예정(`// TODO` 표시).
 - **Mock 은행(충전/현금화):** `wallet-service`는 외부 Mock 은행 서버를 **`BankClient` 인터페이스**로만 호출한다.
   구현체는 Profile로 분리(`MockBankClient`=dev/stage, `RealBankClient`=prod), base URL은 환경변수
   `BANK_API_BASE_URL`로 분리한다. 충전은 `withdrawal`(외부계좌 차감), 현금화는 `payout`(외부계좌 증액).
