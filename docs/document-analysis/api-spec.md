@@ -142,9 +142,20 @@
 
 `POST /api/v1/documents/{id}/retry` · Auth ✅
 
-FAILED 상태 문서의 분석을 다시 트리거. (S3 원본 유지 시 재사용, 아니면 재업로드 URL 재발급)
+FAILED 상태 문서의 분석을 다시 트리거. **S3에 원본이 남아 있을 때만**(서버가 HeadObject로 판정)
+같은 키로 Lambda A를 재트리거하고 `status`를 ANALYZING으로 전환한다(재업로드 불필요).
+원본이 없으면(URL만 발급받고 미업로드 → 정리 스케줄러가 FAILED 처리한 건) **422 COMMON4221** —
+재시도 대상이 아니므로 클라이언트는 §1(`POST /api/v1/documents`)로 새로 제출한다.
 
-**Error**: 401 COMMON4011 / 403 COMMON4031 / 404 DOCUMENT4001 / 422 COMMON4221
+> **ANALYZING 고아 건 정리(스케줄러):** 제출 후 업로드를 안 하거나 분석 결과가 유실되면 그 건은
+> 영원히 ANALYZING으로 남으므로, 백엔드 스케줄러(`StaleSubmissionSweeper`, 기본 10분 주기)가
+> `updatedAt` 기준 임계(기본 30분, `gb.analysis.stale-timeout-minutes`) 초과 ANALYZING 건을 FAILED로
+> 정리한다. 이후 복구 경로는 두 갈래 — 원본이 S3에 있으면(결과 유실) 본 retry API,
+> 원본이 없으면(미업로드) §1 새 제출. retry가 status를 ANALYZING으로 되돌리면 updatedAt이 갱신돼
+> 유예 시간이 다시 시작된다. sweep 후 결과가 늦게 도착해도 Consumer가 status를 덮어쓰므로
+> 무해(최종적으로 결과가 이김).
+
+**Error**: 401 COMMON4011 / 403 COMMON4031 / 404 DOCUMENT4001 / 422 COMMON4221(비-FAILED 또는 원본 미존재)
 
 ---
 

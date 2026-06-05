@@ -168,8 +168,9 @@ public class DocumentController {
     }
 
     @Operation(summary = "분석 재요청",
-            description = "FAILED 상태의 문서를 다시 분석한다. S3 원본을 재사용하므로 재업로드는 불필요. "
-                    + "비-FAILED 상태에서 호출 시 422.")
+            description = "FAILED 상태의 문서를 다시 분석한다. S3 원본이 남아 있을 때만 재사용해 재트리거"
+                    + "(재업로드 불필요). 원본이 없으면(업로드 안 한 채 만료돼 정리된 건) 422 — "
+                    + "이 경우 POST /api/v1/documents로 새로 제출한다. 비-FAILED 상태에서 호출 시에도 422.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "재요청 접수. status가 ANALYZING으로 전환된다."),
@@ -186,7 +187,8 @@ public class DocumentController {
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "DOCUMENT4001", value = EX_DOCUMENT4001))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422",
-                    description = "COMMON4221 - FAILED 상태가 아닌 문서.",
+                    description = "COMMON4221 - FAILED 상태가 아닌 문서, 또는 S3 원본 미존재(재시도 불가 — "
+                            + "POST /api/v1/documents로 새로 제출).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "COMMON4221", value = EX_COMMON4221)))
     })

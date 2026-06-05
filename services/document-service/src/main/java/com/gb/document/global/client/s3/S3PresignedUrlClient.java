@@ -5,8 +5,9 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * S3 Pre-signed PUT URL 발급 클라이언트. CLAUDE.md §7 — 외부 시스템 호출은 인터페이스로 추상화하고
- * Profile로 Mock/Real 구현을 분리한다.
+ * S3 Pre-signed PUT URL 발급 클라이언트. CLAUDE.md §7 — 외부 시스템 호출은 인터페이스로 추상화한다.
+ * 구현은 전 프로파일 공통 {@link RealS3PresignedUrlClient} 하나다 — dev도 진짜 URL을 발급해
+ * 업로드→Lambda→온프렘 MySQL E2E를 검증한다(과거 dev용 Mock 구현은 제거됨).
  *
  * <p>호출 측은 사용자가 그 URL로 파일을 PUT 업로드한 직후 S3 오브젝트에 박힐 메타데이터를 함께 전달한다.
  * Lambda A는 이 메타데이터를 읽어 결과 경로(SQS vs 온프렘 직결)를 분기하므로 키 이름이 정확히 일치해야 한다.

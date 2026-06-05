@@ -3,20 +3,22 @@ package com.gb.document.global.config;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Profile;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.regions.providers.AwsRegionProvider;
+import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.sqs.SqsClient;
 
 /**
- * 운영(!dev)에서만 활성화되는 AWS 클라이언트 빈.
+ * 전 프로파일 공통 AWS 클라이언트 빈.
  *
  * <p>자격증명은 {@link DefaultCredentialsProvider}로 통일 — 운영은 IRSA(EKS) / EC2 IAM 역할,
- * 로컬은 환경변수/AWS profile을 자동 탐색한다. dev 프로파일에서는 Mock 클라이언트가 이 빈에 의존하지
- * 않으므로 빈 등록 자체를 건너뛴다(자격증명/네트워크 없이 기동 가능).
+ * dev/로컬은 환경변수/AWS profile(예: {@code AWS_PROFILE=gb-account-b})을 자동 탐색한다.
+ * 자격증명 해석은 lazy라 자격증명 없이도 기동은 되지만, presign/SQS 호출 시점에 실패한다.
+ * dev도 진짜 S3 Pre-signed URL을 발급해 E2E(업로드→Lambda→온프렘 MySQL)를 검증하기 위해
+ * dev 프로파일 제외(@Profile("!dev"))를 제거했다.
  *
  * <p>v1.1 — 결과 수신용 {@code spring-cloud-aws-starter-sqs}가 {@code SqsAsyncClient}를 auto-config로
  * 만든다. 그 starter도 컨테이너의 {@link AwsCredentialsProvider}/{@link AwsRegionProvider} 빈을
@@ -25,7 +27,6 @@ import software.amazon.awssdk.services.sqs.SqsClient;
  * 같은 자격증명/리전을 공유). 상세: {@code docs/document-analysis/result-queue-routing.md} §3.
  */
 @Configuration
-@Profile("!dev")
 @RequiredArgsConstructor
 public class AwsClientConfig {
 
@@ -63,6 +64,16 @@ public class AwsClientConfig {
     public SqsClient sqsClient(AwsCredentialsProvider credentialsProvider,
                                AwsRegionProvider regionProvider) {
         return SqsClient.builder()
+                .region(regionProvider.getRegion())
+                .credentialsProvider(credentialsProvider)
+                .build();
+    }
+
+    /** retry의 원본 존재 확인(HeadObject)용 — {@code RealS3ObjectClient}가 사용한다. */
+    @Bean
+    public S3Client s3Client(AwsCredentialsProvider credentialsProvider,
+                             AwsRegionProvider regionProvider) {
+        return S3Client.builder()
                 .region(regionProvider.getRegion())
                 .credentialsProvider(credentialsProvider)
                 .build();

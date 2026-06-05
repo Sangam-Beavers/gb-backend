@@ -6,6 +6,8 @@ import com.gb.document.domain.document.entity.AnalysisDocumentType;
 import com.gb.document.domain.document.entity.Document;
 import com.gb.document.domain.document.entity.DocumentStatus;
 import com.gb.document.global.config.JpaConfig;
+import java.time.LocalDateTime;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,6 +49,36 @@ class DocumentRepositoryTest {
         assertThat(page.getContent())
                 .extracting(Document::getPublicId)
                 .containsExactly(c.getPublicId(), b.getPublicId(), a.getPublicId());
+    }
+
+    @Test
+    @DisplayName("findAllByStatusAndUpdatedAtBefore: 임계 이전의 ANALYZING만 — 최신 ANALYZING·타 상태 과거 건은 제외")
+    void 오래된_ANALYZING만_조회() {
+        Document stale = persist(doc("stale", "user-A", DocumentStatus.ANALYZING));
+        persist(doc("fresh", "user-A", DocumentStatus.ANALYZING));          // 최신 — 제외돼야 함
+        Document doneOld = persist(doc("done-old", "user-A", DocumentStatus.COMPLETED)); // 과거지만 타 상태 — 제외
+        Document failOld = persist(doc("fail-old", "user-A", DocumentStatus.FAILED));    // 과거지만 타 상태 — 제외
+        em.flush();
+
+        // @LastModifiedDate가 persist 시점 값을 덮어쓰므로 과거 시각은 native UPDATE로 박는다(CLAUDE.md §10).
+        LocalDateTime past = LocalDateTime.now().minusHours(1);
+        setUpdatedAt(stale.getId(), past);
+        setUpdatedAt(doneOld.getId(), past);
+        setUpdatedAt(failOld.getId(), past);
+        em.clear();
+
+        List<Document> result = documentRepository.findAllByStatusAndUpdatedAtBefore(
+                DocumentStatus.ANALYZING, LocalDateTime.now().minusMinutes(30));
+
+        assertThat(result).extracting(Document::getPublicId).containsExactly("stale");
+    }
+
+    private void setUpdatedAt(Long id, LocalDateTime updatedAt) {
+        em.getEntityManager()
+                .createNativeQuery("UPDATE document_submissions SET updated_at = :ts WHERE id = :id")
+                .setParameter("ts", updatedAt)
+                .setParameter("id", id)
+                .executeUpdate();
     }
 
     private Document persist(Document d) {

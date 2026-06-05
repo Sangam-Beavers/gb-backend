@@ -48,6 +48,8 @@ chatbot:
 # - upload-bucket: Pre-signed PUT URL이 가리킬 S3 버킷.
 # - consumer-enabled / consumer-queue-name: 결과 수신 Consumer(routing §3). dev=false(미기동),
 #   stage/prod=true + 환경별 자기 큐 이름. 코드 동일, 큐 이름만 환경 분리(데이터 오염 경로 없음).
+# - stale-timeout-minutes / stale-sweep-cron: ANALYZING으로 timeout 넘게 머문 건(미업로드·결과 유실)을
+#   FAILED 처리하는 정리 스케줄러(StaleSubmissionSweeper). timeout은 URL TTL(10분)+분석 소요보다 넉넉하게.
 gb:
   analysis:
     source: ${GB_ANALYSIS_SOURCE:development}
@@ -58,3 +60,5 @@ gb:
     aws-region: ${GB_ANALYSIS_AWS_REGION:ap-northeast-2}
     consumer-enabled: ${GB_ANALYSIS_CONSUMER_ENABLED:false}
     consumer-queue-name: ${GB_ANALYSIS_CONSUMER_QUEUE_NAME:}
+    stale-timeout-minutes: ${GB_ANALYSIS_STALE_TIMEOUT_MINUTES:30}
+    stale-sweep-cron: ${GB_ANALYSIS_STALE_SWEEP_CRON:0 */10 * * * *}

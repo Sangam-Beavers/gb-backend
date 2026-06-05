@@ -1,6 +1,9 @@
 package com.gb.document.domain.document.repository;
 
 import com.gb.document.domain.document.entity.Document;
+import com.gb.document.domain.document.entity.DocumentStatus;
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -26,4 +29,10 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
      * (보통 createdAt DESC — 최신 업로드부터.)
      */
     Page<Document> findAllByUserPublicId(String userPublicId, Pageable pageable);
+
+    /**
+     * 특정 상태로 기준 시각보다 오래 머문 문서를 찾는다 — 미업로드/결과 유실 건 FAILED 정리 스케줄러용
+     * ({@code StaleSubmissionSweeper}). updatedAt 기준이라 retry로 ANALYZING 복귀 시 유예가 다시 시작된다.
+     */
+    List<Document> findAllByStatusAndUpdatedAtBefore(DocumentStatus status, LocalDateTime threshold);
 }
