@@ -34,7 +34,10 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class DevDataInitializer implements ApplicationRunner {
 
-    // 데모 작성자 UUID — 다양한 작성자 느낌을 위해 3개 분리
+    // 데모 작성자 UUID — 다양한 작성자 느낌을 위해 3개 분리.
+    // ⚠️ DevMemberClient.FIXTURES 키 3개와 1:1이다(Minh/Sokha/Aung) — member-service에 실존하지 않는
+    //    UUID라 fixture 히트로 닉네임이 채워진다. 한쪽을 바꾸면 다른 쪽도 같이 바꿔야 시드 글 작성자가
+    //    "Unknown"으로 표시되지 않는다.
     private static final String DEMO_USER_1 = "00000000-0000-0000-0000-000000000001";
     private static final String DEMO_USER_2 = "00000000-0000-0000-0000-000000000002";
     private static final String DEMO_USER_3 = "00000000-0000-0000-0000-000000000003";

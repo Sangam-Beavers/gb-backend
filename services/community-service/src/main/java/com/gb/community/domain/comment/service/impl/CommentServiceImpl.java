@@ -43,8 +43,8 @@ public class CommentServiceImpl implements CommentService {
     private CommentService self;
 
     // 10D community-1/2 — MemberClient(외부 HTTP) 호출은 트랜잭션/커넥션을 보유한 채 하지 않는다.
-    //   현재는 MockMemberClient(인메모리)뿐이라 latent지만, RealMemberClient 도입 시 tx·행 락 보유 중
-    //   네트워크 대기(풀 고갈·락 직렬화)가 되므로 선제 분리해 둔다. 읽기 경로는 NOT_SUPPORTED(단일 SELECT는
+    //   RealMemberClient(진짜 HTTP) 도입 완료로 이 분리는 더 이상 latent가 아니라 실효 안전장치다
+    //   (tx·행 락 보유 중 네트워크 대기 = 풀 고갈·락 직렬화). 읽기 경로는 NOT_SUPPORTED(단일 SELECT는
     //   트랜잭션 불요 — repo 호출이 각자 짧은 readOnly tx), 쓰기 경로는 DB 본문을 self-proxy tx 메서드로 묶고
     //   회원 조회는 커밋 후 응답 조립에서 한다.
 
@@ -92,12 +92,11 @@ public class CommentServiceImpl implements CommentService {
         Comment comment = self.createCommentTx(postPublicId, userPublicId, request);
 
         // 작성자 표시 정보(닉네임/인증배지) MemberClient로 조회 — tx 밖.
-        //   MockMemberClient는 미존재 시 fallback "Unknown" 반환하므로 null 우려 없음.
-        //   실서비스 RealMemberClient 도입 후 HTTP 장애 시 BusinessException 가능 — 그 경우에도 댓글
-        //   INSERT는 이미 커밋돼 보존된다(표시 정보 실패가 본문 쓰기를 롤백하지 않음).
-        // TODO(RealMemberClient 전환 시): 본문은 커밋됐는데 응답만 5xx면 클라 재시도가 중복 댓글을
-        //   쌓는다(댓글엔 멱등 키 없음). 전환 이슈에서 표시 정보 실패를 fallback(예: "Unknown")으로
-        //   degrade해 2xx로 성공시키거나, 멱등 키/단시간 dedup 도입을 함께 결정할 것.
+        //   표시용 조회는 모든 구현체가 fail-open이다: 미존재·탈퇴는 물론 HTTP 장애·5xx에도
+        //   RealMemberClient가 예외를 흡수하고 fallback "Unknown"을 반환한다(클라이언트 계층 정책).
+        //   따라서 본문 INSERT가 커밋된 뒤 표시 정보 실패로 응답이 5xx가 되어 클라 재시도 → 중복 댓글이
+        //   쌓이는 경로가 없다(과거 TODO였던 "fallback으로 degrade해 2xx 성공" 결정을 클라이언트
+        //   계층에서 구현 — 멱등 키 없이 해소).
         MemberInfo author = memberClient.getMember(userPublicId);
 
         // postPublicId는 URL 경로의 식별자 그대로 — createCommentTx가 같은 값으로 활성 글을 검증했다.

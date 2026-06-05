@@ -11,8 +11,13 @@ import java.util.Map;
  * <p>커뮤니티 게시글 응답에 작성자 닉네임/인증배지를 실어야 하므로 조회만 필요하다.
  * wallet-service의 {@code MemberClient}와 달리 이메일 조회는 쓰지 않아 {@link #getMember}만 둔다.
  *
- * <p>TODO: member-service 구현 후 실제 HTTP 기반 RealMemberClient(@Profile("!dev"))로 교체.
- *       현재는 개발용 {@link MockMemberClient}(@Profile("dev"))만 존재.
+ * <p>구현체(프로파일별 정확히 1개 — member-service 표시정보 API(auth §13)를 호출):
+ * <ul>
+ *   <li>{@link RealMemberClient} — {@code @Profile("!dev & !test")}(stage·prod). HTTP + JWT 릴레이,
+ *       표시용이라 장애 시 fail-open("Unknown" 폴백).</li>
+ *   <li>{@link DevMemberClient} — {@code @Profile("dev")}. 시드 fixture 우선, 미스만 Real 로직에 위임.</li>
+ *   <li>test — 빈 없음. 단위는 {@code @Mock}, 컨텍스트 로딩은 {@code @MockitoBean}.</li>
+ * </ul>
  */
 public interface MemberClient {
 
@@ -27,9 +32,8 @@ public interface MemberClient {
      *
      * <p>반환 맵은 <b>요청한 모든 id를 키로 포함</b>한다 — 미존재 id는 {@link #getMember}와 동일하게
      * fallback("Unknown")으로 채워, 호출 측의 {@code map.get(id)} null 검사 부담을 없앤다(표시용 보조 조회라 fail-fast 불필요).
-     *
-     * <p>TODO: RealMemberClient(@Profile("!dev"))는 member-service 배치 조회 API(예: {@code GET /members?ids=...}) 1회 호출로 구현한다.
-     *       그 API가 일부만 응답하더라도 위 "모든 요청 id 포함(누락=fallback)" 계약을 지켜야 한다.
+     * {@link RealMemberClient}는 배치 조회 API({@code GET /api/v1/members/display-info?public_ids=...},
+     * auth §13-1) 1회 호출로 구현하며, API가 일부만 응답해도(미존재·탈퇴 제외) 이 계약을 지킨다.
      */
     Map<String, MemberInfo> getMembers(Collection<String> userPublicIds);
 }
