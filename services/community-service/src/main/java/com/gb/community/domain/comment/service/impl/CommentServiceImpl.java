@@ -50,7 +50,8 @@ public class CommentServiceImpl implements CommentService {
 
     @Override
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
-    public CommentListResponse getComments(String postPublicId, int page, int size) {
+    public CommentListResponse getComments(String postPublicId, String requesterUserPublicId,
+                                           int page, int size) {
         // 댓글 목록은 게시글에 종속된다 — 없거나 삭제된 게시글이면 404 COMMUNITY4001
         // (단건 조회/좋아요/댓글 작성 등 게시글 종속 API와 동일 정책). 빈 목록과 구분한다.
         Post post = getActivePostOrThrow(postPublicId);
@@ -72,7 +73,8 @@ public class CommentServiceImpl implements CommentService {
                 .map(comment -> CommentResponse.from(
                         comment,
                         authorsByPublicId.get(comment.getUserPublicId()),
-                        post.getPublicId()))
+                        post.getPublicId(),
+                        requesterUserPublicId))
                 .toList();
 
         return CommentListResponse.of(items, result.getNumber(), result.getSize(),
@@ -99,7 +101,8 @@ public class CommentServiceImpl implements CommentService {
         MemberInfo author = memberClient.getMember(userPublicId);
 
         // postPublicId는 URL 경로의 식별자 그대로 — createCommentTx가 같은 값으로 활성 글을 검증했다.
-        return CommentResponse.from(comment, author, postPublicId);
+        // is_author: 작성 응답은 요청자가 곧 작성자 — 항상 true.
+        return CommentResponse.from(comment, author, postPublicId, userPublicId);
     }
 
     @Override

@@ -215,21 +215,26 @@ class PostControllerTest {
     // ----- GET /posts/{id} -----
 
     @Test
-    @DisplayName("GET /{id} 200: 정상 단건 조회")
+    @DisplayName("GET /{id} 200: 정상 단건 조회 — is_author가 정확히 'is_author' 키로 직렬화(Boolean 게터 함정 회귀 가드)")
     void getPost_정상() throws Exception {
-        given(postService.getPost(PID)).willReturn(stubDetail());
+        given(postService.getPost(USER, PID)).willReturn(stubDetail());
 
         mockMvc.perform(get("/api/v1/community/posts/{id}", PID)
                         .with(authedJwt()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.public_id").value(PID))
-                .andExpect(jsonPath("$.data.author_is_verified").value(true));
+                .andExpect(jsonPath("$.data.author_is_verified").value(true))
+                // primitive boolean이었다면 'is'가 떨어져 $.data.author로 나간다 — 키 이름 자체를 단언.
+                .andExpect(jsonPath("$.data.is_author").value(true))
+                .andExpect(jsonPath("$.data.author").doesNotExist());
+
+        verify(postService).getPost(USER, PID); // 요청자(public_id claim)가 서비스로 전달됨
     }
 
     @Test
     @DisplayName("GET /{id} 404: service가 COMMUNITY4001 던지면 → 404 + code")
     void getPost_없음_404() throws Exception {
-        given(postService.getPost(PID))
+        given(postService.getPost(USER, PID))
                 .willThrow(new BusinessException(CommunityErrorCode.POST_NOT_FOUND));
 
         mockMvc.perform(get("/api/v1/community/posts/{id}", PID)
@@ -241,9 +246,9 @@ class PostControllerTest {
     // ----- GET /posts (list) -----
 
     @Test
-    @DisplayName("GET 200: 목록 조회 → posts 배열 + 페이지 메타(snake_case)")
+    @DisplayName("GET 200: 목록 조회 → posts 배열 + 페이지 메타(snake_case), 요청자(public_id)가 서비스로 전달")
     void getPosts_정상() throws Exception {
-        given(postService.getPosts(any(), any(), any(), eq(0), eq(20)))
+        given(postService.getPosts(eq(USER), any(), any(), any(), eq(0), eq(20)))
                 .willReturn(PostListResponse.of(List.of(), 0, 20, 0, 0));
 
         mockMvc.perform(get("/api/v1/community/posts")
@@ -252,6 +257,19 @@ class PostControllerTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.posts").isArray())
                 .andExpect(jsonPath("$.data.total_elements").value(0));
+
+        verify(postService).getPosts(eq(USER), any(), any(), any(), eq(0), eq(20));
+    }
+
+    @Test
+    @DisplayName("GET 401: 토큰은 유효하나 public_id claim 누락 → AUTH4011 — 목록도 이제 본인 식별(is_author)을 쓰므로 resolver fail-fast")
+    void getPosts_publicIdClaim_누락_401() throws Exception {
+        mockMvc.perform(get("/api/v1/community/posts")
+                        .with(jwtWithoutPublicId()))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verifyNoInteractions(postService);
     }
 
     @Test
@@ -359,6 +377,7 @@ class PostControllerTest {
                 .content("본문")
                 .authorNickname("Minh")
                 .authorIsVerified(true)
+                .isAuthor(true)
                 .likeCount(0)
                 .commentCount(0)
                 .createdAt("2026-05-30T04:15:30Z")

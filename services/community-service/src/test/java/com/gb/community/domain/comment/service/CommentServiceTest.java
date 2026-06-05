@@ -80,7 +80,7 @@ class CommentServiceTest {
     void getComments_게시글없음() {
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.getComments(PID, 0, 20))
+        assertThatThrownBy(() -> service.getComments(PID, USER, 0, 20))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommunityErrorCode.POST_NOT_FOUND);
@@ -97,7 +97,7 @@ class CommentServiceTest {
         given(commentRepository.findByPostAndDeletedAtIsNull(any(), any()))
                 .willReturn(new PageImpl<>(List.of(), PageRequest.of(2, 5), 0));
 
-        CommentListResponse res = service.getComments(PID, 2, 5);
+        CommentListResponse res = service.getComments(PID, USER, 2, 5);
 
         assertThat(res.getComments()).isEmpty();
         assertThat(res.getTotalElements()).isZero();
@@ -115,7 +115,7 @@ class CommentServiceTest {
         given(commentRepository.findByPostAndDeletedAtIsNull(any(), captor.capture()))
                 .willReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
 
-        service.getComments(PID, 0, 20);
+        service.getComments(PID, USER, 0, 20);
 
         assertThat(captor.getValue().getSort())
                 .containsExactly(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
@@ -132,7 +132,7 @@ class CommentServiceTest {
                 .willReturn(new PageImpl<>(List.of(c1, c2), PageRequest.of(0, 20), 2));
         given(memberClient.getMembers(List.of(USER))).willReturn(Map.of(USER, MINH));
 
-        CommentListResponse res = service.getComments(PID, 0, 20);
+        CommentListResponse res = service.getComments(PID, USER, 0, 20);
 
         assertThat(res.getComments()).hasSize(2);
         assertThat(res.getTotalElements()).isEqualTo(2);
@@ -143,6 +143,7 @@ class CommentServiceTest {
         assertThat(first.getContent()).isEqualTo("첫 댓글");
         assertThat(first.getAuthorNickname()).isEqualTo("Minh");
         assertThat(first.isAuthorIsVerified()).isTrue();
+        assertThat(first.getIsAuthor()).isTrue(); // 요청자(USER)=작성자(USER)
         assertThat(first.getParentCommentPublicId()).isNull(); // 대댓글 미구현 — 항상 null
         assertThat(first.getCreatedAt()).isEqualTo("2026-05-26T04:15:30Z");
 
@@ -150,7 +151,7 @@ class CommentServiceTest {
     }
 
     @Test
-    @DisplayName("매핑: 작성자가 다르면 각각 1회 조회, 인증배지/닉네임 개별 매핑")
+    @DisplayName("매핑: 작성자가 다르면 각각 1회 조회, 인증배지/닉네임/is_author 개별 매핑")
     void getComments_다른작성자_매핑() {
         Post post = post(PID);
         Comment c1 = comment(post, USER, "a", LocalDateTime.of(2026, 5, 26, 4, 0, 0));
@@ -161,10 +162,12 @@ class CommentServiceTest {
         given(memberClient.getMembers(List.of(USER, OTHER)))
                 .willReturn(Map.of(USER, MINH, OTHER, SOKHA));
 
-        CommentListResponse res = service.getComments(PID, 0, 20);
+        CommentListResponse res = service.getComments(PID, USER, 0, 20);
 
+        assertThat(res.getComments().get(0).getIsAuthor()).isTrue();  // 본인(USER) 댓글
         assertThat(res.getComments().get(1).getAuthorNickname()).isEqualTo("Sokha");
         assertThat(res.getComments().get(1).isAuthorIsVerified()).isFalse();
+        assertThat(res.getComments().get(1).getIsAuthor()).isFalse(); // 타인(OTHER) 댓글
         verify(memberClient).getMembers(List.of(USER, OTHER));
     }
 
@@ -193,6 +196,7 @@ class CommentServiceTest {
         assertThat(resp.getContent()).isEqualTo("좋은 정보 감사합니다!");
         assertThat(resp.getAuthorNickname()).isEqualTo("Minh");
         assertThat(resp.isAuthorIsVerified()).isTrue();
+        assertThat(resp.getIsAuthor()).isTrue(); // 작성 응답은 요청자=작성자 — 항상 true
         assertThat(resp.getParentCommentPublicId()).as("대댓글 미지원 — 항상 null").isNull();
 
         // comment_count 증가는 DB 원자 UPDATE(incrementCommentCount) 호출로 검증(like_count와 동일)

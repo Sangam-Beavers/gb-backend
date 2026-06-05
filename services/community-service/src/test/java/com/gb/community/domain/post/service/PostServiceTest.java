@@ -81,6 +81,7 @@ class PostServiceTest {
         assertThat(res.getContent()).isEqualTo("본문");
         assertThat(res.getAuthorNickname()).isEqualTo("Minh");
         assertThat(res.isAuthorIsVerified()).isTrue();
+        assertThat(res.getIsAuthor()).isTrue(); // 작성 응답은 요청자=작성자 — 항상 true
         verify(postRepository).save(any(Post.class));
     }
 
@@ -98,16 +99,29 @@ class PostServiceTest {
     // ----- get -----
 
     @Test
-    @DisplayName("단건 조회 정상: 작성자 정보까지 매핑")
+    @DisplayName("단건 조회 정상: 작성자 정보까지 매핑, 본인 글이면 is_author=true")
     void getPost_정상() {
         Post post = Post.of(USER, PostCategory.VISA, "비자", "내용");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(memberClient.getMember(USER)).willReturn(MINH);
 
-        PostDetailResponse res = service.getPost(PID);
+        PostDetailResponse res = service.getPost(USER, PID);
 
         assertThat(res.getCategory()).isEqualTo("VISA");
         assertThat(res.getAuthorNickname()).isEqualTo("Minh");
+        assertThat(res.getIsAuthor()).isTrue(); // 요청자=작성자
+    }
+
+    @Test
+    @DisplayName("단건 조회: 타인 글이면 is_author=false (수정·삭제 버튼 비노출 판단)")
+    void getPost_타인글_isAuthor_false() {
+        Post post = Post.of(OTHER, PostCategory.VISA, "비자", "내용");
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(memberClient.getMember(OTHER)).willReturn(new MemberInfo("Sokha", false));
+
+        PostDetailResponse res = service.getPost(USER, PID);
+
+        assertThat(res.getIsAuthor()).isFalse();
     }
 
     @Test
@@ -115,7 +129,7 @@ class PostServiceTest {
     void getPost_없음() {
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.getPost(PID))
+        assertThatThrownBy(() -> service.getPost(USER, PID))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommunityErrorCode.POST_NOT_FOUND);
@@ -136,6 +150,7 @@ class PostServiceTest {
 
         assertThat(res.getTitle()).isEqualTo("new title");
         assertThat(res.getContent()).isEqualTo("old content");
+        assertThat(res.getIsAuthor()).isTrue(); // 수정은 본인 검증 통과 흐름 — 항상 true
         assertThat(post.getTitle()).isEqualTo("new title");
     }
 
@@ -245,7 +260,7 @@ class PostServiceTest {
         Page<Post> empty = new PageImpl<>(List.of(), PageRequest.of(0, 20), 0);
         given(postRepository.search(any(), any(), any())).willReturn(empty);
 
-        PostListResponse res = service.getPosts(null, null, "latest", 0, 20);
+        PostListResponse res = service.getPosts(USER, null, null, "latest", 0, 20);
 
         assertThat(res.getPosts()).isEmpty();
         assertThat(res.getTotalElements()).isZero();
@@ -259,9 +274,9 @@ class PostServiceTest {
         given(postRepository.search(any(), any(), captor.capture()))
                 .willReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
 
-        service.getPosts(null, null, "latest", 0, 20);
-        service.getPosts(null, null, "popular", 0, 20);
-        service.getPosts(null, null, "accuracy", 0, 20);
+        service.getPosts(USER, null, null, "latest", 0, 20);
+        service.getPosts(USER, null, null, "popular", 0, 20);
+        service.getPosts(USER, null, null, "accuracy", 0, 20);
 
         List<Pageable> captured = captor.getAllValues();
         assertThat(captured.get(0).getSort()) // latest
@@ -282,7 +297,7 @@ class PostServiceTest {
                 .willReturn(new PageImpl<>(List.of(a, b), PageRequest.of(0, 20), 2));
         given(memberClient.getMembers(List.of(USER))).willReturn(Map.of(USER, MINH));
 
-        PostListResponse res = service.getPosts(null, null, "latest", 0, 20);
+        PostListResponse res = service.getPosts(USER, null, null, "latest", 0, 20);
 
         assertThat(res.getPosts()).hasSize(2);
         // 같은 작성자 2건이어도 distinct로 묶어 배치 1회(작성자 1명짜리 리스트)만 호출한다.
@@ -296,7 +311,7 @@ class PostServiceTest {
         given(postRepository.search(any(), keywordCaptor.capture(), any()))
                 .willReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
 
-        service.getPosts(null, "50%_test", "latest", 0, 20);
+        service.getPosts(USER, null, "50%_test", "latest", 0, 20);
 
         // % → |%, _ → |_ (파이프 이스케이프)로 변환돼 넘어가야 한다.
         assertThat(keywordCaptor.getValue()).isEqualTo("50|%|_test");
@@ -305,7 +320,7 @@ class PostServiceTest {
     @Test
     @DisplayName("목록: 잘못된 sort → COMMON4001, repository·member 호출 없음")
     void getPosts_잘못된_sort() {
-        assertThatThrownBy(() -> service.getPosts(null, null, "weird", 0, 20))
+        assertThatThrownBy(() -> service.getPosts(USER, null, null, "weird", 0, 20))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
@@ -323,7 +338,7 @@ class PostServiceTest {
         given(memberClient.getMembers(List.of(USER, OTHER)))
                 .willReturn(Map.of(USER, MINH, OTHER, new MemberInfo("Sokha", false)));
 
-        PostListResponse res = service.getPosts(null, null, "latest", 0, 20);
+        PostListResponse res = service.getPosts(USER, null, null, "latest", 0, 20);
 
         assertThat(res.getPosts()).hasSize(2);
         assertThat(res.getTotalElements()).isEqualTo(2);

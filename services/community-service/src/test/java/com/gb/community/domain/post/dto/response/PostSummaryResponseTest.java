@@ -82,6 +82,16 @@ class PostSummaryResponseTest {
     /** content를 가진 Post로 from()을 태워 만들어진 content_preview 값을 돌려준다. */
     private String previewOf(String content) {
         Post post = Post.of(USER, PostCategory.JOB, "제목", content);
-        return PostSummaryResponse.from(post, AUTHOR).getContentPreview();
+        return PostSummaryResponse.from(post, AUTHOR, USER).getContentPreview();
+    }
+
+    @Test
+    @DisplayName("is_author: 요청자=작성자면 true, 다르면 false")
+    void isAuthor_요청자_작성자_비교() {
+        Post post = Post.of(USER, PostCategory.JOB, "제목", "본문");
+
+        assertThat(PostSummaryResponse.from(post, AUTHOR, USER).getIsAuthor()).isTrue();
+        assertThat(PostSummaryResponse.from(post, AUTHOR, "00000000-0000-0000-0000-000000000009")
+                .getIsAuthor()).isFalse();
     }
 }

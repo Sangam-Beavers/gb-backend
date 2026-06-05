@@ -14,10 +14,11 @@ import com.gb.community.domain.comment.entity.Comment;
 public interface CommentService {
 
     /**
-     * 특정 게시글의 댓글 목록 조회. 작성순(오래된 순)으로 정렬해 페이지네이션한다.
+     * 특정 게시글의 댓글 목록 조회. 최신순(최근 작성 순)으로 정렬해 페이지네이션한다.
      * 없거나 삭제된 게시글이면 COMMUNITY4001. 삭제된 댓글은 결과에서 제외한다.
+     * {@code requesterUserPublicId}는 항목별 {@code is_author}(요청자=작성자 여부) 계산에 쓴다.
      */
-    CommentListResponse getComments(String postPublicId, int page, int size);
+    CommentListResponse getComments(String postPublicId, String requesterUserPublicId, int page, int size);
 
     /**
      * 댓글 작성. {@code postPublicId}의 게시글에 본인({@code userPublicId}) 명의로 1건 INSERT하고

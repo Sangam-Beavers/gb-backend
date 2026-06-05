@@ -48,7 +48,8 @@ public class PostServiceImpl implements PostService {
 
     @Override
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
-    public PostListResponse getPosts(String category, String keyword, String sort, int page, int size) {
+    public PostListResponse getPosts(String requesterUserPublicId, String category, String keyword,
+                                     String sort, int page, int size) {
         PostCategory categoryFilter = parseCategory(category);   // 잘못된 값 → COMMON4001
         String keywordFilter = escapeLikeKeyword(nullIfBlank(keyword)); // 빈 키워드면 null(전체), 아니면 LIKE 메타문자 이스케이프
         Pageable pageable = buildPageable(sort, page, size);     // 잘못된 sort → COMMON4001
@@ -63,7 +64,8 @@ public class PostServiceImpl implements PostService {
                 authorIds.isEmpty() ? Map.of() : memberClient.getMembers(authorIds);
 
         List<PostSummaryResponse> items = posts.stream()
-                .map(post -> PostSummaryResponse.from(post, authorsByPublicId.get(post.getUserPublicId())))
+                .map(post -> PostSummaryResponse.from(
+                        post, authorsByPublicId.get(post.getUserPublicId()), requesterUserPublicId))
                 .toList();
 
         return PostListResponse.of(items, result.getNumber(), result.getSize(),
@@ -72,10 +74,11 @@ public class PostServiceImpl implements PostService {
 
     @Override
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
-    public PostDetailResponse getPost(String postPublicId) {
+    public PostDetailResponse getPost(String requesterUserPublicId, String postPublicId) {
         Post post = getActivePostOrThrow(postPublicId);
         // 단건 SELECT 후 외부 호출 — 트랜잭션 불요(NOT_SUPPORTED로 클래스 readOnly tx 차단).
-        return PostDetailResponse.from(post, memberClient.getMember(post.getUserPublicId()));
+        return PostDetailResponse.from(post, memberClient.getMember(post.getUserPublicId()),
+                requesterUserPublicId);
     }
 
     @Override
@@ -83,7 +86,9 @@ public class PostServiceImpl implements PostService {
     public PostDetailResponse createPost(String requesterUserPublicId, PostCreateRequest request) {
         // DB 본문(INSERT)은 self-proxy 쓰기 트랜잭션으로, 작성자 표시 정보 조회는 커밋 후 tx 밖에서.
         Post saved = self.createPostTx(requesterUserPublicId, request);
-        return PostDetailResponse.from(saved, memberClient.getMember(requesterUserPublicId));
+        // is_author: 작성 응답은 요청자가 곧 작성자 — 항상 true.
+        return PostDetailResponse.from(saved, memberClient.getMember(requesterUserPublicId),
+                requesterUserPublicId);
     }
 
     @Override
@@ -105,7 +110,9 @@ public class PostServiceImpl implements PostService {
                                          PostUpdateRequest request) {
         // DB 본문(조회→본인검증→dirty checking 변경)은 self-proxy 쓰기 트랜잭션으로, 회원 조회는 커밋 후.
         Post post = self.updatePostTx(requesterUserPublicId, postPublicId, request);
-        return PostDetailResponse.from(post, memberClient.getMember(post.getUserPublicId()));
+        // is_author: 수정은 본인 검증을 통과한 흐름 — 항상 true.
+        return PostDetailResponse.from(post, memberClient.getMember(post.getUserPublicId()),
+                requesterUserPublicId);
     }
 
     @Override

@@ -48,6 +48,7 @@
 | `posts[].title` | string | N | 제목 |
 | `posts[].content_preview` | string | N | 본문 미리보기 |
 | `posts[].author_nickname` | string | N | 작성자 닉네임 |
+| `posts[].is_author` | boolean | N | 요청자(JWT public_id)=작성자 여부. 수정·삭제 버튼 노출 판단용 |
 | `posts[].like_count` | integer | N | 좋아요 수 |
 | `posts[].comment_count` | integer | N | 댓글 수 |
 | `posts[].created_at` | string | N | 작성 시각(UTC Z) |
@@ -79,6 +80,7 @@
 | `title` | string | N | 제목 |
 | `content` | string | N | 본문 |
 | `author_nickname` | string | N | 작성자 닉네임 |
+| `is_author` | boolean | N | 요청자=작성자 여부. 작성 응답에선 항상 true |
 | `like_count` | integer | N | 좋아요 수(생성 시 0) |
 | `comment_count` | integer | N | 댓글 수(생성 시 0) |
 | `created_at` | string | N | 작성 시각(UTC Z) |
@@ -92,7 +94,7 @@
 
 ## 3. 게시글 단건 조회 / 수정 / 삭제 / 번역
 
-- 단건 조회: `GET /api/v1/community/posts/{id}` → 본문 + 작성자(닉네임/`author_is_verified`) + 카운트. 404 COMMUNITY4001.
+- 단건 조회: `GET /api/v1/community/posts/{id}` → 본문 + 작성자(닉네임/`author_is_verified`) + 카운트 + `is_author`(요청자=작성자 여부, 수정·삭제 버튼 노출 판단용). 404 COMMUNITY4001.
 - 수정: `PATCH /api/v1/community/posts/{id}` (본인만, 403 COMMON4031. 부분 수정 — 전송 필드만 변경, title/content 상한은 §2와 동일)
 - 삭제: `DELETE /api/v1/community/posts/{id}` (soft delete, 본인만)
 - 번역 보기: `GET /api/v1/community/posts/{id}/translation?language={}` → `data: { translated_title, translated_content, translated_language }`
@@ -103,7 +105,7 @@
 
 `GET /api/v1/community/posts/liked?sort=&page=&size=` · Auth ✅
 
-**Response 200** — `data`: `posts`(배열, 각 항목에 `liked_at` 추가) + page/size/total_elements/total_pages.
+**Response 200** — `data`: `posts`(배열, 각 항목에 `liked_at` 추가, `is_author` 미포함 — §1과 달리 수정·삭제 진입이 없는 화면이라 제외) + page/size/total_elements/total_pages.
 `sort`: latest(좋아요 누른 시각순) / popular(좋아요 수순), 기본 latest.
 
 ---
@@ -141,6 +143,7 @@
 | `content` | string | N | 댓글 내용 |
 | `author_nickname` | string | N | 작성자 닉네임 (MemberClient 조회) |
 | `author_is_verified` | boolean | N | 작성자 인증 배지 여부 |
+| `is_author` | boolean | N | 요청자=작성자 여부. 작성 응답에선 항상 true |
 | `created_at` | string | N | 작성 시각 (ISO 8601 UTC `Z`) |
 
 작성 성공 시 게시글 `comment_count`가 1 증가한다 (같은 트랜잭션 내 dirty checking).
@@ -172,7 +175,7 @@
 | `page` | integer | X | 0-base 페이지 번호 (기본 0, 가드 0~10000) |
 | `size` | integer | X | 페이지당 개수 (기본 20, 가드 1~100) |
 
-**정렬**: `created_at ASC, id ASC` — 작성순(오래된 댓글이 먼저). created_at 동률은 id ASC를 보조 키로 사용한다(id는 외부 비노출, 정렬 키로만).
+**정렬**: `created_at DESC, id DESC` — 최신순(최근 작성 댓글이 먼저). created_at 동률은 id DESC를 보조 키로 사용한다(id는 외부 비노출, 정렬 키로만).
 
 **Response 200** — `data`
 | 필드 | 타입 | nullable | 설명 |
@@ -184,6 +187,7 @@
 | `comments[].content` | string | N | 댓글 내용 |
 | `comments[].author_nickname` | string | N | 작성자 닉네임 (MemberClient 조회) |
 | `comments[].author_is_verified` | boolean | N | 작성자 인증 배지 여부 |
+| `comments[].is_author` | boolean | N | 요청자(JWT public_id)=작성자 여부. 수정·삭제 버튼 노출 판단용 |
 | `comments[].created_at` | string | N | 작성 시각 (ISO 8601 UTC `Z`) |
 | `page` | integer | N | 현재 페이지 번호 (0-base) |
 | `size` | integer | N | 페이지당 개수 |
@@ -202,6 +206,7 @@
         "content": "저도 작년에 똑같은 일 겪었어요. 노동부 1350에 신고해 차액 다 받았어요.",
         "author_nickname": "Minh",
         "author_is_verified": true,
+        "is_author": false,
         "created_at": "2026-05-26T04:15:30Z"
       }
     ],

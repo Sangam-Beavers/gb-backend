@@ -17,11 +17,16 @@ public interface PostService {
     /**
      * 게시글 목록·검색. category(선택)·keyword(선택, 제목·본문 LIKE)·sort(latest/popular/accuracy)로
      * 필터·정렬하고 페이지네이션한다. 잘못된 category/sort는 COMMON4001로 던진다. 삭제글은 제외.
+     * {@code requesterUserPublicId}는 항목별 {@code is_author}(요청자=작성자 여부) 계산에 쓴다.
      */
-    PostListResponse getPosts(String category, String keyword, String sort, int page, int size);
+    PostListResponse getPosts(String requesterUserPublicId, String category, String keyword,
+                              String sort, int page, int size);
 
-    /** 게시글 단건 조회. 없거나 삭제된 글이면 COMMUNITY4001. */
-    PostDetailResponse getPost(String postPublicId);
+    /**
+     * 게시글 단건 조회. 없거나 삭제된 글이면 COMMUNITY4001.
+     * {@code requesterUserPublicId}는 {@code is_author}(요청자=작성자 여부) 계산에 쓴다.
+     */
+    PostDetailResponse getPost(String requesterUserPublicId, String postPublicId);
 
     /** 게시글 작성. 작성자는 요청자(userPublicId), 잘못된 category는 COMMON4001. */
     PostDetailResponse createPost(String requesterUserPublicId, PostCreateRequest request);
