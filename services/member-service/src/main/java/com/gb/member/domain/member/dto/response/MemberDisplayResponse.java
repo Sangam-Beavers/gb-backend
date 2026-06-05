@@ -7,7 +7,7 @@ import lombok.Getter;
 
 /**
  * 회원 표시정보 응답 1건. 표시정보 배치 조회(display-info)의 항목과 이메일 단건 조회(by-email)의
- * data가 공유한다(같은 표시 필드 집합 — 명세 auth api-spec §13·§14).
+ * data가 공유한다(같은 표시 필드 집합 — 명세 auth api-spec §13(§13-1/§13-2)).
  *
  * <p>다른 서비스(community/wallet)가 작성자 닉네임·송금 수신자 표시를 채우는 용도라,
  * <b>실사용처가 있는 표시 필드만</b> 내려보낸다(PII 최소화):
