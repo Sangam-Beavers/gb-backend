@@ -133,7 +133,7 @@ public class ExchangeServiceImpl implements ExchangeService {
         BigDecimal receiveAmount = amountInKrw.subtract(fee)
                 .divide(toRate, MONEY_SCALE, RoundingMode.HALF_UP);
 
-        // wallet-exchange-3 — 신청액이 너무 작아 수령액이 0.0000으로 반올림되면 fail-fast로 차단한다(EXCHANGE4003).
+        // 신청액이 너무 작아 수령액이 0.0000으로 반올림되면 fail-fast로 차단한다(EXCHANGE4003).
         //   막지 않으면 0 견적이 Redis에 저장되고, 실행 시 WalletBalance.addBalance(0)가 IllegalArgumentException을
         //   던져 COMMON5000(500)이 난다. 견적 생성 시점에 막아 잘못된 값이 Redis/실행에 도달하지 않게 한다.
         if (receiveAmount.signum() <= 0) {
@@ -205,10 +205,10 @@ public class ExchangeServiceImpl implements ExchangeService {
         // TODO(EXB2 연기): 같은 idempotency_key로 '동시' 요청이 오면 패자는 Layer1/2를 모두 miss(승자 tx 미커밋)한
         //   뒤 getAndDelete가 empty라 QUOTE_EXPIRED를 받는다(첫 결과 멱등 재반환이 아님). 견고한 멱등은 getAndDelete
         //   소비를 FOR UPDATE(executeInTransaction) 안으로 옮겨 패자가 승자 커밋까지 block 후 첫 거래를 재조회하게
-        //   해야 하나, 이는 DB 비관락 보유 중 Redis IO(=WU-F1 'lock 안 외부호출' 안티패턴)를 들이고 critical section을
+        //   해야 하나, 이는 DB 비관락 보유 중 Redis IO(lock 안 외부호출 안티패턴)를 들이고 critical section을
         //   재구조화(데드락 위험)해야 해 별도 검토로 미룬다. 본 경로의 P3 한계이며, WEXB-01(다른 키 이중사용 차단)과
         //   비동시(순차 재시도) 멱등(Layer1/2/3)은 그대로 유지된다.
-        //   (wallet-exchange-2) 같은 한계가 *비재시도성 비즈니스 거부*에도 적용된다: executeInTransaction 안에서
+        // 같은 한계가 *비재시도성 비즈니스 거부*에도 적용된다: executeInTransaction 안에서
         //   WALLET4001(미존재)·WALLET4003(비활성)·WALLET4002(잔액부족)로 거부되면 DB tx는 롤백되지만 위 getAndDelete는
         //   Redis라 롤백되지 않아 견적이 이미 소비된다. 따라서 동일 키 재요청은 QUOTE_EXPIRED를 받고 재견적이 필요하다.
         //   단일소비(WEXB-01, 이중환전 차단)를 "거부 후 재견적" UX 편의보다 우선한 결과 — 금융 double-spend 가드라 의도된 trade-off.
@@ -280,7 +280,7 @@ public class ExchangeServiceImpl implements ExchangeService {
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
 
         // (1.5) WTX-05 — 동결(SUSPENDED)/폐쇄(CLOSED) 지갑은 환전도 차단(ACTIVE만 허용). 충전/송금/PIN설정과
-        //       대칭(wallet-exchange-1). 동일 소유자 통화변환이라 외부 이탈은 없지만, 비활성 지갑이 자기 잔액을
+        // 동일 소유자 통화변환이라 외부 이탈은 없지만, 비활성 지갑이 자기 잔액을
         //       통화 간 이동하는 것도 다른 자금이동과 같은 정책으로 막는다. 잔액 변경/락 전에 차단해 부작용 없음.
         if (wallet.getStatus() != WalletStatus.ACTIVE) {
             throw new BusinessException(WalletErrorCode.WALLET_INACTIVE);
@@ -288,7 +288,7 @@ public class ExchangeServiceImpl implements ExchangeService {
 
         // (2) 받을 통화(to) 잔액 행 0원 보장 — 없으면 FOR UPDATE로 못 잠그므로 먼저 생성(REQUIRES_NEW).
         //     동시 race로 REQUIRES_NEW가 rollback-only가 되면 UnexpectedRollbackException이 전파되나, 행은
-        //     이미 존재하므로 흡수하고 진행한다(charge-2 — 정상 환전이 generic 500으로 깨지지 않게).
+        //     이미 존재하므로 흡수하고 진행한다(정상 환전이 generic 500으로 깨지지 않게).
         BestEffortRequiresNew.run(() -> walletBalanceWriter.ensureBalanceRow(wallet, quote.toCurrencyCode()));
 
         // (3) from/to 잔액 행을 비관적 락으로 조회. 같은 지갑 두 통화라 통화명 오름차순으로 잠가 데드락을 피한다.

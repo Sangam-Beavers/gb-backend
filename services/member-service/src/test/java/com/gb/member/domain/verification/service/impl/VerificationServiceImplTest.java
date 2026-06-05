@@ -201,7 +201,7 @@ class VerificationServiceImplTest {
 
         assertThat(response.getStatus()).isEqualTo("APPROVED");
         assertThat(member.isVerified()).isTrue();
-        verify(verificationRepository).saveAndFlush(any());     // 인증은 저장됨(10D 백스톱 — saveAndFlush)
+        verify(verificationRepository).saveAndFlush(any());     // 인증은 저장됨(saveAndFlush로 백스톱)
         verify(walletClient).createWalletFor(PUBLIC_ID);   // 호출 자체는 시도됐음
     }
 

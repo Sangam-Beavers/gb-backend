@@ -48,7 +48,7 @@ public class MemberServiceImpl implements MemberService {
     private String passwordResetBaseUrl;
 
     /**
-     * 이메일 회원가입 — <b>IdP-first 단일 INSERT</b>(11D member-idp-1·core-2 묶음 수정, MEM-02 재설계).
+     * 이메일 회원가입 — <b>IdP-first 단일 INSERT</b>.
      *
      * <p>순서: 중복 선검사 → IdP 프로비저닝(<b>트랜잭션 밖</b>) → 로컬 단일 INSERT(sub 포함, 자체 짧은 tx).
      * 과거(MEM-02)에는 "로컬 row 선점 → IdP → sub UPDATE"를 한 @Transactional로 묶었으나,
@@ -78,9 +78,9 @@ public class MemberServiceImpl implements MemberService {
         // 토큰 custom claim(public_id)과 우리 회원이 일치한다(토큰 sub ↔ publicId 매핑).
         String publicId = UUID.randomUUID().toString();
 
-        // ① IdP 프로비저닝 — 트랜잭션 "밖"이라 IdP가 느려도 DB 커넥션/락을 점유하지 않는다(core-2).
-        //    실패하면 로컬엔 아무것도 만든 게 없어 보상이 필요 없다(set_password 부분실패의 IdP 고아는
-        //    RealIdpUserClient가 내부에서 보상 DELETE — idp-1). 방식 B: 비밀번호는 IdP에만 저장된다.
+        // ① IdP 프로비저닝 — 트랜잭션 "밖"에서 수행하여 DB 커넥션/락을 점유하지 않는다.
+        //    set_password 부분실패 시 내부 보상 DELETE로 IdP 고아를 회수한다.
+        //    비밀번호는 IdP에만 저장되며, 로컬 DB에는 저장하지 않는다.
         String authProviderId = idpUserClient.provisionUser(
                 request.getEmail(), request.getName(), request.getPassword(), publicId);
 
@@ -124,14 +124,11 @@ public class MemberServiceImpl implements MemberService {
             SocialProfileRequest request) {
 
         // 1) 이미 프로필 완료(=members row 존재)면 재생성 거절.
-        //    소셜 신규회원은 토큰(public_id)은 있어도 row가 없는 "미완료" 상태로 시작하므로,
-        //    row가 이미 있으면 완료된 회원이다(중복 호출/이중 제출).
         if (memberRepository.existsByPublicId(publicId)) {
             throw new BusinessException(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
         }
 
-        // 2) 이메일 중복(다른 계정이 이미 사용). 정책상 소셜-기존 계정 자동연결은 안 하므로(거부),
-        //    Authentik Source 단계에서 일차 차단되지만 정합성을 위해 여기서도 방어한다.
+        // 2) 이메일 중복(다른 계정이 이미 사용). 여기서도 방어하여 정합성을 확보한다.
         if (memberRepository.existsByEmail(email)) {
             throw new BusinessException(MemberErrorCode.EMAIL_ALREADY_EXISTS);
         }
@@ -141,8 +138,6 @@ public class MemberServiceImpl implements MemberService {
             throw new BusinessException(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
         }
 
-        // 4) members row 최초 생성. publicId/email/name/authProviderId는 검증된 토큰 claim에서,
-        //    닉네임/국적/언어는 요청에서 채운다. 모든 필드가 갖춰진 시점에 한 번에 INSERT(이메일 가입과 일관).
         Member member = Member.builder()
                 .publicId(publicId)
                 .email(email)
@@ -191,9 +186,8 @@ public class MemberServiceImpl implements MemberService {
     @Override
     @Transactional(readOnly = true)
     public MemberDisplayListResponse getDisplayInfos(List<String> publicIds) {
-        // IN-batch 1회 조회(건별 반복 금지 — §4 Repository 규칙). 탈퇴자는 Repository 레벨에서 제외되고,
-        // 미존재·탈퇴로 빠진 id는 응답에 항목이 없을 뿐 에러가 아니다(호출 측 MemberClient가 "Unknown" 폴백).
-        // 중복 id는 IN 절에서 자연 흡수된다(회원당 1건).
+        // 탈퇴자는 Repository 레벨에서 제외되며,
+        // 미존재·탈퇴로 빠진 id는 응답에 항목이 없을 뿐 에러가 아니다.
         List<MemberDisplayResponse> members = memberRepository
                 .findByPublicIdInAndDeletedAtIsNull(publicIds).stream()
                 .map(MemberDisplayResponse::from)
@@ -225,17 +219,14 @@ public class MemberServiceImpl implements MemberService {
 
         // 가입 여부 노출 방지(보안): 미가입 이메일이어도 예외/다른 응답 없이 조용히 종료한다.
         // (공격자가 응답 차이로 "이 이메일 가입돼 있나"를 알아내지 못하게 — 호출 측은 항상 200을 받는다.)
-        // 회원을 "조회"해 저장 이메일(가입 당시 표기)을 쓴다(11D member-idp-3): MySQL 기본 collation은
-        // 대소문자 무시라 혼합 케이스 입력으로도 회원이 찾아지는데, 입력값을 그대로 토큰에 실으면 재설정
-        // 단계의 IdP username "정확 일치" 조회(changePassword)가 0건이 되어 500으로 깨진다. IdP username은
-        // 가입 표기와 byte-exact 동일하므로 토큰·발송 모두 저장 이메일로 통일한다.
+        // 저장 이메일(가입 당시 표기)을 사용한다. MySQL 기본 collation은 대소문자를 무시하므로,
+        // IdP username과 byte-exact 일치를 보장하기 위해 입력값이 아닌 저장값을 사용한다.
         Optional<Member> member = memberRepository.findByEmail(email);
         if (member.isEmpty()) {
             return;
         }
         String canonicalEmail = member.get().getEmail();
 
-        // 일회용 재설정 토큰 생성 → Redis에 TTL 저장(토큰→email). 만료는 Redis가 자동 처리.
         String token = UUID.randomUUID().toString();
         passwordResetTokenStore.save(token, canonicalEmail);
 
@@ -252,13 +243,12 @@ public class MemberServiceImpl implements MemberService {
 
     @Override
     public void resetPassword(PasswordResetRequest request) {
-        // 토큰을 원자적으로 소비(GETDEL) — IdP 호출 전에 단 한 번만 쓰이게 한다. 없으면(만료/무효/이미 소비) 거절.
-        // 동시 요청·더블클릭이 들어와도 정확히 한 번만 통과한다(GET-then-DELETE 경쟁 제거).
+        // 토큰을 원자적으로 소비(GETDEL)하여 단 한 번만 사용되게 한다.
+        // 없으면(만료/무효/이미 소비) 거절한다.
         String email = passwordResetTokenStore.consume(request.getToken())
                 .orElseThrow(() -> new BusinessException(MemberErrorCode.INVALID_RESET_TOKEN));
 
         // 비밀번호는 IdP가 보유하므로 IdP 관리 API로 변경한다.
-        // (토큰은 이미 소비됨 — IdP 실패 시 재설정을 다시 요청해야 한다. 토큰 단일 사용 보안 우선.)
         idpUserClient.changePassword(email, request.getNewPassword());
     }
 
@@ -280,7 +270,7 @@ public class MemberServiceImpl implements MemberService {
     @Transactional
     public void withdraw(String userPublicId) {
         Member member = getActiveMemberOrThrow(userPublicId);
-        member.softDelete();                      // 로컬 deleted_at 세팅(아직 커밋 전)
+        member.softDelete(); // 로컬 deleted_at 세팅(커밋은 메서드 종료 시)
         // 외부 호출은 "마지막 단계"로 — IdP 비활성화가 실패하면 BusinessException이 올라와
         // @Transactional이 롤백되어 로컬 soft delete도 반영되지 않는다(정합성).
         // TODO(알려진 한계): IdP 비활성화 성공 직후 DB 커밋이 실패하는 드문 구간은 이중 쓰기(dual-write)라
@@ -306,7 +296,7 @@ public class MemberServiceImpl implements MemberService {
             throw new BusinessException(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
         }
 
-        member.updateProfile(request.getNickname(), request.getLanguage(), request.getBio()); // dirty checking
+        member.updateProfile(request.getNickname(), request.getLanguage(), request.getBio());
         return ProfileResponse.from(member);
     }
 

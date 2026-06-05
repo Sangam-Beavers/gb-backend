@@ -91,7 +91,6 @@ public class VerificationServiceImpl implements VerificationService {
     public UserVerification submitVerificationTx(String userPublicId, VerificationRequest request) {
         Member member = getActiveMemberOrThrow(userPublicId);
 
-        // 1) 이미 진행중(PENDING)·승인(APPROVED) 인증이 있으면 중복 제출 거절.
         if (verificationRepository.existsByMemberAndStatusIn(member, ACTIVE_STATUSES)) {
             throw new BusinessException(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
         }
@@ -99,14 +98,12 @@ public class VerificationServiceImpl implements VerificationService {
         // 2) 신분증 유형 파싱(잘못된 enum 값 → COMMON4001). @Pattern 대신 Service 변환(CLAUDE §6).
         IdentityDocumentType documentType = parseDocumentType(request.getIdentityDocumentType());
 
-        // 3) 유형별 번호 형식(정규식) 검증. 외국인등록증이 주 대상. 불일치 → COMMON4001.
         if (!documentType.matches(request.getDocumentNumber())) {
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
 
-        // 4) 형식 검증 통과 → 즉시 승인(데모). 인증 레코드 저장 + 회원 배지 부여(dirty checking).
-        //    document_number는 엔티티의 EncryptedStringConverter가 영속 시점에 AES-256-GCM으로 자동 암호화한다.
-        //    저장 전 normalize로 케이스 정규화(현재 필리핀 PCN만 대문자 통일). 다른 유형은 그대로.
+        // 형식 검증 통과 → 즉시 승인(데모). 인증 레코드 저장 + 회원 배지 부여.
+        // document_number는 EncryptedStringConverter가 영속 시점에 AES-256-GCM으로 자동 암호화한다.
         String normalizedDocumentNumber = documentType.normalize(request.getDocumentNumber());
         UserVerification verification = UserVerification.approved(
                 member, documentType, normalizedDocumentNumber, request.getS3Key());

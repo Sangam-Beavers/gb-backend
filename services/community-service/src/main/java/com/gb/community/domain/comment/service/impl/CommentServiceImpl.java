@@ -42,18 +42,16 @@ public class CommentServiceImpl implements CommentService {
     @Lazy
     private CommentService self;
 
-    // 10D community-1/2 — MemberClient(외부 HTTP) 호출은 트랜잭션/커넥션을 보유한 채 하지 않는다.
-    //   RealMemberClient(진짜 HTTP) 도입 완료로 이 분리는 더 이상 latent가 아니라 실효 안전장치다
-    //   (tx·행 락 보유 중 네트워크 대기 = 풀 고갈·락 직렬화). 읽기 경로는 NOT_SUPPORTED(단일 SELECT는
-    //   트랜잭션 불요 — repo 호출이 각자 짧은 readOnly tx), 쓰기 경로는 DB 본문을 self-proxy tx 메서드로 묶고
-    //   회원 조회는 커밋 후 응답 조립에서 한다.
+    // MemberClient(외부 HTTP) 호출은 트랜잭션/커넥션을 보유한 채 하지 않는다
+    // (tx·행 락 보유 중 네트워크 대기 = 풀 고갈·락 직렬화). 읽기 경로는 NOT_SUPPORTED(단일 SELECT는
+    // 트랜잭션 불요 — repo 호출이 각자 짧은 readOnly tx), 쓰기 경로는 DB 본문을 self-proxy tx 메서드로 묶고
+    // 회원 조회는 커밋 후 응답 조립에서 한다.
 
     @Override
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public CommentListResponse getComments(String postPublicId, String requesterUserPublicId,
                                            int page, int size) {
-        // 댓글 목록은 게시글에 종속된다 — 없거나 삭제된 게시글이면 404 COMMUNITY4001
-        // (단건 조회/좋아요/댓글 작성 등 게시글 종속 API와 동일 정책). 빈 목록과 구분한다.
+        // 댓글 목록은 게시글에 종속된다 — 없거나 삭제된 게시글이면 404 COMMUNITY4001(빈 목록과 구분).
         Post post = getActivePostOrThrow(postPublicId);
 
         // 최신순(최근 작성 순) = createdAt DESC. 동률은 id DESC를 tie-breaker로 둬 정렬을 결정적으로 만든다

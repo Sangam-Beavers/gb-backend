@@ -39,12 +39,10 @@ import org.springframework.web.client.RestClientResponseException;
  * {@link CommonErrorCode#INVALID_REQUEST}(400), 5xx·연결 실패(서버측 연동 장애)는
  * {@link CommonErrorCode#INTERNAL_SERVER_ERROR}(500)로 변환한다(CLAUDE §6).
  * 단 프로비저닝의 username(=email) unique 위반 4xx만은
- * {@link MemberErrorCode#EMAIL_ALREADY_EXISTS}(MEMBER4002, 409)로 매핑한다(11D member-idp-2).
+ * {@link MemberErrorCode#EMAIL_ALREADY_EXISTS}(MEMBER4002, 409)로 매핑한다.
  *
  * <p>주의(설정 의존): 반환하는 {@code uuid}가 로그인 토큰의 {@code sub}와 일치하려면 Authentik
  * Provider의 subject mode를 "Based on the User's UUID"로 맞춰야 한다. 기본값(hashed id)이면
- * 토큰 sub가 uuid와 달라 토큰→회원 매핑이 어긋난다. 로그인(Authorization Code flow) 후 검표원을
- * 통과한 토큰의 sub로 SecurityContext에서 회원을 찾을 때 이 값이 일치해야 한다.
  */
 @Slf4j
 @Component
@@ -56,9 +54,8 @@ public class RealIdpUserClient implements IdpUserClient {
     private final String adminToken;
 
     /**
-     * connect/read 타임아웃이 설정된 {@code idpRestClient} 빈을 주입받는다(IdpClientConfig — MEM1).
-     * 타임아웃 없는 raw 빌더를 직접 build()하면 IdP 지연 시 가입/탈퇴가 DB 락을 보유한 채 무한 대기해
-     * Hikari 풀이 고갈된다.
+     * connect/read 타임아웃이 설정된 {@code idpRestClient} 빈을 주입받는다.
+     * 타임아웃 없는 빌더를 직접 build()하면 IdP 지연 시 DB 락을 보유한 채 무한 대기할 수 있다.
      */
     public RealIdpUserClient(
             RestClient idpRestClient,
@@ -74,12 +71,8 @@ public class RealIdpUserClient implements IdpUserClient {
     @Override
     public String provisionUser(String email, String name, String rawPassword, String publicId) {
         // 1) 사용자 생성. username은 이메일로 통일(Authentik에서 username은 필수·고유).
-        // 본문은 ObjectMapper로 직접 JSON 문자열로 만들어 보낸다(컨버터 환경 차이로 Map이
-        // 빈 본문으로 직렬화되는 문제를 피하기 위해 — String은 항상 그대로 전송된다).
+        // 본문은 ObjectMapper로 직접 JSON 문자열로 만들어 보낸다(컨버터 환경 차이 회피).
         // attributes.public_id: 우리 회원 식별자를 IdP에 저장 → 토큰 custom claim(public_id)으로 노출.
-        // 이 단계 실패는 IdP에 아무것도 안 생긴 상태라 보상 없이 매핑만 해서 전파한다.
-        // (잔존 한계: 생성 "응답 유실"(read-timeout)은 생성 여부를 알 수 없어 보상하지 못한다 — 그 고아는
-        //  재가입 시 unique 위반 → MEMBER4002로 진단되며 수동 정리 대상. 11D member-idp-1 비고)
         CreateUserResponse created;
         try {
             created = restClient.post()
@@ -97,9 +90,7 @@ public class RealIdpUserClient implements IdpUserClient {
                     .body(CreateUserResponse.class);
         } catch (RestClientResponseException e) {
             // IdP 응답 에러 — username(=email) unique 위반이면 "이미 사용 중인 이메일"(MEMBER4002, 409)로
-            // 매핑해 진단 가능하게 한다(11D member-idp-2). IdP-first 가입에서 이 충돌은 ① 동시 같은 이메일
-            // 가입의 패자(IdP unique가 직렬화) 또는 ② 과거 부분실패로 IdP에만 남은 고아다.
-            // 그 외 4xx(입력 문제)→COMMON4001, 5xx→COMMON5000.
+            // 매핑해 진단 가능하게 한다. 그 외 4xx(입력 문제)→COMMON4001, 5xx→COMMON5000.
             log.error("Authentik 사용자 생성 실패: email={}, status={}, msg={}",
                     email, e.getStatusCode(), e.getMessage());
             if (e.getStatusCode().is4xxClientError() && isUniqueViolation(e)) {
@@ -118,10 +109,7 @@ public class RealIdpUserClient implements IdpUserClient {
         }
 
         // 2) 비밀번호 설정(별도 엔드포인트). 성공 시 204.
-        //    여기서 실패하면 ①에서 만든 "비밀번호 없는 사용자"가 IdP 고아로 남아 그 이메일이 영구
-        //    가입불가가 된다(11D member-idp-1). 방금 이 요청에서 만든 사용자(pk 확보)이므로 보상
-        //    DELETE로 회수한 뒤 원래 에러를 전파한다. 연결 실패(응답 유실)로 set_password가 실제로는
-        //    성공했더라도 가입 자체가 실패로 끝나므로 삭제가 안전하다(재가입으로 깨끗하게 재생성).
+        // 실패하면 "비밀번호 없는 사용자"가 IdP 고아로 남으므로 보상 DELETE로 회수한다.
         try {
             restClient.post()
                     .uri(apiBaseUri + "/core/users/" + created.pk() + "/set_password/")
@@ -146,11 +134,9 @@ public class RealIdpUserClient implements IdpUserClient {
     }
 
     /**
-     * 프로비저닝 보상 삭제(11D member-idp-1): 같은 요청에서 방금 생성한 사용자(pk)를 DELETE로 회수해
-     * "비밀번호 없는 고아 + 이메일 영구 가입불가"를 막는다. <b>이 요청이 만든 사용자만</b> 지우므로
-     * 기존/타 사용자 오삭제 위험이 없다. 비활성화가 아니라 DELETE인 이유: Authentik username unique는
-     * 비활성 사용자도 점유하므로 삭제해야 이메일이 풀린다. 실패해도 던지지 않는다(원인 에러 우선) —
-     * error 로그로 수동 정리를 유도한다.
+     * 프로비저닝 보상 삭제: 같은 요청에서 방금 생성한 사용자(pk)를 DELETE로 회수해
+     * "비밀번호 없는 고아"를 막는다. 비활성화가 아니라 DELETE인 이유: Authentik username unique는
+     * 비활성 사용자도 점유하므로 삭제해야 이메일이 풀린다. 실패해도 던지지 않는다(원인 에러 우선).
      */
     private void deleteCreatedUserBestEffort(Integer pk, String email) {
         try {
@@ -167,11 +153,9 @@ public class RealIdpUserClient implements IdpUserClient {
     }
 
     /**
-     * 가입 보상 삭제(11D member-idp-1·core-2 — IdP-first 가입의 로컬 실패 회수): 방금 프로비저닝한
-     * 사용자를 uuid로 찾아 DELETE로 회수한다. 로컬 INSERT가 실패(닉네임 race·DB 장애)했을 때 Service가
-     * 호출하며, 대상은 <b>이 가입 요청이 반환받은 uuid</b>뿐이다. {@code deactivateUser}와 동일한
-     * "정확 일치 1건" 방어를 적용하고(엉뚱한 사용자 오삭제 차단), 어떤 실패도 던지지 않는다(best-effort —
-     * 호출 측의 원인 에러(COMMON4091 등)가 우선). 실패 시 error 로그로 수동 정리를 유도한다.
+     * 가입 보상 삭제: 방금 프로비저닝한 사용자를 uuid로 찾아 DELETE로 회수한다.
+     * 로컬 INSERT가 실패했을 때 Service가 호출하며, "정확 일치 1건" 방어를 적용한다(오삭제 차단).
+     * 어떤 실패도 던지지 않는다(best-effort — 호출 측 에러 우선).
      */
     @Override
     public void deleteUserBestEffort(String authProviderId) {
@@ -220,7 +204,7 @@ public class RealIdpUserClient implements IdpUserClient {
     /**
      * Authentik 4xx 본문이 username/email unique 위반을 가리키는지 판별한다 — 중복 시 본문에 "unique" 문구가
      * 담긴다(예: {@code {"username":["This field must be unique."]}}). 외부 본문 의존이라 보수적 포함 검사만
-     * 하며, 미일치 시 기존 매핑(COMMON4001)으로 폴백돼 거짓양성 위험이 없다(11D member-idp-2).
+     * 하며, 미일치 시 기존 매핑(COMMON4001)으로 폴백된다.
      */
     private boolean isUniqueViolation(RestClientResponseException e) {
         String body = e.getResponseBodyAsString();
@@ -230,8 +214,7 @@ public class RealIdpUserClient implements IdpUserClient {
     @Override
     public void changePassword(String email, String newPassword) {
         try {
-            // 1) email(=username)으로 사용자 조회 → pk 확보. Authentik: GET /core/users/?username={username}
-            //    email은 URI 템플릿 변수로 넘겨 자동 인코딩한다(@, + 등 특수문자 안전 — 문자열 직접 결합 금지).
+            // email(=username)으로 사용자 조회 → pk 확보. Authentik: GET /core/users/?username={username}
             UserListResponse list = restClient.get()
                     .uri(apiBaseUri + "/core/users/?username={username}", email)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)
@@ -243,8 +226,7 @@ public class RealIdpUserClient implements IdpUserClient {
                 throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
             }
 
-            // ?username 필터가 부분일치/동명을 돌려줄 수 있으므로, username이 "정확히" 일치하는 1건만 사용한다.
-            // (엉뚱한 사용자의 비밀번호를 바꾸지 않도록 방어 — 0건 또는 2건 이상이면 거절)
+            // ?username 필터가 부분일치할 수 있으므로, username이 "정확히" 일치하는 1건만 사용한다.
             List<UserEntry> matched = list.results().stream()
                     .filter(u -> email.equals(u.username()) && u.pk() != null)
                     .toList();
@@ -254,7 +236,6 @@ public class RealIdpUserClient implements IdpUserClient {
                 throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
             }
 
-            // 2) 그 pk로 비밀번호 설정(204).
             restClient.post()
                     .uri(apiBaseUri + "/core/users/" + matched.get(0).pk() + "/set_password/")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)
@@ -276,20 +257,15 @@ public class RealIdpUserClient implements IdpUserClient {
     /**
      * 탈퇴 처리: 저장된 user uuid({@code authProviderId})로 사용자를 찾아 {@code is_active=false}로 비활성화한다.
      *
-     * <p>Authentik 상세/수정 API는 정수 {@code pk} 기준이라 두 번에 나눠 호출한다(API 구조상):
+     * <p>Authentik 상세/수정 API는 정수 {@code pk} 기준이라 두 번에 나눠 호출한다:
      * <ol>
      *   <li>{@code GET /core/users/?uuid={authProviderId}} — uuid로 사용자를 찾아 정수 {@code pk}를 얻는다.
-     *       UsersFilter의 {@code uuid = UUIDFilter}라 표준 하이픈 UUID를 그대로 받는다(하이픈 제거 불필요).
-     *       결과가 비면(이미 없는 사용자) 멱등 통과 — 로그만 남기고 정상 종료한다(팀 결정).</li>
+     *       결과가 비면(이미 없는 사용자) 멱등 통과한다.</li>
      *   <li>{@code PATCH /core/users/{pk}/} body {@code {"is_active": false}} — 비활성화(200).</li>
      * </ol>
      *
      * <p>IdP 응답 4xx는 {@link CommonErrorCode#INVALID_REQUEST}(400), 5xx·연결 실패는
-     * {@link CommonErrorCode#INTERNAL_SERVER_ERROR}(500)로 변환한다. 어느 쪽이든 BusinessException이라
-     * Service에서 이 예외가 올라오면 @Transactional이 롤백되어 로컬 soft delete도 반영되지 않는다(정합성, 지시서 §F).
-     *
-     * <p>TODO: 가입 시 {@code pk}도 함께 저장해 두면 탈퇴 때 조회 1회(GET)를 줄일 수 있으나
-     *          스키마 변경이라 본 작업 범위 밖이다(지시서 §D-2).
+     * {@link CommonErrorCode#INTERNAL_SERVER_ERROR}(500)으로 변환한다.
      */
     @Override
     public void deactivateUser(String authProviderId) {
@@ -300,7 +276,7 @@ public class RealIdpUserClient implements IdpUserClient {
             throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
         }
         try {
-            // 1) uuid → pk 해석. uuid 템플릿 변수는 RestClient가 안전하게 인코딩한다.
+            // uuid → pk 해석.
             UserListResponse list = restClient.get()
                     .uri(apiBaseUri + "/core/users/?uuid={uuid}", authProviderId)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken)

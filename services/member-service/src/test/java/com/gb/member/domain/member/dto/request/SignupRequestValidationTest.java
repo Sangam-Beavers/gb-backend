@@ -18,7 +18,7 @@ import org.springframework.test.util.ReflectionTestUtils;
  *
  * <p>@Size 상한이 members 컬럼 길이(database.md §members SSOT)와 같은 값으로 입력단에서 걸려,
  * 과길이 입력이 INSERT 단계 500(DataIntegrityViolation)이 아니라 COMMON4001(400) 경로로
- * 떨어지는지 고정한다(11D member-core-1). 위반 발생만 단언하면 충분 — @Valid → COMMON4001
+ * 떨어지는지 고정한다. 위반 발생만 단언하면 충분 — @Valid → COMMON4001
  * 변환은 GlobalExceptionHandler 공통 경로.
  */
 class SignupRequestValidationTest {

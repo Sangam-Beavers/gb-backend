@@ -40,12 +40,11 @@ public class PostServiceImpl implements PostService {
     @Lazy
     private PostService self;
 
-    // 10D community-2 — MemberClient(외부 HTTP) 호출은 트랜잭션/커넥션을 보유한 채 하지 않는다.
-    //   RealMemberClient(진짜 HTTP) 도입 완료로 이 분리는 더 이상 latent가 아니라 실효 안전장치다
-    //   (tx 안에서 호출하면 네트워크 대기 동안 커넥션 점유 → 풀 고갈).
-    //   읽기 경로는 NOT_SUPPORTED(단일 SELECT는 트랜잭션 불요 — repo 호출이 각자 짧은 readOnly tx),
-    //   쓰기 경로는 DB 본문을 self-proxy tx 메서드로 묶고 회원 조회는 커밋 후 응답 조립에서 한다.
-    //   응답 DTO는 스칼라 컬럼만 읽으므로(LAZY 연관 미탐색) tx 밖 접근이 안전하다.
+    // MemberClient(외부 HTTP) 호출은 트랜잭션/커넥션을 보유한 채 하지 않는다
+    // (tx 안에서 호출하면 네트워크 대기 동안 커넥션 점유 → 풀 고갈).
+    // 읽기 경로는 NOT_SUPPORTED(단일 SELECT는 트랜잭션 불요 — repo 호출이 각자 짧은 readOnly tx),
+    // 쓰기 경로는 DB 본문을 self-proxy tx 메서드로 묶고 회원 조회는 커밋 후 응답 조립에서 한다.
+    // 응답 DTO는 스칼라 컬럼만 읽으므로(LAZY 연관 미탐색) tx 밖 접근이 안전하다.
 
     @Override
     @Transactional(propagation = Propagation.NOT_SUPPORTED)

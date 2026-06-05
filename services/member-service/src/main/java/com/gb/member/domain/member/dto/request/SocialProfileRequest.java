@@ -19,7 +19,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class SocialProfileRequest {
 
-    // @Size 상한 = members 컬럼 길이(database.md §members SSOT, 11D member-core-1) — SignupRequest와 동일.
+    // @Size 상한 = members 컬럼 길이(database.md §members SSOT) — SignupRequest와 동일.
     @Schema(description = "닉네임 (앱 전체에서 중복 불가)", example = "gildong", maxLength = 50)
     @NotBlank(message = "닉네임은 필수입니다")
     @Size(max = 50, message = "닉네임은 50자 이내여야 합니다")

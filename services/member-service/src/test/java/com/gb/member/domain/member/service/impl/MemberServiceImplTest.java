@@ -89,7 +89,7 @@ class MemberServiceImplTest {
 
         when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
-        // MEM-02 — 로컬 row를 IdP 호출 전에 먼저 선점(saveAndFlush). publicId는 Service가 채워 넘기므로 그대로 돌려준다.
+        // 로컬 row를 IdP 호출 전에 먼저 선점(saveAndFlush). publicId는 Service가 채워 넘기므로 그대로 돌려준다.
         when(memberRepository.saveAndFlush(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
         // IdP가 사용자를 만들고 식별자(sub=uuid)를 돌려준다. publicId는 Service가 만들어 4번째 인자로 넘긴다.
         when(idpUserClient.provisionUser(eq("new@example.com"), eq("홍길동"), eq("P@ssw0rd!"), anyString()))
@@ -174,7 +174,7 @@ class MemberServiceImplTest {
     }
 
     @Test
-    @DisplayName("WU-F8/IdP-first: 동시 가입 race(saveAndFlush UNIQUE 위반) → COMMON4091 + 방금 만든 IdP 사용자 보상 회수")
+    @DisplayName("동시 가입 race(saveAndFlush UNIQUE 위반) → COMMON4091 + 방금 만든 IdP 사용자 보상 회수")
     void signup_동시가입race_COMMON4091_보상회수() {
         SignupRequest request = new SignupRequest();
         ReflectionTestUtils.setField(request, "email", "race@example.com");
@@ -487,7 +487,7 @@ class MemberServiceImplTest {
     }
 
     @Test
-    @DisplayName("11D member-idp-3: 혼합 케이스 입력이어도 토큰·메일은 회원의 저장 이메일(가입 표기 = IdP username)로 흐른다")
+    @DisplayName("혼합 케이스 입력이어도 토큰·메일은 회원의 저장 이메일(가입 표기 = IdP username)로 흐른다")
     void sendPasswordResetEmail_혼합케이스_저장이메일사용() {
         // 가입 표기는 "user@example.com"인데 사용자가 "User@Example.COM"으로 요청한 상황.
         // (MySQL 기본 collation은 대소문자 무시라 findByEmail이 회원을 찾는다 — mock으로 본뜸.)

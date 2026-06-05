@@ -56,7 +56,7 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    @DisplayName("매핑되지 않은 경로(NoHandlerFound) → 404 COMMON4041(과거 500 COMMON5000 오인 제거)")
+    @DisplayName("매핑되지 않은 경로(NoHandlerFound) → 404 COMMON4041")
     void noHandlerFound_404_COMMON4041() throws Exception {
         mvc.perform(get("/no-such-path"))
                 .andExpect(status().isNotFound())

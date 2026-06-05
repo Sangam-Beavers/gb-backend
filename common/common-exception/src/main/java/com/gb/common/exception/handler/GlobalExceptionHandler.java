@@ -81,11 +81,10 @@ public class GlobalExceptionHandler {
     /**
      * {@code @ModelAttribute}(쿼리 파라미터 객체) 바인딩·검증 실패({@link BindException}) → COMMON4001.
      *
-     * <p>현재 컨트롤러는 전부 {@code @RequestBody @Valid}(→ {@link MethodArgumentNotValidException} —
-     * BindException의 하위 타입이라 더 구체적인 위 핸들러가 계속 우선 적용됨)와 {@code @Validated} +
-     * 단순 {@code @RequestParam}(→ {@link ConstraintViolationException})만 쓰므로 이 분기의 라이브 트리거는
-     * 없다. 향후 검색/필터 폼을 {@code @ModelAttribute} 객체로 받는 컨트롤러가 생기는 순간 그 바인딩 실패가
-     * catch-all 500(거짓 서버 오류)으로 떨어지는 잠복 회귀 벡터라 선제 차단한다(11D common-modules-1).
+     * <p>{@code @RequestBody @Valid}(→ {@link MethodArgumentNotValidException} — BindException의 하위 타입이라
+     * 더 구체적인 위 핸들러가 계속 우선)와 {@code @Validated} + {@code @RequestParam}(→ {@link ConstraintViolationException})
+     * 외에 {@code @ModelAttribute}를 사용하는 경우 바인딩 실패가 이 핸들러로 매핑되도록 선제 차단한다
+     * (미처리 시 catch-all 500으로 떨어짐).
      */
     @ExceptionHandler(BindException.class)
     public ResponseEntity<ErrorResponse> handleBindException(BindException e) {
@@ -102,10 +101,9 @@ public class GlobalExceptionHandler {
      *
      * <p>Spring 6.1(Boot 3.2)+의 내장 메서드 검증은 컨트롤러 클래스에 {@code @Validated}가 <b>없어도</b>
      * 파라미터 제약(@NotBlank·@Max 등)을 검증하며, 위반 시 {@link ConstraintViolationException}이 아니라
-     * 이 예외를 던진다. 현재 전 컨트롤러가 {@code @Validated}를 보유해 ConstraintViolation 경로로 빠지므로
-     * 라이브 트리거는 없으나, {@code @Validated} 누락 컨트롤러가 추가되는 순간 파라미터 위반이 catch-all
-     * 500으로 떨어지는 잠복 회귀 벡터라 선제 차단한다(11D common-modules-1). 첫 위반의 기본 메시지를
-     * 노출한다(타 검증 핸들러와 동일 정책).
+     * 이 예외를 던진다. 컨트롤러에 {@code @Validated} 누락 시 파라미터 위반이 이 핸들러로 매핑되도록
+     * 선제 차단한다(미처리 시 catch-all 500으로 떨어짐). 첫 위반의 기본 메시지를 노출한다
+     * (타 검증 핸들러와 동일 정책).
      */
     @ExceptionHandler(HandlerMethodValidationException.class)
     public ResponseEntity<ErrorResponse> handleHandlerMethodValidation(HandlerMethodValidationException e) {
@@ -157,14 +155,12 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 매핑되지 않은 경로 → 404 COMMON4041(기존 코드 재사용, 신설 없음 — 10D common-modules-1).
+     * 매핑되지 않은 경로 → 404 COMMON4041.
      *
      * <p>{@link NoResourceFoundException}은 Boot 3.x 기본 경로(정적 리소스 폴백 매핑)에서, {@link
      * NoHandlerFoundException}은 {@code throw-exception-if-no-handler-found} 활성 구성에서 발생한다 — 어느
-     * 구성이든 잡히도록 둘 다 묶는다. 이 분기가 없으면 catch-all로 떨어져 "없는 경로 호출"(클라이언트 잘못)이
-     * 500 COMMON5000(서버 오류·거짓 알람)으로 보였다. 요청 경로는 내부 구조 노출 우려로 응답엔 싣지 않고
-     * 로그로만 남긴다. (부수 효과: /swagger-ui 등 permitAll 하위의 미존재 정적 리소스도 이제 공통 envelope
-     * 404로 응답된다 — Swagger UI 정상 동작에는 영향 없음.)
+     * 구성이든 잡히도록 둘 다 묶는다. 이 분기가 없으면 catch-all로 떨어져 클라이언트 오류가 500 COMMON5000으로
+     * 보인다. 요청 경로는 내부 구조 노출 우려로 응답엔 싣지 않고 로그로만 남긴다.
      */
     @ExceptionHandler({NoHandlerFoundException.class, NoResourceFoundException.class})
     public ResponseEntity<ErrorResponse> handleNoHandlerFound(Exception e) {

@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * {@link ExchangeProperties} 단위 테스트(ChargePropertiesTest와 동일 패턴). 설정 미지정(=null 바인딩) 시
- * 기존 동작(수수료율 0.5%)을 보장하는지와, 명시한 값이 그대로 보존되는지 확인한다(10D wallet-exchange-5).
+ * 기존 동작(수수료율 0.5%)을 보장하는지와, 명시한 값이 그대로 보존되는지 확인한다.
  */
 class ExchangePropertiesTest {
 

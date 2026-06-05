@@ -130,7 +130,7 @@ class PostControllerTest {
     }
 
     @Test
-    @DisplayName("11D community-1 — POST 400: content 10,001자(@Size 초과) → COMMON4001, service 미호출(TEXT 컬럼 INSERT 전 차단)")
+    @DisplayName("POST 400: content 10,001자(@Size 초과) → COMMON4001, service 미호출(TEXT 컬럼 INSERT 전 차단)")
     void create_content_상한초과() throws Exception {
         mockMvc.perform(post("/api/v1/community/posts")
                         .with(authedJwt())
@@ -146,7 +146,7 @@ class PostControllerTest {
     }
 
     @Test
-    @DisplayName("11D community-1 — PATCH 400: content 10,001자(@Size 초과) → COMMON4001, service 미호출(작성과 동일 상한)")
+    @DisplayName("PATCH 400: content 10,001자(@Size 초과) → COMMON4001, service 미호출(작성과 동일 상한)")
     void update_content_상한초과() throws Exception {
         mockMvc.perform(patch("/api/v1/community/posts/{id}", PID)
                         .with(authedJwt())

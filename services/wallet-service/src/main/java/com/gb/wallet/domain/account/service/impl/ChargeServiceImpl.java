@@ -126,7 +126,7 @@ public class ChargeServiceImpl implements ChargeService {
      *       <br>⚠️ 재시도는 doCharge "전체" 재실행이라 (6) {@code bankClient.withdraw}도 같은 멱등키로
      *       재호출된다(직전 시도의 withdraw가 성공했어도 — 락 경합은 그 뒤 (7) FOR UPDATE에서 터지므로).
      *       이중출금은 은행 측 키 dedup(같은 키 → 첫 응답 재반환, remittance api-spec §13 계약)이 막으며
-     *       로컬 측 선차감 가드는 두지 않는다(11D charge-2 — 도입 시 인터페이스/정합성 모델 변경이라
+     *       로컬 측 선차감 가드는 두지 않는다 — 도입 시 인터페이스/정합성 모델 변경이라
      *       WTX-03 saga 재설계와 함께 검토). 은행 구현체 교체 시 이 dedup 계약 유지가 전제 조건.</li>
      * </ul>
      */
