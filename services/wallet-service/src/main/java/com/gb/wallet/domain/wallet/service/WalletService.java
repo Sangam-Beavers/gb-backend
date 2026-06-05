@@ -3,8 +3,22 @@ package com.gb.wallet.domain.wallet.service;
 import com.gb.wallet.domain.wallet.dto.response.ExchangeRateWidgetResponse;
 import com.gb.wallet.domain.wallet.dto.response.WalletBalanceResponse;
 import com.gb.wallet.domain.wallet.dto.response.WalletMeResponse;
+import com.gb.wallet.domain.wallet.dto.response.WalletResponse;
 
 public interface WalletService {
+
+    /**
+     * 사용자당 1개의 전자지갑을 보장한다(멱등). 이미 존재하면 그대로 반환, 없으면 신규 생성한다.
+     *
+     * <p>신분증 인증(이슈 #152) APPROVED 시점에 member-service가 호출한다. 신규 생성 시
+     * {@code wallets} 1행 + {@code wallet_balances(KRW, 0)} 1행을 같은 트랜잭션에서 작성한다.
+     * 동시 호출로 인한 UNIQUE 위반은 catch 후 재조회로 흡수해 멱등성을 지킨다.
+     *
+     * <p>사용자 식별은 MSA 경계를 넘어가는 {@code user_public_id}(UUID)다(CLAUDE.md §7).
+     *
+     * @return 생성/조회된 지갑의 단건 응답.
+     */
+    WalletResponse createOrGetWallet(String userPublicId);
 
     /** 요청 회원(user_public_id)의 전자지갑 통화별 잔액을 조회한다. */
     WalletBalanceResponse getMyBalances(String userPublicId);

@@ -21,7 +21,9 @@ import com.gb.member.domain.verification.entity.IdentityDocumentType;
 import com.gb.member.domain.verification.entity.UserVerification;
 import com.gb.member.domain.verification.entity.VerificationStatus;
 import com.gb.member.domain.verification.repository.UserVerificationRepository;
+import com.gb.member.global.client.WalletClient;
 import com.gb.member.global.exception.code.MemberErrorCode;
+import org.mockito.Mockito;
 import java.time.LocalDateTime;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
@@ -45,6 +47,8 @@ class VerificationServiceImplTest {
 
     @Mock private MemberRepository memberRepository;
     @Mock private UserVerificationRepository verificationRepository;
+    /** 이슈 #152 — APPROVED 시 자동 지갑 개설 위임. fail-open 동작 검증을 위해 mock 주입. */
+    @Mock private WalletClient walletClient;
 
     @InjectMocks private VerificationServiceImpl verificationService;
 
@@ -124,7 +128,7 @@ class VerificationServiceImplTest {
     // ───────────────────────── 인증 요청 ─────────────────────────
 
     @Test
-    @DisplayName("외국인등록번호 형식이 맞으면 즉시 승인하고 인증 배지를 부여한다")
+    @DisplayName("외국인등록번호 형식이 맞으면 즉시 승인하고 인증 배지를 부여한다 + 지갑 자동 개설 위임")
     void submit_외국인등록증_성공_즉시승인_배지부여() {
         Member member = activeMember();
         when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
@@ -143,6 +147,51 @@ class VerificationServiceImplTest {
         assertThat(saved.getValue().getStatus()).isEqualTo(VerificationStatus.APPROVED);
         assertThat(saved.getValue().getReviewedAt()).isNotNull();
         assertThat(saved.getValue().getDocumentNumber()).isEqualTo(VALID_ARC);
+
+        // 이슈 #152 — APPROVED 시 wallet-service에 지갑 자동 개설 위임 (멱등 호출).
+        verify(walletClient).createWalletFor(PUBLIC_ID);
+    }
+
+    @Test
+    @DisplayName("s3_key가 null이어도 형식 검증 통과 시 즉시 승인된다(OCR 미도입 데모 정책)")
+    void submit_s3key_null_허용_성공() {
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(false);
+
+        // s3Key를 null로 전송 — VerificationRequest의 @NotBlank가 제거됐으므로 통과해야 한다(#152).
+        VerificationRequest request = request("ALIEN_REGISTRATION", VALID_ARC, null);
+
+        VerificationSubmitResponse response = verificationService.submitVerification(PUBLIC_ID, request);
+
+        assertThat(response.getStatus()).isEqualTo("APPROVED");
+        assertThat(member.isVerified()).isTrue();
+
+        ArgumentCaptor<UserVerification> saved = ArgumentCaptor.forClass(UserVerification.class);
+        verify(verificationRepository).save(saved.capture());
+        assertThat(saved.getValue().getS3Key()).isNull();   // 그대로 null 저장
+
+        verify(walletClient).createWalletFor(PUBLIC_ID);
+    }
+
+    @Test
+    @DisplayName("지갑 자동 개설 호출이 실패해도 인증은 통과한다(fail-open) — 이슈 #152")
+    void submit_지갑개설_호출실패_failOpen() {
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(false);
+        // wallet-service 호출이 예외를 던지더라도 인증은 정상 commit 돼야 한다.
+        Mockito.doThrow(new RuntimeException("wallet-service unreachable"))
+                .when(walletClient).createWalletFor(PUBLIC_ID);
+
+        VerificationRequest request = request("ALIEN_REGISTRATION", VALID_ARC, "verifications/x/front.jpg");
+
+        VerificationSubmitResponse response = verificationService.submitVerification(PUBLIC_ID, request);
+
+        assertThat(response.getStatus()).isEqualTo("APPROVED");
+        assertThat(member.isVerified()).isTrue();
+        verify(verificationRepository).save(any());     // 인증은 저장됨
+        verify(walletClient).createWalletFor(PUBLIC_ID);   // 호출 자체는 시도됐음
     }
 
     @Test
@@ -162,16 +211,74 @@ class VerificationServiceImplTest {
 
         verify(verificationRepository, never()).save(any());
         assertThat(member.isVerified()).isFalse();
+        verifyNoInteractions(walletClient);   // APPROVED 실패 → 지갑 생성 시도 없음(#152)
     }
 
     @Test
-    @DisplayName("지원하지 않는 신분증 유형이면 COMMON4001")
+    @DisplayName("지원하지 않는 신분증 유형(여권 등 제거된 코드 포함)이면 COMMON4001")
     void submit_잘못된유형_COMMON4001() {
         Member member = activeMember();
         when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
         when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(false);
 
-        VerificationRequest request = request("DRIVER_LICENSE", VALID_ARC, "verifications/x/front.jpg");
+        // PASSPORT/NATIONAL_ID는 이슈 #108에서 제거됨 — 더 이상 enum에 없으므로 거절돼야 한다.
+        VerificationRequest request = request("PASSPORT", "M12345678", "verifications/x/front.jpg");
+
+        assertThatThrownBy(() -> verificationService.submitVerification(PUBLIC_ID, request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+
+        verify(verificationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("베트남 CCCD 12자리 통과 시 즉시 승인 + 지갑 자동 개설(이슈 #108)")
+    void submit_베트남CCCD_성공() {
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(false);
+
+        VerificationRequest request = request("NATIONAL_ID_VN", "079199012345", null);
+
+        VerificationSubmitResponse response = verificationService.submitVerification(PUBLIC_ID, request);
+
+        assertThat(response.getStatus()).isEqualTo("APPROVED");
+        assertThat(member.isVerified()).isTrue();
+        verify(walletClient).createWalletFor(PUBLIC_ID);
+
+        ArgumentCaptor<UserVerification> saved = ArgumentCaptor.forClass(UserVerification.class);
+        verify(verificationRepository).save(saved.capture());
+        assertThat(saved.getValue().getDocumentNumber()).isEqualTo("079199012345");
+    }
+
+    @Test
+    @DisplayName("필리핀 PCN은 소문자로 입력해도 대문자로 정규화돼 저장된다(이슈 #108)")
+    void submit_필리핀PCN_대문자정규화() {
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(false);
+
+        // 16자리 영숫자, 일부 소문자 포함 — 정규화 후 매칭 + 저장도 대문자.
+        VerificationRequest request = request("NATIONAL_ID_PH", "a1b2c3d4e5f6g7h8", null);
+
+        VerificationSubmitResponse response = verificationService.submitVerification(PUBLIC_ID, request);
+
+        assertThat(response.getStatus()).isEqualTo("APPROVED");
+
+        ArgumentCaptor<UserVerification> saved = ArgumentCaptor.forClass(UserVerification.class);
+        verify(verificationRepository).save(saved.capture());
+        assertThat(saved.getValue().getDocumentNumber()).isEqualTo("A1B2C3D4E5F6G7H8");
+    }
+
+    @Test
+    @DisplayName("미국 SSN 영역코드 666 시작은 형식 위반(엄격 정규식) → COMMON4001")
+    void submit_미국SSN_금지영역코드_COMMON4001() {
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(false);
+
+        VerificationRequest request = request("NATIONAL_ID_US", "666-12-3456", null);
 
         assertThatThrownBy(() -> verificationService.submitVerification(PUBLIC_ID, request))
                 .isInstanceOf(BusinessException.class)
@@ -197,6 +304,7 @@ class VerificationServiceImplTest {
 
         verify(verificationRepository, never()).save(any());
         assertThat(member.isVerified()).isFalse();
+        verifyNoInteractions(walletClient);   // 중복 거절 → 지갑 생성 시도 없음(#152)
     }
 
     @Test

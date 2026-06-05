@@ -2,9 +2,11 @@ package com.gb.wallet.domain.wallet.controller;
 
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
+import com.gb.common.response.SuccessStatus;
 import com.gb.wallet.domain.wallet.dto.response.ExchangeRateWidgetResponse;
 import com.gb.wallet.domain.wallet.dto.response.WalletBalanceResponse;
 import com.gb.wallet.domain.wallet.dto.response.WalletMeResponse;
+import com.gb.wallet.domain.wallet.dto.response.WalletResponse;
 import com.gb.wallet.domain.wallet.service.WalletService;
 import com.gb.wallet.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
@@ -15,9 +17,12 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Wallet", description = "전자지갑/잔액 API")
@@ -39,6 +44,39 @@ public class WalletController {
             "{\"success\":false,\"code\":\"TRANSFER4002\",\"message\":\"지원하지 않는 통화입니다.\"}";
 
     private final WalletService walletService;
+
+    /**
+     * 전자지갑 생성(멱등). 🔒 JWT 필요. 신분증 인증(이슈 #152) APPROVED 시점에 member-service가 호출한다.
+     * 사용자당 1개 보장 — 이미 존재하면 기존 지갑을 그대로 반환한다(200), 신규 생성 시 201.
+     */
+    @Operation(
+            summary = "전자지갑 생성(멱등)",
+            description = "인증된 사용자(JWT public_id claim)의 전자지갑을 생성한다. 사용자당 1개로 멱등 — "
+                    + "이미 존재하면 기존 지갑을 반환한다. 신규 생성 시 wallet_balances(KRW, 0) 1행을 함께 작성한다. "
+                    + "신분증 인증(이슈 #152) APPROVED 시 member-service가 자동 호출한다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "신규 생성 성공. data 에 WalletResponse 가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000)))
+    })
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public ApiResponse<WalletResponse> createWallet(
+            @CurrentUserPublicId String userPublicId) {
+        return ApiResponse.success(SuccessStatus.CREATED, walletService.createOrGetWallet(userPublicId));
+    }
 
     /** 전자지갑 잔액 조회. 🔒 JWT 필요. */
     @Operation(

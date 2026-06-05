@@ -60,7 +60,12 @@ public class UserVerification extends BaseEntity {
     @Column(name = "document_number", length = 255, nullable = false)
     private String documentNumber;
 
-    @Column(name = "s3_key", length = 500, nullable = false)
+    /**
+     * 신분증 이미지 S3 key. <b>현재 선택(nullable).</b> OCR/이미지 업로드 도입 전 데모 단계에서는
+     * 사용자가 번호만 직접 입력해 인증하므로 null 허용한다(이슈 #152). 추후 이미지 업로드 도입 시
+     * NOT NULL로 복구 + 별도 마이그레이션.
+     */
+    @Column(name = "s3_key", length = 500)
     private String s3Key;
 
     @Enumerated(EnumType.STRING)
