@@ -82,6 +82,14 @@ class CommentControllerTest {
         return jwt().jwt(j -> j.claim("public_id", USER));
     }
 
+    /**
+     * 토큰은 유효하나 {@code public_id} claim이 없는 JWT(=IdP Property Mapping 누락 시나리오).
+     * CurrentUserPublicIdArgumentResolver가 AUTH4011로 fail-fast 하는 경로 검증용(PostControllerTest와 동일).
+     */
+    private static RequestPostProcessor jwtWithoutPublicId() {
+        return jwt().jwt(j -> j.claim("sub", "no-mapping"));
+    }
+
     @Test
     @DisplayName("GET 200: 댓글 목록 → comments 배열 + 페이지 메타(snake_case), is_author가 정확히 'is_author' 키로 직렬화")
     void getComments_정상() throws Exception {
@@ -158,6 +166,17 @@ class CommentControllerTest {
         verifyNoInteractions(commentService);
     }
 
+    @Test
+    @DisplayName("GET 401: 토큰은 유효하나 public_id claim 누락 → AUTH4011 — 댓글 목록도 is_author 계산에 본인 식별을 쓰므로 resolver fail-fast")
+    void getComments_publicIdClaim_누락_401() throws Exception {
+        mockMvc.perform(get("/api/v1/community/posts/{id}/comments", PID)
+                        .with(jwtWithoutPublicId()))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verifyNoInteractions(commentService);
+    }
+
     // ----- POST /posts/{id}/comments (댓글 작성, CC-T1) -----
 
     @Test
@@ -178,6 +197,7 @@ class CommentControllerTest {
                 .andExpect(jsonPath("$.data.content").value("댓글 내용"))
                 .andExpect(jsonPath("$.data.author_nickname").value("Minh"))
                 .andExpect(jsonPath("$.data.author_is_verified").value(true))
+                .andExpect(jsonPath("$.data.is_author").value(true)) // 작성 응답은 항상 true(명세 §6)
                 .andExpect(jsonPath("$.data.created_at").value("2026-05-26T04:15:30Z"));
 
         // @RequestBody 바인딩 검증: 보낸 content가 그대로 서비스로 전달됐는지 캡처해 확인

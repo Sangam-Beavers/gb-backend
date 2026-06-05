@@ -329,7 +329,7 @@ class PostServiceTest {
     }
 
     @Test
-    @DisplayName("목록 정상: 서로 다른 작성자별로 member 조회 후 항목 매핑")
+    @DisplayName("목록 정상: 서로 다른 작성자별로 member 조회 후 항목 매핑, is_author는 항목별 계산(본인 true/타인 false)")
     void getPosts_정상_매핑() {
         Post p1 = Post.of(USER, PostCategory.JOB, "t1", "c1");
         Post p2 = Post.of(OTHER, PostCategory.VISA, "t2", "c2");
@@ -342,6 +342,8 @@ class PostServiceTest {
 
         assertThat(res.getPosts()).hasSize(2);
         assertThat(res.getTotalElements()).isEqualTo(2);
+        assertThat(res.getPosts().get(0).getIsAuthor()).isTrue();  // 본인(USER) 글
+        assertThat(res.getPosts().get(1).getIsAuthor()).isFalse(); // 타인(OTHER) 글
         // 서로 다른 작성자 2명을 배치 1회(distinct 작성자 id 리스트)로 조회한다.
         verify(memberClient).getMembers(List.of(USER, OTHER));
     }
