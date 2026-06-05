@@ -2,6 +2,7 @@ package com.gb.member.domain.verification.dto.request;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -29,8 +30,12 @@ public class VerificationRequest {
     @NotBlank(message = "문서 번호는 필수입니다")
     private String documentNumber;
 
-    @Schema(description = "사전 업로드된 신분증 이미지의 S3 key",
-            example = "verifications/a1b2c3d4/front.jpg")
+    // s3_key는 형식·enum 검증 없이 평문 그대로 컬럼(VARCHAR(500))에 저장되는 유일한 길이-경계 필드라
+    // @Size로 컬럼 한도를 입력단에서 막는다(초과 시 COMMON5000(500)이 아닌 COMMON4001(400) — 10D member-verification-5).
+    // documentNumber는 암호화로 길이가 늘어나(§15-3) 단순 @Size가 부정확하므로 손대지 않는다.
+    @Schema(description = "사전 업로드된 신분증 이미지의 S3 key(최대 500자)",
+            example = "verifications/a1b2c3d4/front.jpg", maxLength = 500)
     @NotBlank(message = "s3_key는 필수입니다")
+    @Size(max = 500, message = "s3_key는 500자를 넘을 수 없습니다")
     private String s3Key;
 }

@@ -31,6 +31,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /**
@@ -138,7 +139,7 @@ class VerificationServiceImplTest {
         assertThat(member.isVerified()).isTrue();   // 배지 부여(dirty checking 대상)
 
         ArgumentCaptor<UserVerification> saved = ArgumentCaptor.forClass(UserVerification.class);
-        verify(verificationRepository).save(saved.capture());
+        verify(verificationRepository).saveAndFlush(saved.capture());
         assertThat(saved.getValue().getDocumentType()).isEqualTo(IdentityDocumentType.ALIEN_REGISTRATION);
         assertThat(saved.getValue().getStatus()).isEqualTo(VerificationStatus.APPROVED);
         assertThat(saved.getValue().getReviewedAt()).isNotNull();
@@ -160,7 +161,7 @@ class VerificationServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
 
-        verify(verificationRepository, never()).save(any());
+        verify(verificationRepository, never()).saveAndFlush(any());
         assertThat(member.isVerified()).isFalse();
     }
 
@@ -178,7 +179,7 @@ class VerificationServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
 
-        verify(verificationRepository, never()).save(any());
+        verify(verificationRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -195,8 +196,30 @@ class VerificationServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
 
-        verify(verificationRepository, never()).save(any());
+        verify(verificationRepository, never()).saveAndFlush(any());
         assertThat(member.isVerified()).isFalse();
+    }
+
+    @Test
+    @DisplayName("동시 제출 race: existsBy 통과 후 saveAndFlush가 무결성 위반을 던지면 COMMON4091, 배지 미부여 (10D member-verification-1)")
+    void submit_동시요청_race_saveAndFlush_무결성위반_COMMON4091() {
+        // 자기 동시요청 둘이 모두 existsBy=false를 통과한 race(TOCTOU). 활성 인증 부분 UNIQUE(별도 DDL) 위반이
+        // saveAndFlush에서 터지면 가입(member-5)과 동일하게 generic COMMON4091로 변환되고, markVerified()에
+        // 도달하지 않아 배지 중복 부여도 차단된다(MemberServiceImplTest WU-F8과 동일 패턴).
+        Member member = activeMember();
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull(PUBLIC_ID)).thenReturn(Optional.of(member));
+        when(verificationRepository.existsByMemberAndStatusIn(eq(member), anyCollection())).thenReturn(false);
+        when(verificationRepository.saveAndFlush(any(UserVerification.class)))
+                .thenThrow(new DataIntegrityViolationException("uk_user_verifications_active"));
+
+        VerificationRequest request = request("ALIEN_REGISTRATION", VALID_ARC, "verifications/x/front.jpg");
+
+        assertThatThrownBy(() -> verificationService.submitVerification(PUBLIC_ID, request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
+
+        assertThat(member.isVerified()).as("race 패자는 배지를 받지 않는다").isFalse();
     }
 
     @Test

@@ -45,7 +45,8 @@ public class MemberController {
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409",
-                    description = "MEMBER4002 - 이메일 중복 / MEMBER4003 - 닉네임 중복.",
+                    description = "MEMBER4002 - 이메일 중복 / MEMBER4003 - 닉네임 중복 / "
+                            + "COMMON4091 - 동시 가입 race로 이미 존재(existsBy 통과 후 UNIQUE 백스톱, member-5).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",

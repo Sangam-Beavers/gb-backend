@@ -15,6 +15,7 @@ import com.gb.member.domain.verification.service.VerificationService;
 import com.gb.member.global.exception.code.MemberErrorCode;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -69,7 +70,17 @@ public class VerificationServiceImpl implements VerificationService {
         //    document_number는 엔티티의 EncryptedStringConverter가 영속 시점에 AES-256-GCM으로 자동 암호화한다.
         UserVerification verification = UserVerification.approved(
                 member, documentType, request.getDocumentNumber(), request.getS3Key());
-        verificationRepository.save(verification);
+        // 10D member-verification-1 — 위 existsBy(1)를 동시에 통과한 자기 동시요청 race 백스톱. 가입(MemberServiceImpl,
+        //   member-5)과 동일하게 saveAndFlush로 INSERT를 이 지점에 확정하고, 무결성 위반은 generic "이미 존재"
+        //   (COMMON4091)로 통일한다. 예외 시 member.markVerified()에 도달하지 않아 배지 중복 부여도 차단된다.
+        //   단순 user_id UNIQUE는 'REJECTED 후 재신청 허용'(ACTIVE_STATUSES)과 충돌해 불가 — DB 백스톱은 활성
+        //   인증(PENDING/APPROVED)만 묶는 부분 UNIQUE(생성컬럼, bank_accounts WACC-06 선례)가 필요하며 별도
+        //   이슈(수동 DDL 동반)로 둔다. DDL 적용 전엔 이 catch가 발동할 제약이 없지만 코드는 무해·선행 가능.
+        try {
+            verificationRepository.saveAndFlush(verification);
+        } catch (DataIntegrityViolationException race) {
+            throw new BusinessException(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
+        }
         member.markVerified();
 
         return VerificationSubmitResponse.from(verification);
