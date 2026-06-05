@@ -26,11 +26,14 @@ import org.springframework.web.client.RestClientResponseException;
  * <p>응답 4xx/5xx, 연결 실패는 모두 {@link CommonErrorCode#INTERNAL_SERVER_ERROR}로 래핑해 던진다.
  * 호출 측(VerificationServiceImpl)은 이 예외를 try/catch로 흡수해 fail-open으로 commit한다(이슈 #152).
  *
- * <p>활성 프로파일이 {@code dev}/{@code test}가 아닐 때만 빈으로 등록된다(stage·prod에서 동작).
+ * <p>활성 프로파일이 {@code test}가 아닐 때 빈으로 등록된다(dev·stage·prod에서 동작 — #155 Mock→Real
+ * 정렬로 dev 포함. dev base URL은 {@code application-dev.yml}의 {@code wallet.api.base-url}
+ * = {@code ${WALLET_API_BASE_URL:http://localhost:8084}}). 호출 실패는 fail-open(인증 흐름 보존)이라
+ * 로컬에서 wallet-service가 떠 있지 않아도 인증 자체는 깨지지 않는다.
  */
 @Slf4j
 @Component
-@Profile("!dev & !test")
+@Profile("!test")
 public class RealWalletClient implements WalletClient {
 
     private final RestClient restClient;
