@@ -4,7 +4,10 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,7 +24,8 @@ import org.springframework.web.client.RestClientResponseException;
 /**
  * 실제 member-service의 표시정보 조회 API(명세 auth §13)를 호출하는 {@link MemberClient} 구현체.
  * <ul>
- *   <li>{@link #getMember} → {@code GET /api/v1/members/display-info?public_ids={id}} (§13-1, 단건도 배치 API 경유)</li>
+ *   <li>{@link #getMembers}/{@link #getMember} → {@code GET /api/v1/members/display-info?public_ids=...}
+ *       (§13-1, 단건도 배치 API 경유 — HTTP 로직 1벌)</li>
  *   <li>{@link #findByEmail} → {@code GET /api/v1/members/by-email?email={email}} (§13-2)</li>
  * </ul>
  *
@@ -31,8 +35,9 @@ import org.springframework.web.client.RestClientResponseException;
  *
  * <p><b>실패 정책이 메서드별로 다르다(인터페이스 계약·CLAUDE §7):</b>
  * <ul>
- *   <li>{@link #getMember} = <b>fail-open(표시용)</b> — 최근 송금 수신자 표시·확인증 본명 채움 용도라,
- *       미존재·탈퇴는 물론 HTTP 장애·5xx·토큰 부재에도 예외 없이 fallback("Unknown")으로 degrade한다(WARN).
+ *   <li>{@link #getMember}/{@link #getMembers} = <b>fail-open(표시용)</b> — 최근 송금 수신자 표시·확인증
+ *       본명 채움 용도라, 미존재·탈퇴는 물론 HTTP 장애·5xx·토큰 부재에도 예외 없이 fallback("Unknown")으로
+ *       degrade한다(WARN). 배치는 요청한 모든 id를 키로 선채움 후 성공분만 덮어써 부분 실패도 폴백으로 수렴.
  *       단 {@code email}은 display-info 응답에 없으므로 항상 null이다(소비처 없음 — 명세 §13 PII 최소화).</li>
  *   <li>{@link #findByEmail} = <b>fail-fast(검증용)</b> — validate-member(송금 수신자 검증)가 "없으면
  *       없다"를 신뢰해야 하므로, 404 MEMBER4001 응답만 {@link Optional#empty()}로 매핑하고 그 외
@@ -64,39 +69,67 @@ public class RealMemberClient implements MemberClient {
         return new MemberInfo(userPublicId, null, "Unknown", "Unknown", "UNK", false);
     }
 
+    /** display-info의 public_ids 1회 호출 상한(auth §13-1). 초과분은 chunk로 분할 호출한다. */
+    private static final int BATCH_LIMIT = 100;
+
     @Override
     public MemberInfo getMember(String userPublicId) {
+        // 단건도 배치 API 1건 호출로 처리 — member-service 엔드포인트를 하나로 유지(HTTP 로직 1벌, community 미러).
+        return getMembers(List.of(userPublicId)).get(userPublicId);
+    }
+
+    @Override
+    public Map<String, MemberInfo> getMembers(Collection<String> userPublicIds) {
+        List<String> ids = userPublicIds.stream().distinct().toList();
+        // 계약: 요청한 모든 id를 키로 포함. fallback으로 선채움하고 조회 성공분만 덮어쓴다 —
+        // 부분 실패(chunk 일부 실패)·응답 누락 id가 자연스럽게 fail-open으로 수렴한다(community 미러).
+        Map<String, MemberInfo> result = new HashMap<>();
+        ids.forEach(id -> result.put(id, fallback(id)));
+        if (ids.isEmpty()) {
+            return result;
+        }
+
         String bearerToken = currentJwtBearer();
         if (bearerToken == null) {
-            // 인증 컨텍스트 없이 호출됨(비정상 경로) — 표시용이라 fail-open으로 폴백.
-            log.warn("[RealMemberClient] SecurityContext에 JWT가 없어 표시정보를 조회하지 못했습니다. user_public_id={}",
-                    userPublicId);
-            return fallback(userPublicId);
+            // 인증 컨텍스트 없이 호출됨(비정상 경로) — 표시용이라 fail-open으로 전원 폴백.
+            log.warn("[RealMemberClient] SecurityContext에 JWT가 없어 표시정보를 조회하지 못했습니다. ids={}", ids.size());
+            return result;
         }
+
+        for (int from = 0; from < ids.size(); from += BATCH_LIMIT) {
+            List<String> chunk = ids.subList(from, Math.min(from + BATCH_LIMIT, ids.size()));
+            fetchChunkInto(result, chunk, bearerToken);
+        }
+        return result;
+    }
+
+    /** chunk 1개를 호출해 성공분만 result에 덮어쓴다. 실패는 fail-open(해당 chunk 전원 fallback 유지). */
+    private void fetchChunkInto(Map<String, MemberInfo> result, List<String> chunk, String bearerToken) {
         try {
             DisplayInfoEnvelope envelope = restClient.get()
-                    .uri(memberApiBaseUrl + "/api/v1/members/display-info?public_ids={ids}", userPublicId)
+                    .uri(memberApiBaseUrl + "/api/v1/members/display-info?public_ids={ids}",
+                            String.join(",", chunk))
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + bearerToken)
                     .retrieve()
                     .body(DisplayInfoEnvelope.class);
-            if (envelope != null && envelope.data() != null && envelope.data().members() != null) {
-                for (MemberDisplayPayload member : envelope.data().members()) {
-                    if (userPublicId.equals(member.publicId())) {
-                        // email은 display-info 응답에 없어 null — 어떤 호출 측도 getMember 결과의 email을
-                        // 소비하지 않음을 전수 확인했다(validate 경로는 findByEmail이 채움).
-                        return new MemberInfo(member.publicId(), null, member.name(),
-                                member.nickname(), member.nationality(), member.isVerified());
-                    }
+            if (envelope == null || envelope.data() == null || envelope.data().members() == null) {
+                log.warn("[RealMemberClient] display-info 응답 형식이 비었습니다 — 폴백 유지. chunk={}", chunk.size());
+                return;
+            }
+            for (MemberDisplayPayload member : envelope.data().members()) {
+                // 요청하지 않은 id가 섞여 와도 계약(요청 id만 키)을 지키도록 기존 키만 덮어쓴다.
+                if (member.publicId() != null && result.containsKey(member.publicId())) {
+                    // email은 display-info 응답에 없어 null — 어떤 호출 측도 getMember(s) 결과의 email을
+                    // 소비하지 않음(validate 경로는 findByEmail이 채움 — 명세 §13 PII 최소화).
+                    result.put(member.publicId(), new MemberInfo(member.publicId(), null, member.name(),
+                            member.nickname(), member.nationality(), member.isVerified()));
                 }
             }
-            // 미존재·탈퇴(응답 배열에서 제외됨) — 배치 API 계약상 에러가 아니라 폴백 대상.
-            return fallback(userPublicId);
         } catch (RuntimeException e) {
             // 응답 4xx/5xx·연결 실패·역직렬화 실패 전부 fail-open — 표시 실패가 송금/확인증 본업을 막지 않는다
             // (TransferServiceImpl.fetchMemberNameSafe의 RuntimeException 흡수와 같은 정책을 클라이언트 계층에서 보장).
-            log.warn("[RealMemberClient] display-info 호출 실패 — \"Unknown\" 폴백. user_public_id={}, msg={}",
-                    userPublicId, e.getMessage());
-            return fallback(userPublicId);
+            log.warn("[RealMemberClient] display-info 호출 실패 — \"Unknown\" 폴백. chunk={}, msg={}",
+                    chunk.size(), e.getMessage());
         }
     }
 

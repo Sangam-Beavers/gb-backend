@@ -4,8 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.gb.common.exception.BusinessException;
@@ -42,6 +46,7 @@ import com.gb.wallet.global.exception.code.WalletErrorCode;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
@@ -100,15 +105,19 @@ class TransferServiceTest {
         given(walletRepository.findAllById(List.of(linhWallet.getId(), mariaWallet.getId())))
                 .willReturn(List.of(linhWallet, mariaWallet));
 
-        given(memberClient.getMember("linh-uuid"))
-                .willReturn(new MemberInfo("linh-uuid",  "linh-test@example.com",
-                        "Nguyen Thi Linh", "Linh",  "VN", true));
-        given(memberClient.getMember("maria-uuid"))
-                .willReturn(new MemberInfo("maria-uuid", "maria-test@example.com",
-                        "Maria Santos", "Maria", "PH", true));
+        given(memberClient.getMembers(List.of("linh-uuid", "maria-uuid")))
+                .willReturn(Map.of(
+                        "linh-uuid", new MemberInfo("linh-uuid", "linh-test@example.com",
+                                "Nguyen Thi Linh", "Linh", "VN", true),
+                        "maria-uuid", new MemberInfo("maria-uuid", "maria-test@example.com",
+                                "Maria Santos", "Maria", "PH", true)));
 
         RecentRecipientsResponse response =
                 transferService.getRecentInternalRecipients(SENDER_PUBLIC_ID);
+
+        // N+1 회귀 가드: 수신자 표시 정보는 배치 1회(getMembers)로만 — 건별 getMember 호출 금지.
+        verify(memberClient, times(1)).getMembers(List.of("linh-uuid", "maria-uuid"));
+        verify(memberClient, never()).getMember(anyString());
 
         assertThat(response.getReceivers())
                 .as("순서(Linh→Maria) + 모든 필드 매핑 검증. lastTransferredAt은 ISO 8601 UTC Z 문자열")
@@ -478,7 +487,7 @@ class TransferServiceTest {
                 sender, com.gb.wallet.global.common.enums.TransactionType.INTERNAL_TRANSFER,
                 "Nguyen Thi Linh", null);
 
-        given(transactionRepository.findByPublicId(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
+        given(transactionRepository.findByPublicIdWithWallet(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
         given(memberClient.getMember(SENDER_PUBLIC_ID)).willReturn(
                 new MemberInfo(SENDER_PUBLIC_ID, "sender@example.com",
                         "Sangam Beavers", "Sangam", "KR", true));
@@ -503,8 +512,8 @@ class TransferServiceTest {
                 "NGUYEN VAN A", 99L);
         BankAccount ba = bankAccount(99L, bank("020", "Quokka Bank"), "1002345678901");
 
-        given(transactionRepository.findByPublicId(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
-        given(bankAccountRepository.findById(99L)).willReturn(Optional.of(ba));
+        given(transactionRepository.findByPublicIdWithWallet(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
+        given(bankAccountRepository.findWithBankById(99L)).willReturn(Optional.of(ba));
         given(memberClient.getMember(SENDER_PUBLIC_ID)).willReturn(
                 new MemberInfo(SENDER_PUBLIC_ID, "sender@example.com",
                         "Sangam Beavers", "Sangam", "KR", true));
@@ -525,7 +534,7 @@ class TransferServiceTest {
     @Test
     @DisplayName("getReceipt: 거래 미존재 → TRANSFER4001 (정보 누설 방지)")
     void getReceipt_미존재_TRANSFER4001() {
-        given(transactionRepository.findByPublicId(TX_PUBLIC_ID)).willReturn(Optional.empty());
+        given(transactionRepository.findByPublicIdWithWallet(TX_PUBLIC_ID)).willReturn(Optional.empty());
 
         assertThatThrownBy(() -> transferService.getReceipt(SENDER_PUBLIC_ID, TX_PUBLIC_ID))
                 .isInstanceOf(BusinessException.class)
@@ -542,7 +551,7 @@ class TransferServiceTest {
         com.gb.wallet.domain.transaction.entity.Transaction tx = buildTx(
                 otherSender, com.gb.wallet.global.common.enums.TransactionType.INTERNAL_TRANSFER,
                 "Linh", null);
-        given(transactionRepository.findByPublicId(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
+        given(transactionRepository.findByPublicIdWithWallet(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
 
         assertThatThrownBy(() -> transferService.getReceipt(SENDER_PUBLIC_ID, TX_PUBLIC_ID))
                 .isInstanceOf(BusinessException.class)
@@ -559,7 +568,7 @@ class TransferServiceTest {
         Wallet sender = wallet(1L, SENDER_PUBLIC_ID);
         com.gb.wallet.domain.transaction.entity.Transaction tx = buildTx(
                 sender, com.gb.wallet.global.common.enums.TransactionType.CHARGE, null, null);
-        given(transactionRepository.findByPublicId(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
+        given(transactionRepository.findByPublicIdWithWallet(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
 
         assertThatThrownBy(() -> transferService.getReceipt(SENDER_PUBLIC_ID, TX_PUBLIC_ID))
                 .isInstanceOf(BusinessException.class)
@@ -578,7 +587,7 @@ class TransferServiceTest {
         // 본인·유형은 통과하되 상태만 미완료(PENDING)로 둬 status 게이트만 단독 검증한다.
         ReflectionTestUtils.setField(tx, "status",
                 com.gb.wallet.global.common.enums.TransactionStatus.PENDING);
-        given(transactionRepository.findByPublicId(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
+        given(transactionRepository.findByPublicIdWithWallet(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
 
         assertThatThrownBy(() -> transferService.getReceipt(SENDER_PUBLIC_ID, TX_PUBLIC_ID))
                 .isInstanceOf(BusinessException.class)

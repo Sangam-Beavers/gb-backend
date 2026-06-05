@@ -1,5 +1,9 @@
 package com.gb.wallet.global.client;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -64,6 +68,28 @@ public class DevMemberClient implements MemberClient {
     public MemberInfo getMember(String userPublicId) {
         MemberInfo fixture = FIXTURES.get(userPublicId);
         return fixture != null ? fixture : delegate.getMember(userPublicId);
+    }
+
+    @Override
+    public Map<String, MemberInfo> getMembers(Collection<String> userPublicIds) {
+        // fixture 히트를 분리하고, 미스만 모아 Real에 1회 배치 위임 후 merge(인터페이스 배치 계약 유지 —
+        // 요청한 모든 id가 키로 포함된다: 히트=fixture, 미스=Real 결과(누락·장애는 Real이 폴백으로 채움)).
+        // community DevMemberClient.getMembers와 동일 구조.
+        List<String> ids = userPublicIds.stream().distinct().toList();
+        Map<String, MemberInfo> result = new HashMap<>();
+        List<String> misses = new ArrayList<>();
+        for (String id : ids) {
+            MemberInfo fixture = FIXTURES.get(id);
+            if (fixture != null) {
+                result.put(id, fixture);
+            } else {
+                misses.add(id);
+            }
+        }
+        if (!misses.isEmpty()) {
+            result.putAll(delegate.getMembers(misses));
+        }
+        return result;
     }
 
     @Override

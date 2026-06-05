@@ -109,6 +109,25 @@ class TransactionRepositoryTest {
     }
 
     @Test
+    @DisplayName("findByPublicIdWithWallet: wallet을 fetch join으로 즉시 적재한다 — getReceipt가 tx 밖(NOT_SUPPORTED)에서 본인 검증하기 위함")
+    void findByPublicIdWithWallet_wallet_즉시적재() {
+        String publicId = em.getEntityManager()
+                .createQuery("select t.publicId from Transaction t where t.wallet.id = :sid",
+                        String.class)
+                .setParameter("sid", sender.getId())
+                .setMaxResults(1)
+                .getSingleResult();
+        em.clear(); // 영속성 컨텍스트 비움 — fetch join 없이는 wallet이 LAZY proxy로 남는 조건 재현
+
+        Transaction found = transactionRepository.findByPublicIdWithWallet(publicId).orElseThrow();
+
+        assertThat(org.hibernate.Hibernate.isInitialized(found.getWallet()))
+                .as("detached 상태에서 wallet.userPublicId 탐색이 LazyInitializationException 없이 가능해야 한다")
+                .isTrue();
+        assertThat(found.getWallet().getUserPublicId()).isEqualTo("sender-uuid");
+    }
+
+    @Test
     @DisplayName("Linh의 가장 최근 송금 통화는 KRW(T_LINH_NEW) — 이전 VND/USD가 아님")
     void findCurrencyCodesForLatestTransfers_Linh_가장_최근_통화는_KRW() {
         List<Long> receiverIds      = List.of(linhWallet.getId(), hieuWallet.getId(), mariaWallet.getId());

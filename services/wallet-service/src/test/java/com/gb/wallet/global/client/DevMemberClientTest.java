@@ -2,12 +2,17 @@ package com.gb.wallet.global.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -53,6 +58,33 @@ class DevMemberClientTest {
 
         assertThat(client.getMember(REAL_USER)).isEqualTo(real);
         verify(delegate).getMember(REAL_USER);
+    }
+
+    @Test
+    @DisplayName("getMembers: fixture 히트는 분리하고 미스만 모아 Real에 1회 배치 위임 후 merge(계약: 모든 요청 id 키 포함)")
+    void getMembers_fixture_분리_미스만_배치위임() {
+        DevMemberClient client = new DevMemberClient(delegate);
+        MemberInfo real = new MemberInfo(REAL_USER, null, "Real Name", "RealNick", "KR", true);
+        given(delegate.getMembers(List.of(REAL_USER))).willReturn(Map.of(REAL_USER, real));
+
+        Map<String, MemberInfo> result = client.getMembers(List.of(LINH, REAL_USER));
+
+        assertThat(result).containsOnlyKeys(LINH, REAL_USER);
+        assertThat(result.get(LINH).nickname()).isEqualTo("Linh");   // fixture 히트
+        assertThat(result.get(REAL_USER)).isEqualTo(real);           // Real 위임분
+        verify(delegate, times(1)).getMembers(List.of(REAL_USER));   // 미스만, 배치 1회
+        verify(delegate, never()).getMember(anyString());
+    }
+
+    @Test
+    @DisplayName("getMembers: 전부 fixture 히트면 위임 자체가 없다")
+    void getMembers_전부_fixture면_위임없음() {
+        DevMemberClient client = new DevMemberClient(delegate);
+
+        Map<String, MemberInfo> result = client.getMembers(List.of(LINH));
+
+        assertThat(result).containsOnlyKeys(LINH);
+        verifyNoInteractions(delegate);
     }
 
     @Test

@@ -147,7 +147,11 @@ public class TransferServiceImpl implements TransferService {
     private TransferService self;
 
     @Override
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public RecentRecipientsResponse getRecentInternalRecipients(String userPublicId) {
+        // tx 경계: 외부 HTTP(MemberClient)를 트랜잭션/커넥션 보유 중 호출하지 않는다 — NOT_SUPPORTED로
+        // 클래스 readOnly tx를 차단하고, 아래 repo 호출들은 각자 짧은 readOnly tx로 돈다(community
+        // PostServiceImpl.getPosts와 동일 구조). 엔티티 접근은 스칼라 컬럼뿐이라 detached에서도 안전.
         // 1) 송신자 wallet 조회. 없으면 WALLET4001.
         Wallet sender = walletRepository.findByUserPublicId(userPublicId)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
@@ -184,14 +188,19 @@ public class TransferServiceImpl implements TransferService {
         Map<Long, String> userPublicIdByWallet = walletRepository.findAllById(receiverIds).stream()
                 .collect(Collectors.toMap(Wallet::getId, Wallet::getUserPublicId));
 
-        // 5) 각 수신자에 대해 MemberClient 호출 → RecipientItem 변환. projection 순서(최근순) 유지.
-        // TODO: member-service 배치 API(GET /members/display-info?public_ids=..., auth §13-1)가 생겼다 —
-        //   후속 이슈에서 wallet MemberClient에 getMembers(배치)를 추가해 이 루프의 N회 호출(≤10)을
-        //   1회로 줄일 것(community MemberClient.getMembers 계약 미러링).
+        // 5) 수신자 표시 정보를 배치 1회로 조회(getMembers — 건별 N회 HTTP N+1 회피, auth §13-1 배치 API).
+        //    getMembers는 요청한 모든 id를 키로 포함(누락·장애=fallback)하므로 아래 .get(id)는 null이 아니다.
+        List<String> receiverUserIds = recent.stream()
+                .map(p -> userPublicIdByWallet.get(p.getReceiverWalletId()))
+                .distinct()
+                .toList();
+        Map<String, MemberInfo> membersById = memberClient.getMembers(receiverUserIds);
+
+        // 6) RecipientItem 변환. projection 순서(최근순) 유지.
         List<RecipientItem> items = recent.stream()
                 .map(p -> {
                     String receiverUserId = userPublicIdByWallet.get(p.getReceiverWalletId());
-                    MemberInfo member = memberClient.getMember(receiverUserId);
+                    MemberInfo member = membersById.get(receiverUserId);
                     CurrencyType lastCurrency = currencyByReceiver.get(p.getReceiverWalletId());
                     return RecipientItem.builder()
                             .memberPublicId(receiverUserId)
@@ -664,10 +673,13 @@ public class TransferServiceImpl implements TransferService {
     // ──────────────────────────────────────────────────────────────────────────
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public TransferReceiptResponse getReceipt(String userPublicId, String transferPublicId) {
-        // (1) 거래 조회 — 없으면 TRANSFER4001 (정보 누설 방지로 미존재·권한·유형 실패 모두 동일 코드).
-        Transaction tx = transactionRepository.findByPublicId(transferPublicId)
+        // tx 경계: 외부 HTTP(MemberClient 본명 조회)를 트랜잭션/커넥션 보유 중 호출하지 않는다 —
+        // NOT_SUPPORTED로 차단하고 DB 조회는 repo 호출 각자의 짧은 tx로 돈다. 본인 검증이
+        // tx.getWallet()(LAZY)을 탐색하므로 wallet을 fetch join으로 함께 적재해 detached 안전을 보장한다.
+        // (1) 거래 조회(+wallet fetch join) — 없으면 TRANSFER4001 (정보 누설 방지로 미존재·권한·유형 실패 모두 동일 코드).
+        Transaction tx = transactionRepository.findByPublicIdWithWallet(transferPublicId)
                 .orElseThrow(() -> new BusinessException(TransferErrorCode.TRANSFER_NOT_FOUND));
 
         // (2) 본인 검증 — 송신자(거래 wallet 주인)만 조회 가능. 수신자는 별도 "받은 거래 내역" API 영역.
@@ -689,22 +701,20 @@ public class TransferServiceImpl implements TransferService {
             throw new BusinessException(TransferErrorCode.TRANSFER_NOT_FOUND);
         }
 
-        // (4) 송신자 본명 조회(MemberClient fail-open). 본인이라 호출 실패 시 null이어도 영수증 자체는 응답.
-        // TODO(tx 경계 분리): 이 호출은 readOnly tx "안"의 외부 HTTP 호출이라 장애 시 DB 커넥션을
-        //   read-timeout(기본 10s)까지 점유한다(11D transfer-2 — 무락·단건 조회라 영향 소). RealMemberClient
-        //   전환이 완료돼 실제 HTTP가 됐으므로, 후속 이슈에서 DB 조회(1~3,5)를 짧은 tx로 분리하고 본 호출을
-        //   tx 밖으로 hoist할 것 — tx.getWallet()이 LAZY라 단순 NOT_SUPPORTED 전환은 불가, 값 추출 후 분리 필요.
-        String senderName = fetchMemberNameSafe(userPublicId);
-
-        // (5) 도메인별 부가 데이터 조달.
+        // (4) 도메인별 부가 데이터 조달(DB — 자체 짧은 tx).
         //     INTERNAL은 외부 계좌 없음 → bankAccount=null로 응답(bankName·accountNumber 모두 null).
-        //     REMITTANCE는 bank_account_id로 BankAccount를 풀어 bank명·계좌번호(마스킹)를 응답에 채운다.
+        //     REMITTANCE는 bank_account_id로 BankAccount를 풀어 bank명·계좌번호(마스킹)를 응답에 채운다 —
+        //     응답 조립이 tx 밖에서 bank.name을 탐색하므로 bank까지 즉시 페치(findWithBankById, @EntityGraph).
         //     bank_account_id가 어떤 이유로든 사라진 비정상 상태는 정합성 위반 → COMMON5000.
         BankAccount bankAccount = null;
         if (type == TransactionType.REMITTANCE) {
-            bankAccount = bankAccountRepository.findById(tx.getBankAccountId())
+            bankAccount = bankAccountRepository.findWithBankById(tx.getBankAccountId())
                     .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
         }
+
+        // (5) 송신자 본명 조회(MemberClient fail-open) — 외부 HTTP는 모든 DB 조회 "뒤", tx 밖에서 마지막으로.
+        //     본인이라 호출 실패 시 null이어도 영수증 자체는 응답한다.
+        String senderName = fetchMemberNameSafe(userPublicId);
 
         return TransferReceiptResponse.of(tx, senderName, bankAccount);
     }

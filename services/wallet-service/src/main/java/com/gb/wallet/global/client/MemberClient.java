@@ -1,5 +1,7 @@
 package com.gb.wallet.global.client;
 
+import java.util.Collection;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -18,9 +20,18 @@ public interface MemberClient {
 
     /**
      * 회원 정보 조회. 미존재 시 구현체가 fallback {@link MemberInfo}를 반환할 수 있다
-     * (호출 측 null 검사 부담을 덜기 위함 — 예: 최근 송금자 목록 매핑).
+     * (호출 측 null 검사 부담을 덜기 위함 — 예: 확인증 본명 채움).
      */
     MemberInfo getMember(String userPublicId);
+
+    /**
+     * 회원 표시 정보를 여러 건 한 번에 조회한다(배치). 최근 송금 수신자 목록(≤10명)의 건별 호출 N+1을
+     * 1회 호출로 줄인다 — community {@code MemberClient.getMembers}와 동일 계약.
+     *
+     * <p>반환 맵은 <b>요청한 모든 id를 키로 포함</b>한다 — 미존재·장애분은 {@link #getMember}와 동일한
+     * fallback("Unknown")으로 채워, 호출 측의 {@code map.get(id)} null 검사 부담을 없앤다(표시용 fail-open).
+     */
+    Map<String, MemberInfo> getMembers(Collection<String> userPublicIds);
 
     /**
      * 이메일로 회원 정보 조회. 미존재 시 {@link Optional#empty()}.

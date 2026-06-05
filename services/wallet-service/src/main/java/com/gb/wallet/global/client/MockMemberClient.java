@@ -1,7 +1,10 @@
 package com.gb.wallet.global.client;
 
+import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * (구) 개발용 Mock {@link MemberClient} — member-service 구현 완료로 역할 종료. <b>삭제 후보.</b>
@@ -42,6 +45,14 @@ public class MockMemberClient implements MemberClient {
         }
         // fallback: 없는 회원도 안전하게 표시 가능한 형태로 반환. user_public_id는 그대로 echo.
         return new MemberInfo(userPublicId, null, "Unknown", "Unknown", "UNK", false);
+    }
+
+    @Override
+    public Map<String, MemberInfo> getMembers(Collection<String> userPublicIds) {
+        // 인메모리라 배치 이득은 없지만 인터페이스 계약(요청한 모든 id 키 포함)을 유지한다.
+        return userPublicIds.stream()
+                .distinct()
+                .collect(Collectors.toMap(Function.identity(), this::getMember));
     }
 
     @Override
