@@ -33,7 +33,7 @@
 **Query Parameter**
 | 파라미터 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `category` | string | X | LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION |
+| `category` | string | X | LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION/FREE |
 | `keyword` | string | X | 제목·본문 검색어(있으면 검색 모드) |
 | `sort` | string | X | latest / popular / accuracy(키워드 있을 때만), 기본 latest |
 | `page` | integer | X | 0부터, 기본 0 |
@@ -67,7 +67,7 @@
 **Request Body**
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `category` | string | O | LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION |
+| `category` | string | O | LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION/FREE |
 | `title` | string | O | 제목 |
 | `content` | string | O | 본문 |
 
@@ -271,7 +271,7 @@
 **Query Parameter**
 | 파라미터 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `category` | string | X | `LIFE_INFO / JOB / VISA / COUNTRY / RESIDENCE / QUESTION`. 미입력 시 `QUESTION` 카테고리만 반환 |
+| `category` | string | X | `LIFE_INFO / JOB / VISA / COUNTRY / RESIDENCE / QUESTION / FREE`. 미입력 시 `QUESTION` 카테고리만 반환 |
 | `size` | integer | X | 반환 개수 (기본 5, 가드 1~100) |
 
 **Response 200** — `data`

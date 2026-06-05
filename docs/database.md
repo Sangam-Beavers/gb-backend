@@ -372,7 +372,7 @@
 | `id` | BIGINT | PK, AI | |
 | `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | |
 | `user_public_id` | VARCHAR(36) | NOT NULL | **회원 논리 참조** |
-| `category` | VARCHAR(30) | NOT NULL | LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION |
+| `category` | VARCHAR(30) | NOT NULL | LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION/FREE |
 | `language` | VARCHAR(10) | NOT NULL | 작성 언어 코드 |
 | `title` | VARCHAR(255) | NOT NULL | |
 | `content` | TEXT | NOT NULL | |

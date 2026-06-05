@@ -16,7 +16,7 @@ import lombok.NoArgsConstructor;
 public class PostUpdateRequest {
 
     @Schema(description = "변경할 카테고리(선택)", example = "QUESTION",
-            allowableValues = {"LIFE_INFO", "JOB", "VISA", "COUNTRY", "RESIDENCE", "QUESTION"})
+            allowableValues = {"LIFE_INFO", "JOB", "VISA", "COUNTRY", "RESIDENCE", "QUESTION", "FREE"})
     private String category;
 
     @Schema(description = "변경할 제목(선택)", example = "제목을 수정합니다", maxLength = 255)

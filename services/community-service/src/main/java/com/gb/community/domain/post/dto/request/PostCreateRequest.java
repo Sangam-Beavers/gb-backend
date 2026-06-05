@@ -18,7 +18,7 @@ import lombok.NoArgsConstructor;
 public class PostCreateRequest {
 
     @Schema(description = "카테고리", example = "JOB",
-            allowableValues = {"LIFE_INFO", "JOB", "VISA", "COUNTRY", "RESIDENCE", "QUESTION"})
+            allowableValues = {"LIFE_INFO", "JOB", "VISA", "COUNTRY", "RESIDENCE", "QUESTION", "FREE"})
     @NotBlank
     private String category;
 

@@ -258,7 +258,7 @@
 | `identity_document_type` (신분증) | `ALIEN_REGISTRATION` / `PASSPORT` / `NATIONAL_ID` |
 | `processing_status` (분석) | `COMPLETED` / `FAILED` / `PARTIAL` |
 | `overall_risk_level` / `risk_level` | `LOW` / `MEDIUM` / `HIGH` |
-| `category` (커뮤니티) | `LIFE_INFO` / `JOB` / `VISA` / `COUNTRY` / `RESIDENCE` / `QUESTION` |
+| `category` (커뮤니티) | `LIFE_INFO` / `JOB` / `VISA` / `COUNTRY` / `RESIDENCE` / `QUESTION` / `FREE` |
 
 > ⚠️ **`document_type` 단일 필드명 금지.** 도메인별로 분리:
 > 신분증 인증 = `identity_document_type`, AI 서류 분석 = `analysis_document_type`.
