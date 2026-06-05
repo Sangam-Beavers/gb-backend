@@ -21,6 +21,8 @@ import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.request.SocialProfileRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.LanguageResponse;
+import com.gb.member.domain.member.dto.response.MemberDisplayListResponse;
+import com.gb.member.domain.member.dto.response.MemberDisplayResponse;
 import com.gb.member.domain.member.dto.response.ProfileResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.dto.response.SocialProfileResponse;
@@ -32,6 +34,7 @@ import com.gb.member.global.mail.EmailSender;
 import com.gb.member.global.redis.PasswordResetRateLimiter;
 import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -362,6 +365,82 @@ class MemberServiceImplTest {
 
         assertThat(response.isAvailable()).isFalse();
         verifyNoInteractions(idpUserClient);
+    }
+
+    // ──────────────────── 표시정보 조회 (display-info / by-email) ────────────────────
+
+    @Test
+    @DisplayName("display-info 배치 조회는 Repository IN-batch 1회 결과를 표시정보 DTO로 매핑한다")
+    void getDisplayInfos_배치_매핑() {
+        Member linh = displayMember("pub-linh", "linh@example.com", "Nguyen Thi Linh", "Linh", "VN");
+        Member maria = displayMember("pub-maria", "maria@example.com", "Maria Santos", "Maria", "PH");
+        List<String> requested = List.of("pub-linh", "pub-maria", "pub-missing");
+        when(memberRepository.findByPublicIdInAndDeletedAtIsNull(requested))
+                .thenReturn(List.of(linh, maria));
+
+        MemberDisplayListResponse response = memberService.getDisplayInfos(requested);
+
+        // 존재하는 활성 회원만 항목으로 — 미존재(pub-missing)는 제외(호출 측 Unknown 폴백 계약).
+        assertThat(response.getMembers()).hasSize(2);
+        MemberDisplayResponse first = response.getMembers().get(0);
+        assertThat(first.getPublicId()).isEqualTo("pub-linh");
+        assertThat(first.getName()).isEqualTo("Nguyen Thi Linh");
+        assertThat(first.getNickname()).isEqualTo("Linh");
+        assertThat(first.getNationality()).isEqualTo("VN");
+        assertThat(first.getIsVerified()).isFalse();
+        // 조회만 — IdP/메일 등 다른 의존을 건드리지 않는다.
+        verifyNoInteractions(idpUserClient, emailSender);
+    }
+
+    @Test
+    @DisplayName("display-info: 요청 id가 전부 미존재·탈퇴면 빈 배열을 반환한다(에러 아님)")
+    void getDisplayInfos_전부_미존재_빈배열() {
+        List<String> requested = List.of("pub-none-1", "pub-none-2");
+        when(memberRepository.findByPublicIdInAndDeletedAtIsNull(requested)).thenReturn(List.of());
+
+        MemberDisplayListResponse response = memberService.getDisplayInfos(requested);
+
+        assertThat(response.getMembers()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("by-email: 활성 회원이 있으면 표시정보를 반환한다")
+    void getDisplayInfoByEmail_성공() {
+        Member linh = displayMember("pub-linh", "linh@example.com", "Nguyen Thi Linh", "Linh", "VN");
+        when(memberRepository.findByEmailAndDeletedAtIsNull("linh@example.com"))
+                .thenReturn(Optional.of(linh));
+
+        MemberDisplayResponse response = memberService.getDisplayInfoByEmail("linh@example.com");
+
+        assertThat(response.getPublicId()).isEqualTo("pub-linh");
+        assertThat(response.getNickname()).isEqualTo("Linh");
+        verifyNoInteractions(idpUserClient, emailSender);
+    }
+
+    @Test
+    @DisplayName("by-email: 미존재·탈퇴 회원이면 MEMBER4001로 fail-fast(검증 용도 — 폴백 금지)")
+    void getDisplayInfoByEmail_미존재_MEMBER4001() {
+        when(memberRepository.findByEmailAndDeletedAtIsNull("ghost@example.com"))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> memberService.getDisplayInfoByEmail("ghost@example.com"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
+    }
+
+    /** 표시정보 테스트용 활성 회원(미탈퇴, isVerified 기본 false). */
+    private Member displayMember(String publicId, String email, String name, String nickname,
+                                 String nationality) {
+        return Member.builder()
+                .publicId(publicId)
+                .email(email)
+                .name(name)
+                .nickname(nickname)
+                .nationality(nationality)
+                .language("ko")
+                .authProviderId("idp-" + publicId)
+                .build();
     }
 
     @Test

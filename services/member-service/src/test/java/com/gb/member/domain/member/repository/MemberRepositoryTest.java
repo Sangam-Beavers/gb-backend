@@ -39,6 +39,42 @@ class MemberRepositoryTest {
     @Autowired private MemberRepository repository;
 
     @Test
+    @DisplayName("findByPublicIdInAndDeletedAtIsNull: 배치 조회는 활성 회원만 반환하고 탈퇴·미존재 id는 제외된다")
+    void findActiveByPublicIdIn_배치_탈퇴자_미존재_제외() {
+        Member active1 = persistMember("batch-active-1", "batch1@example.com", "batchNick1");
+        Member active2 = persistMember("batch-active-2", "batch2@example.com", "batchNick2");
+        Member withdrawn = persistMember("batch-withdrawn", "batch3@example.com", "batchNick3");
+        withdrawn.softDelete();
+        em.flush();
+        em.clear();
+
+        var found = repository.findByPublicIdInAndDeletedAtIsNull(
+                java.util.List.of("batch-active-1", "batch-active-2", "batch-withdrawn", "batch-no-such"));
+
+        assertThat(found)
+                .as("활성 2명만 반환 — 탈퇴·미존재 id는 항목에서 제외(호출 측 Unknown 폴백 계약)")
+                .extracting(Member::getPublicId)
+                .containsExactlyInAnyOrder("batch-active-1", "batch-active-2");
+    }
+
+    @Test
+    @DisplayName("findByEmailAndDeletedAtIsNull: 활성 회원은 조회되고 탈퇴 회원·미존재 이메일은 빈 결과")
+    void findActiveByEmail_탈퇴자_제외() {
+        persistMember("email-active", "email-active@example.com", "emailNick1");
+        Member withdrawn = persistMember("email-withdrawn", "email-withdrawn@example.com", "emailNick2");
+        withdrawn.softDelete();
+        em.flush();
+        em.clear();
+
+        assertThat(repository.findByEmailAndDeletedAtIsNull("email-active@example.com"))
+                .as("활성 회원은 조회됨").isPresent();
+        assertThat(repository.findByEmailAndDeletedAtIsNull("email-withdrawn@example.com"))
+                .as("탈퇴(soft delete)된 회원은 제외 — 송금 수신자 검증에서 '없음' 처리").isEmpty();
+        assertThat(repository.findByEmailAndDeletedAtIsNull("no-such@example.com"))
+                .as("없는 이메일").isEmpty();
+    }
+
+    @Test
     @DisplayName("findByPublicIdAndDeletedAtIsNull: 활성 회원은 조회되고 탈퇴(soft delete) 회원은 제외된다")
     void findActiveByPublicId_탈퇴자_제외() {
         Member active = persistMember("active-public-id", "active@example.com", "activeNick");

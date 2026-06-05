@@ -9,6 +9,8 @@ import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.request.SocialProfileRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.LanguageResponse;
+import com.gb.member.domain.member.dto.response.MemberDisplayListResponse;
+import com.gb.member.domain.member.dto.response.MemberDisplayResponse;
 import com.gb.member.domain.member.dto.response.ProfileResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.dto.response.SocialProfileResponse;
@@ -22,6 +24,7 @@ import com.gb.member.global.redis.PasswordResetRateLimiter;
 import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -183,6 +186,29 @@ public class MemberServiceImpl implements MemberService {
     public CheckAvailabilityResponse checkNickname(String nickname) {
         boolean available = !memberRepository.existsByNickname(nickname);
         return CheckAvailabilityResponse.of(available);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public MemberDisplayListResponse getDisplayInfos(List<String> publicIds) {
+        // IN-batch 1회 조회(건별 반복 금지 — §4 Repository 규칙). 탈퇴자는 Repository 레벨에서 제외되고,
+        // 미존재·탈퇴로 빠진 id는 응답에 항목이 없을 뿐 에러가 아니다(호출 측 MemberClient가 "Unknown" 폴백).
+        // 중복 id는 IN 절에서 자연 흡수된다(회원당 1건).
+        List<MemberDisplayResponse> members = memberRepository
+                .findByPublicIdInAndDeletedAtIsNull(publicIds).stream()
+                .map(MemberDisplayResponse::from)
+                .toList();
+        return MemberDisplayListResponse.of(members);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public MemberDisplayResponse getDisplayInfoByEmail(String email) {
+        // 검증(존재 확인) 용도라 폴백 없이 fail-fast(§7) — 미존재·탈퇴 모두 MEMBER4001.
+        // 탈퇴자 제외는 Repository 레벨(findByEmailAndDeletedAtIsNull): 탈퇴 회원은 송금 수신자가 될 수 없다.
+        Member member = memberRepository.findByEmailAndDeletedAtIsNull(email)
+                .orElseThrow(() -> new BusinessException(MemberErrorCode.MEMBER_NOT_FOUND));
+        return MemberDisplayResponse.from(member);
     }
 
     @Override

@@ -41,6 +41,8 @@
 | 언어 설정 조회 | GET | `/api/v1/members/me/language` | ✅ |
 | 언어 설정 변경 | PATCH | `/api/v1/members/me/language` | ✅ |
 | 탈퇴 | DELETE | `/api/v1/members/me` | ✅ |
+| 회원 표시정보 배치 조회 (서비스 간) | GET | `/api/v1/members/display-info?public_ids={a,b,c}` | ✅ |
+| 이메일로 회원 표시정보 조회 (서비스 간) | GET | `/api/v1/members/by-email?email={}` | ✅ |
 
 ---
 
@@ -291,6 +293,59 @@ message: 기본 생성 메시지("성공적으로 생성되었습니다." — �
 | 401 | AUTH4011 | 인증이 필요합니다. |
 | 404 | MEMBER4001 | 존재하지 않는 회원입니다. |
 | 500 | COMMON5000 | 서버 내부 오류입니다. (IdP 연동 실패) |
+
+---
+
+## 13. 회원 표시정보 조회 (서비스 간 — display-info / by-email)
+
+> **소비자가 프론트가 아니라 다른 백엔드 서비스다.** community(게시글·댓글 작성자 닉네임/인증배지)와
+> wallet(최근 송금 수신자 표시·확인증 본명·validate-member 수신자 검증)의 `MemberClient`가 호출한다.
+> 호출 측은 **현재 요청의 JWT를 그대로 릴레이**해 인증한다(별도 service token 없음 — 같은 IdP 발급 토큰을
+> member-service가 재검증). MSA 경계라 식별자는 `public_id`(UUID)만 사용한다(conventions §7 — member DB 직접 SELECT 금지).
+>
+> 응답 필드는 **호출 측 실사용처가 있는 표시 필드만** 담는다(PII 최소화): `email`은 어떤 호출 측도
+> 소비하지 않아 노출하지 않고, `name`(본명)은 송금 확인증 표기용으로만 포함한다.
+
+### 13-1. 표시정보 배치 조회
+
+`GET /api/v1/members/display-info?public_ids={a,b,c}` · Auth ✅ (JWT 릴레이)
+
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `public_ids` | string | Y | 회원 public_id(UUID) 콤마 구분 목록. **1~100개**(초과 시 COMMON4001) |
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `members` | array | N | 요청 id 중 **존재하는 활성(미탈퇴) 회원만** 담는다. 미존재·탈퇴 id는 항목에서 제외(에러 아님) — 호출 측 MemberClient가 "Unknown" 폴백으로 채운다. 순서 비보장 |
+| `members[].public_id` | string | N | 회원 식별자 (UUID) |
+| `members[].name` | string | N | 이름(본명) — 송금 확인증 등 격식 문서 표기용 |
+| `members[].nickname` | string | N | 닉네임 |
+| `members[].nationality` | string | N | 국적 코드 (ISO 3166-1 alpha-2) |
+| `members[].is_verified` | boolean | N | 신분증 인증 배지 여부 |
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (public_ids 누락/빈 값/100개 초과) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+
+### 13-2. 이메일로 표시정보 단건 조회
+
+`GET /api/v1/members/by-email?email={}` · Auth ✅ (JWT 릴레이)
+
+wallet의 앱 사용자 유효성 검증(`validate-member`)이 호출한다. **검증 용도라 폴백 없이 fail-fast** —
+미존재·**탈퇴** 회원 모두 404 MEMBER4001(탈퇴자는 송금 수신자가 될 수 없음. 재가입 차단용 중복확인과 달리
+`deleted_at` 필터를 건다).
+
+**Response 200** — `data`: §13-1의 `members[]` 항목과 동일 필드(`public_id`/`name`/`nickname`/`nationality`/`is_verified`).
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (이메일 누락/형식 위반) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | MEMBER4001 | 존재하지 않는 회원입니다. (탈퇴 포함) |
 
 ---
 
