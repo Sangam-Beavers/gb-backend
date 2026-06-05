@@ -92,12 +92,15 @@
 > NOT NULL 신규 컬럼이다. 엔티티에 `@ColumnDefault`(FALSE/CURRENT_TIMESTAMP)를 둬 `ddl-auto:update`(dev)가 기존
 > 행을 백필하며 ADD COLUMN 하지만, **운영/스테이징은 `ddl-auto`를 쓰지 않으므로** 아래 수동 ALTER가 필요하다:
 > ```sql
+> -- Hibernate가 LocalDateTime을 datetime(6)으로 만들므로 DEFAULT도 정밀도를 맞춰 CURRENT_TIMESTAMP(6)을 쓴다.
+> --   (datetime(6)에 정밀도 없는 CURRENT_TIMESTAMP는 MySQL error 1067로 거부됨 — ddl-auto가 조용히 삼켜 컬럼 누락.)
 > ALTER TABLE members
->   ADD COLUMN terms_agreed      BOOLEAN  NOT NULL DEFAULT TRUE,
->   ADD COLUMN privacy_agreed    BOOLEAN  NOT NULL DEFAULT TRUE,
->   ADD COLUMN consent_agreed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;
+>   ADD COLUMN terms_agreed      BIT(1)      NOT NULL DEFAULT b'1',
+>   ADD COLUMN privacy_agreed    BIT(1)      NOT NULL DEFAULT b'1',
+>   ADD COLUMN consent_agreed_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6);
 > ```
-> (기존 회원은 동의 상태(TRUE)·마이그레이션 시각으로 백필하고, 신규 가입은 항상 명시값 true·동의 시각으로 저장된다.)
+> (기존 회원은 동의 상태(TRUE)·마이그레이션 시각으로 백필하고, 신규 가입은 항상 명시값 true·동의 시각으로 저장된다.
+> 부울 컬럼은 Hibernate가 `bit(1)`로 생성한다 — 기존 테이블이 `tinyint(1)`이면 `BOOLEAN ... DEFAULT TRUE`로 대체.)
 
 ### `user_verifications`
 > 신분증 인증. APPROVED 시 `members.is_verified = TRUE`. **member 내부 테이블 → `user_id`는 BIGINT FK 유지.**

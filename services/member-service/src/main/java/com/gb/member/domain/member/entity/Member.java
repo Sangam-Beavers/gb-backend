@@ -61,8 +61,11 @@ public class Member extends BaseEntity {
     @ColumnDefault("true")
     private boolean privacyAgreed;
 
+    // 정밀도 주의: LocalDateTime은 MySQL datetime(6)로 매핑되므로 DEFAULT도 CURRENT_TIMESTAMP(6)이어야 한다.
+    //   정밀도 없는 CURRENT_TIMESTAMP를 쓰면 datetime(6)에 대해 MySQL이 error 1067로 거부하고,
+    //   ddl-auto:update가 그 ALTER를 조용히 삼켜 컬럼이 안 생긴다(신규 MySQL 배포 시 가입 INSERT 실패).
     @Column(name = "consent_agreed_at", nullable = false)
-    @ColumnDefault("CURRENT_TIMESTAMP")
+    @ColumnDefault("CURRENT_TIMESTAMP(6)")
     private LocalDateTime consentAgreedAt;
 
     // 신분증 인증 배지 여부. user_verifications가 APPROVED 되면 true로 반영(database.md §members).
