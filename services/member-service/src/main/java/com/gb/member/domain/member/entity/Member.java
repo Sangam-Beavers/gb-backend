@@ -51,13 +51,14 @@ public class Member extends BaseEntity {
     // 동의는 가입 단계에서 @AssertTrue로 강제되므로 저장 값은 항상 true이나, "언제 동의했는지"도 함께 남긴다.
     // @ColumnDefault: ddl-auto:update가 기존 행이 있는 members 테이블에 NOT NULL 컬럼을 ADD할 때
     //   DEFAULT가 없으면(특히 DATETIME) MySQL strict 모드에서 실패하므로 DB 기본값을 명시해 기존 행을 백필한다.
-    //   (신규 가입은 항상 빌더로 명시값을 채우므로 기본값은 마이그레이션 백필 용도다.)
+    //   동의 컬럼의 기본값은 "동의(true)"로 둔다(신규 가입은 항상 빌더로 true를 명시하므로 기본값은
+    //   기존 행 마이그레이션 백필 전용 — 기존 회원을 동의 상태로 본다).
     @Column(name = "terms_agreed", nullable = false)
-    @ColumnDefault("false")
+    @ColumnDefault("true")
     private boolean termsAgreed;
 
     @Column(name = "privacy_agreed", nullable = false)
-    @ColumnDefault("false")
+    @ColumnDefault("true")
     private boolean privacyAgreed;
 
     @Column(name = "consent_agreed_at", nullable = false)

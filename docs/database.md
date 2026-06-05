@@ -78,8 +78,8 @@
 | `nationality` | VARCHAR(10) | NOT NULL | 국적 코드 (KR, VN, PH 등) |
 | `language` | VARCHAR(10) | NOT NULL | 주 사용 언어 (BCP 47 소문자, 예: "vi") |
 | `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | 인증 배지 여부. `user_verifications` APPROVED 시 true로 반영(엔티티 `Member.isVerified` 반영 완료). |
-| `terms_agreed` | BOOLEAN | NOT NULL, DEFAULT FALSE | 이용약관 동의 여부(가입 시 필수 동의 — 명세 auth §2). DTO `@AssertTrue`로 강제되어 신규 가입은 항상 true. |
-| `privacy_agreed` | BOOLEAN | NOT NULL, DEFAULT FALSE | 개인정보 처리방침 동의 여부(가입 시 필수 동의 — 명세 auth §2). |
+| `terms_agreed` | BOOLEAN | NOT NULL, DEFAULT TRUE | 이용약관 동의 여부(가입 시 필수 동의 — 명세 auth §2). DTO `@AssertTrue`로 강제되어 신규 가입은 항상 true. 기본값 TRUE = 기존 행은 동의로 백필. |
+| `privacy_agreed` | BOOLEAN | NOT NULL, DEFAULT TRUE | 개인정보 처리방침 동의 여부(가입 시 필수 동의 — 명세 auth §2). |
 | `consent_agreed_at` | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 약관 동의 시각(동의 증적). 가입 시 채움. |
 | `bio` | VARCHAR(200) | NULL | 자기소개(한 줄, 마이페이지 입력, 선택값) |
 | `created_at` | DATETIME | NOT NULL | |
@@ -93,11 +93,11 @@
 > 행을 백필하며 ADD COLUMN 하지만, **운영/스테이징은 `ddl-auto`를 쓰지 않으므로** 아래 수동 ALTER가 필요하다:
 > ```sql
 > ALTER TABLE members
->   ADD COLUMN terms_agreed      BOOLEAN  NOT NULL DEFAULT FALSE,
->   ADD COLUMN privacy_agreed    BOOLEAN  NOT NULL DEFAULT FALSE,
+>   ADD COLUMN terms_agreed      BOOLEAN  NOT NULL DEFAULT TRUE,
+>   ADD COLUMN privacy_agreed    BOOLEAN  NOT NULL DEFAULT TRUE,
 >   ADD COLUMN consent_agreed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;
 > ```
-> (기존 회원은 동의 미수집분이므로 false/마이그레이션 시각으로 백필되며, 신규 가입은 항상 명시값 true·동의 시각으로 저장된다.)
+> (기존 회원은 동의 상태(TRUE)·마이그레이션 시각으로 백필하고, 신규 가입은 항상 명시값 true·동의 시각으로 저장된다.)
 
 ### `user_verifications`
 > 신분증 인증. APPROVED 시 `members.is_verified = TRUE`. **member 내부 테이블 → `user_id`는 BIGINT FK 유지.**
