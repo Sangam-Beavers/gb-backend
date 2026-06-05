@@ -10,6 +10,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
@@ -52,6 +53,19 @@ public class Wallet extends BaseEntity {
         this.publicId = publicId;
         this.userPublicId = userPublicId;
         this.status = status != null ? status : WalletStatus.ACTIVE;
+    }
+
+    /**
+     * 신규 지갑을 만든다. 신분증 인증(이슈 #152)이 통과되면 이 팩토리로 사용자당 1개의 지갑이 개설된다.
+     * {@code publicId}는 UUID로 자동 생성, 상태는 ACTIVE로 시작한다. 사용자당 1개 보장은 DB
+     * {@code wallets.user_public_id UNIQUE} 제약 + Service의 멱등 처리(존재하면 그대로 반환)로 한다.
+     */
+    public static Wallet create(String userPublicId) {
+        return Wallet.builder()
+                .publicId(UUID.randomUUID().toString())
+                .userPublicId(userPublicId)
+                .status(WalletStatus.ACTIVE)
+                .build();
     }
 
     /** 송금 PIN이 설정돼 있는지. */

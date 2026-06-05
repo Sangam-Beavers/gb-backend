@@ -175,7 +175,7 @@
 
 > **AUTH4005 중복 해소(확정):** 본래 `AUTH4005`가 "Google 인증 실패"와 "리프레시 토큰 만료" 양쪽에 쓰였다. 리프레시 토큰 계열(`AUTH4004` 무효 / `AUTH4005` 만료)이 시드 번호(`AUTH4001~4003`) 다음 번호를 의도적으로 먼저 점유했으므로 **고정**하고, 나중에 끌어다 쓴 **Google 인증 실패를 신규 `AUTH4006`으로 분리**한다. (한 번 확정한 번호는 재배치 금지)
 >
-> ⚠️ `AUTH4004`는 본래 "이메일 인증 미완료(로그인, 403)"와 "유효하지 않은 리프레시 토큰(재발급, 401)" 두 의미가 겹쳐 있었으나, **가입 인증 이메일 기능 제거로 "이메일 인증 미완료(403)" 의미는 폐기**됐다. 따라서 `AUTH4004`는 **"유효하지 않은 리프레시 토큰(401)" 단일 코드로 확정**한다(번호 재배치·삭제 금지, CLAUDE §6). 분리용으로 점유했던 `AUTH4007`은 분리 계획 폐기로 더 이상 필요 없어 **(예약) 미사용**으로 남긴다. 현재 인증 미구현 단계라 두 코드 모두 사용처는 없다.
+> ⚠️ `AUTH4004`는 본래 "이메일 인증 미완료(로그인, 403)"와 "유효하지 않은 리프레시 토큰(재발급, 401)" 두 의미가 겹쳐 있었으나, **가입 인증 이메일 기능 제거로 "이메일 인증 미완료(403)" 의미는 폐기**됐다. 따라서 `AUTH4004`는 **"유효하지 않은 리프레시 토큰(401)" 단일 코드로 확정**한다(번호 재배치·삭제 금지, CLAUDE §6). 분리용으로 점유했던 `AUTH4007`은 분리 계획 폐기로 더 이상 필요 없어 **(예약) 미사용**으로 남긴다.
 
 ### 회원 (MEMBER)
 | code | HTTP | 의미 |
@@ -356,13 +356,7 @@ com.gb.common
 - 인증 실패(JWT 누락/무효) 에러 코드는 **`AUTH4011`**(common-security `RestAuthenticationEntryPoint`가 처리), 권한 없음은 `COMMON4031`을 재사용한다(도메인 인증 코드 신설 금지).
 - 각 `api-spec.md`의 "Auth ✅" 표기는 인증이 필요한 엔드포인트라는 의미다.
 
-> **적용 현황:** member · wallet · community = 적용 완료. **document-service만 아직 헤더 임시처리**(`@RequestHeader("X-User-Public-Id")` + TODO)이며, 동일 패턴으로 후속 전환 예정. document 컨트롤러를 만질 때만 아래 임시 형태가 남아있다:
->
-> ```java
-> // TODO: 인증 전환 후 JWT claim(public_id) 추출(@CurrentUserPublicId)로 교체.
-> //       현재는 헤더(X-User-Public-Id)로 임시 수신.
-> @RequestHeader("X-User-Public-Id") String userPublicId
-> ```
+> **적용 현황:** member · wallet · community · document **전 서비스 적용 완료.** 모든 컨트롤러는 `@CurrentUserPublicId String userPublicId` 로 본인 식별자를 받으며, `@RequestHeader("X-User-Public-Id")` 임시 처리는 더 이상 사용하지 않는다.
 
 ---
 
