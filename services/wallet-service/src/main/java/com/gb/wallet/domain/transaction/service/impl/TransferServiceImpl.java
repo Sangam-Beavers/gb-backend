@@ -653,15 +653,14 @@ public class TransferServiceImpl implements TransferService {
      *
      * <p>송금 확인증은 격식 있는 영수증 문서라 본명({@link MemberInfo#name})을 사용한다(닉네임이 아님).
      *
-     * <p><b>fail-open:</b> MemberClient 장애·timeout이 본업(송금/확인증 응답)을 막지 않도록, 어떤 예외라도
-     * 잡아 {@code null}을 반환한다. 외부 의존 장애 시 receiverName이 null로 저장되며, 송금 자체는 정상
-     * 진행한다. MockMemberClient는 fallback {@code "Unknown"}까지 반환하므로 일반적으로 null이 나오지
-     * 않지만, 운영 RealMemberClient 도입 후 HTTP 장애·5xx 응답을 흡수하는 안전망이다.
+     * <p><b>조회 실패 = null(명세 §7-1):</b> 원장({@code receiver_name}/{@code sender_name})에 영속되는
+     * 값이라 {@link MemberClient#findMember}(원장용 — 미존재·장애·JWT 부재 = empty, 폴백 객체 없음)를
+     * 쓴다. 표시용 {@code getMember}의 fail-open 폴백("Unknown")을 여기서 쓰면 가짜 이름이 원장에
+     * 박제된다. findMember는 예외를 던지지 않지만, 방어적으로 한 번 더 흡수해 본업(송금/확인증)을 지킨다.
      */
     private String fetchMemberNameSafe(String userPublicId) {
         try {
-            MemberInfo info = memberClient.getMember(userPublicId);
-            return info != null ? info.name() : null;
+            return memberClient.findMember(userPublicId).map(MemberInfo::name).orElse(null);
         } catch (RuntimeException e) {
             log.warn("MemberClient 조회 실패 — name=null 처리. user={}", userPublicId, e);
             return null;

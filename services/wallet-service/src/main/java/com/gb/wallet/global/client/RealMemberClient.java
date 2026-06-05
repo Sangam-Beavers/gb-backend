@@ -103,6 +103,38 @@ public class RealMemberClient implements MemberClient {
         return result;
     }
 
+    @Override
+    public Optional<MemberInfo> findMember(String userPublicId) {
+        // 원장 저장용 — fallback 객체를 만들지 않는다. 성공 히트만 present, 미존재·장애·JWT 부재는 empty
+        // (예외 없음: 확인증/등록 본업은 이름 없이도 진행돼야 하고, 가짜 문자열("Unknown")이 영속되면 안 된다).
+        String bearerToken = currentJwtBearer();
+        if (bearerToken == null) {
+            log.warn("[RealMemberClient] SecurityContext에 JWT가 없어 원장용 표시정보를 조회하지 못했습니다. user_public_id={}",
+                    userPublicId);
+            return Optional.empty();
+        }
+        try {
+            DisplayInfoEnvelope envelope = restClient.get()
+                    .uri(memberApiBaseUrl + "/api/v1/members/display-info?public_ids={ids}", userPublicId)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + bearerToken)
+                    .retrieve()
+                    .body(DisplayInfoEnvelope.class);
+            if (envelope != null && envelope.data() != null && envelope.data().members() != null) {
+                for (MemberDisplayPayload member : envelope.data().members()) {
+                    if (userPublicId.equals(member.publicId())) {
+                        return Optional.of(new MemberInfo(member.publicId(), null, member.name(),
+                                member.nickname(), member.nationality(), member.isVerified()));
+                    }
+                }
+            }
+            return Optional.empty(); // 미존재·탈퇴(응답 배열에서 제외) — 이름 없음으로 처리.
+        } catch (RuntimeException e) {
+            log.warn("[RealMemberClient] display-info(원장용) 호출 실패 — empty 처리. user_public_id={}, msg={}",
+                    userPublicId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
     /** chunk 1개를 호출해 성공분만 result에 덮어쓴다. 실패는 fail-open(해당 chunk 전원 fallback 유지). */
     private void fetchChunkInto(Map<String, MemberInfo> result, List<String> chunk, String bearerToken) {
         try {

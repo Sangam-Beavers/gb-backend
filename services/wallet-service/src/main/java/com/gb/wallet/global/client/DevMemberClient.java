@@ -93,6 +93,13 @@ public class DevMemberClient implements MemberClient {
     }
 
     @Override
+    public Optional<MemberInfo> findMember(String userPublicId) {
+        // 원장 저장용 — fixture 히트는 present, 미스는 Real에 위임(미존재·장애·JWT 부재 = empty, 폴백 객체 없음).
+        MemberInfo fixture = FIXTURES.get(userPublicId);
+        return fixture != null ? Optional.of(fixture) : delegate.findMember(userPublicId);
+    }
+
+    @Override
     public Optional<MemberInfo> findByEmail(String email) {
         // fixture 이메일 히트(대소문자 무시 — 기존 Mock 동작 유지)는 즉시 반환, 미스는 Real에 위임.
         // 위임 결과가 empty면 진짜 "없는 회원"(404 MEMBER4001)이고, 장애는 Real이 COMMON5000으로

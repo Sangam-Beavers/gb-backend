@@ -200,15 +200,15 @@ class TransferServiceImplExecuteTest {
         stubBalanceLocks(sender, receiver, senderBalance, receiverBalance);
         stubTransactionSaveAndAuditLog();
         given(objectMapper.writeValueAsString(any())).willReturn("{}");
-        given(memberClient.getMember(RECEIVER_USER))
-                .willReturn(new MemberInfo(RECEIVER_USER, "r@example.com", "수취인본명", "닉", "VN", true));
+        given(memberClient.findMember(RECEIVER_USER))
+                .willReturn(Optional.of(new MemberInfo(RECEIVER_USER, "r@example.com", "수취인본명", "닉", "VN", true)));
 
         service.execute(SENDER_USER, KEY, request("10000.0000"));
 
-        // 핵심: getMember(외부 HTTP)가 분산락 획득보다 *먼저* 호출된다 — 락은 그 뒤에 잡히고 FOR UPDATE는
+        // 핵심: findMember(외부 HTTP)가 분산락 획득보다 *먼저* 호출된다 — 락은 그 뒤에 잡히고 FOR UPDATE는
         //   다시 그 안에서 일어나므로, 외부 HTTP가 락/FOR UPDATE 보유 구간 밖이라는 것이 증명된다(wallet-transfer-2).
         InOrder inOrder = Mockito.inOrder(memberClient, distributedLockHelper);
-        inOrder.verify(memberClient).getMember(RECEIVER_USER);
+        inOrder.verify(memberClient).findMember(RECEIVER_USER);
         inOrder.verify(distributedLockHelper).tryLockTwoWallets(SENDER_WALLET_ID, RECEIVER_WALLET_ID);
         // 조회한 본명이 Transaction에 snapshot됐는지 확인(락 밖 조회값이 그대로 전달됨).
         ArgumentCaptor<Transaction> txCaptor = ArgumentCaptor.forClass(Transaction.class);
@@ -231,7 +231,7 @@ class TransferServiceImplExecuteTest {
         stubBalanceLocks(sender, receiver, senderBalance, receiverBalance);
         stubTransactionSaveAndAuditLog();
         given(objectMapper.writeValueAsString(any())).willReturn("{}");
-        given(memberClient.getMember(RECEIVER_USER)).willThrow(new RuntimeException("member-service down"));
+        given(memberClient.findMember(RECEIVER_USER)).willThrow(new RuntimeException("member-service down"));
 
         TransferExecuteResponse response = service.execute(SENDER_USER, KEY, request("10000.0000"));
 

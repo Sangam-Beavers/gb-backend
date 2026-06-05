@@ -56,6 +56,12 @@ public class MockMemberClient implements MemberClient {
     }
 
     @Override
+    public Optional<MemberInfo> findMember(String userPublicId) {
+        // 원장 저장용 계약 — fixture 히트만 present, 미존재는 empty(폴백 객체 없음).
+        return Optional.ofNullable(FIXTURES.get(userPublicId));
+    }
+
+    @Override
     public Optional<MemberInfo> findByEmail(String email) {
         // FIXTURES 규모가 작아 선형 탐색으로 충분. 운영용 구현은 별도 인덱스/캐시 필요 없음 — 실제 호출은 HTTP.
         return FIXTURES.values().stream()

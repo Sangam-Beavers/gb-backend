@@ -34,10 +34,22 @@ public interface MemberClient {
     Map<String, MemberInfo> getMembers(Collection<String> userPublicIds);
 
     /**
+     * 회원 정보 조회 — <b>원장(ledger) 저장용</b>. 성공 시 present, 미존재·장애·인증 컨텍스트 부재 시
+     * {@link Optional#empty()}를 반환한다(예외를 던지지 않음 — 호출 측 본업을 막지 않는 점은 fail-open과 동일).
+     *
+     * <p>{@link #getMember}와 달리 fallback 객체("Unknown")를 만들지 않는 이유: 확인증
+     * {@code transactions.receiver_name}/{@code sender_name}·정기송금 snapshot처럼 <b>영속되는 값</b>의
+     * 공급원에서 폴백 문자열이 오면 가짜 이름이 원장에 박제된다(명세 §7-1은 "조회 실패 시 null 저장" 계약).
+     * 표시 시점에 즉석 폴백해도 되는 화면용 조회는 {@link #getMember}/{@link #getMembers}를 그대로 쓴다.
+     */
+    Optional<MemberInfo> findMember(String userPublicId);
+
+    /**
      * 이메일로 회원 정보 조회. 미존재 시 {@link Optional#empty()}.
      *
      * <p>{@link #getMember}와 달리 fallback을 쓰지 않는 이유: 이 메서드는 "앱 사용자 유효성 검증"
      * 용도라 "없으면 없다"고 명확히 알려야 호출 측에서 MEMBER_NOT_FOUND로 변환할 수 있다.
+     * (없음=empty가 같아 보여도 {@link #findMember}와 장애 정책이 다르다 — 이쪽은 장애 시 COMMON5000 fail-fast.)
      */
     Optional<MemberInfo> findByEmail(String email);
 }

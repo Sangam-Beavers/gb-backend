@@ -145,6 +145,62 @@ class RealMemberClientTest {
         f.server().verify();
     }
 
+    // ----- findMember (원장 저장용 — 폴백 객체 없음, empty) -----
+
+    @Test
+    @DisplayName("findMember: 히트는 present — 6필드 매핑(email=null) + JWT 릴레이")
+    void findMember_히트_present() {
+        authenticateWithJwt();
+        Fixture f = fixture();
+        String body = """
+                { "success": true,
+                  "data": { "members": [
+                    { "public_id": "%s", "name": "Nguyen Thi Linh", "nickname": "Linh",
+                      "nationality": "VN", "is_verified": true } ] },
+                  "message": "ok" }
+                """.formatted(USER_ID);
+        f.server().expect(requestTo(BASE_URL + "/api/v1/members/display-info?public_ids=" + USER_ID))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN))
+                .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+        assertThat(f.client().findMember(USER_ID)).contains(
+                new MemberInfo(USER_ID, null, "Nguyen Thi Linh", "Linh", "VN", true));
+    }
+
+    @Test
+    @DisplayName("findMember: 미존재·탈퇴는 empty — 'Unknown' 폴백 객체를 만들지 않는다(원장에 가짜 이름 영속 방지)")
+    void findMember_미존재_empty() {
+        authenticateWithJwt();
+        Fixture f = fixture();
+        String body = """
+                { "success": true, "data": { "members": [] }, "message": "ok" }
+                """;
+        f.server().expect(requestTo(startsWith(BASE_URL + "/api/v1/members/display-info")))
+                .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+        assertThat(f.client().findMember(USER_ID)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("findMember: 5xx 장애도 예외 없이 empty — 호출 측은 name=null로 저장하고 본업 진행(명세 §7-1)")
+    void findMember_5xx_empty() {
+        authenticateWithJwt();
+        Fixture f = fixture();
+        f.server().expect(requestTo(startsWith(BASE_URL + "/api/v1/members/display-info")))
+                .andRespond(withServerError());
+
+        assertThat(f.client().findMember(USER_ID)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("findMember: SecurityContext에 JWT가 없으면 HTTP 호출 없이 empty")
+    void findMember_JWT부재_호출없이_empty() {
+        Fixture f = fixture();
+
+        assertThat(f.client().findMember(USER_ID)).isEmpty();
+        f.server().verify(); // 어떤 요청도 발생하지 않음
+    }
+
     // ----- getMembers (배치, 표시용 = fail-open) -----
 
     @Test

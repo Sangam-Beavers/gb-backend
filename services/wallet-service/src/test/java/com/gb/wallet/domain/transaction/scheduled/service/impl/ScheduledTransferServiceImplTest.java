@@ -42,6 +42,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -111,8 +112,8 @@ class ScheduledTransferServiceImplTest {
     void create_INTERNAL_정상() {
         given(walletRepository.findByUserPublicId(RECEIVER))
                 .willReturn(Optional.of(wallet(10L, RECEIVER)));
-        given(memberClient.getMember(RECEIVER))
-                .willReturn(new MemberInfo(RECEIVER, "r@example.com", "Nguyen Thi Linh", "Linh", "VN", true));
+        given(memberClient.findMember(RECEIVER))
+                .willReturn(Optional.of(new MemberInfo(RECEIVER, "r@example.com", "Nguyen Thi Linh", "Linh", "VN", true)));
         Mockito.lenient().when(nextRunDateCalculator.calculate(any(), anyInt())).thenReturn(FIXED_NEXT);
         given(scheduledTransferRepository.save(any(ScheduledTransfer.class)))
                 .willAnswer(inv -> stamp(inv.getArgument(0)));
@@ -123,6 +124,24 @@ class ScheduledTransferServiceImplTest {
         assertThat(resp.frequency()).isEqualTo("WEEKLY");
         // TX-PIN: INTERNAL 정기송금 설정도 standing-order 게이트를 통과해야 한다(게이트는 유형 분기 이후 공용 1회).
         verify(transferPinGate).requireVerified(SENDER);
+    }
+
+    @Test
+    @DisplayName("create INTERNAL: findMember가 empty(미존재·장애)면 receiver_name=null로 저장 — 'Unknown' 문자열을 snapshot에 박지 않는다(§7-1)")
+    void create_INTERNAL_member조회실패_snapshot_null() {
+        given(walletRepository.findByUserPublicId(RECEIVER))
+                .willReturn(Optional.of(wallet(10L, RECEIVER)));
+        given(memberClient.findMember(RECEIVER)).willReturn(Optional.empty()); // 장애·미존재
+        Mockito.lenient().when(nextRunDateCalculator.calculate(any(), anyInt())).thenReturn(FIXED_NEXT);
+        given(scheduledTransferRepository.save(any(ScheduledTransfer.class)))
+                .willAnswer(inv -> stamp(inv.getArgument(0)));
+
+        service.create(SENDER, internalReq(TransferFrequency.WEEKLY.name(), 3));
+
+        ArgumentCaptor<ScheduledTransfer> captor = ArgumentCaptor.forClass(ScheduledTransfer.class);
+        verify(scheduledTransferRepository).save(captor.capture());
+        // 등록 자체는 성공(이름 없이도 본업 진행), snapshot은 null — 폴백 문자열 영속 금지.
+        assertThat(captor.getValue().getReceiverName()).isNull();
     }
 
     @Test

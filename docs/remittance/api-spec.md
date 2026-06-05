@@ -346,7 +346,7 @@ INTERNAL_TRANSFER는 송신자/수신자 두 잔액 행을 동시에 잠그므�
 | 필드 | 타입 | nullable | 설명 |
 | --- | --- | --- | --- |
 | `public_id` | string | N | 거래 식별자(UUID) |
-| `sender_name` | string | N | 송금인 본명. 요청자(JWT `public_id`)의 회원 본명. MemberClient 조회 |
+| `sender_name` | string | Y | 송금인 본명. 요청자(JWT `public_id`)의 회원 본명. MemberClient 조회 — 장애·미존재 시 null(폴백 문자열 미사용, §7-1 receiver_name과 동일 정책) |
 | `receiver_name` | string | Y | 수취인 본명. INTERNAL은 수신자 본명(MemberClient 장애 시 null), REMITTANCE는 계좌 등록 시 verify 응답으로 받은 예금주(컬럼 추가 전 등록된 구 계좌면 null) |
 | `bank_name` | string | Y | 수취 은행명. REMITTANCE만 값 있음, INTERNAL은 null |
 | `account_number` | string | Y | 수취 계좌번호(마스킹). REMITTANCE만 값 있음, INTERNAL은 null |

@@ -118,6 +118,7 @@ class TransferServiceTest {
         // N+1 회귀 가드: 수신자 표시 정보는 배치 1회(getMembers)로만 — 건별 getMember 호출 금지.
         verify(memberClient, times(1)).getMembers(List.of("linh-uuid", "maria-uuid"));
         verify(memberClient, never()).getMember(anyString());
+        verify(memberClient, never()).findMember(anyString());
 
         assertThat(response.getReceivers())
                 .as("순서(Linh→Maria) + 모든 필드 매핑 검증. lastTransferredAt은 ISO 8601 UTC Z 문자열")
@@ -488,9 +489,9 @@ class TransferServiceTest {
                 "Nguyen Thi Linh", null);
 
         given(transactionRepository.findByPublicIdWithWallet(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
-        given(memberClient.getMember(SENDER_PUBLIC_ID)).willReturn(
+        given(memberClient.findMember(SENDER_PUBLIC_ID)).willReturn(Optional.of(
                 new MemberInfo(SENDER_PUBLIC_ID, "sender@example.com",
-                        "Sangam Beavers", "Sangam", "KR", true));
+                        "Sangam Beavers", "Sangam", "KR", true)));
 
         var resp = transferService.getReceipt(SENDER_PUBLIC_ID, TX_PUBLIC_ID);
 
@@ -514,9 +515,9 @@ class TransferServiceTest {
 
         given(transactionRepository.findByPublicIdWithWallet(TX_PUBLIC_ID)).willReturn(Optional.of(tx));
         given(bankAccountRepository.findWithBankById(99L)).willReturn(Optional.of(ba));
-        given(memberClient.getMember(SENDER_PUBLIC_ID)).willReturn(
+        given(memberClient.findMember(SENDER_PUBLIC_ID)).willReturn(Optional.of(
                 new MemberInfo(SENDER_PUBLIC_ID, "sender@example.com",
-                        "Sangam Beavers", "Sangam", "KR", true));
+                        "Sangam Beavers", "Sangam", "KR", true)));
 
         var resp = transferService.getReceipt(SENDER_PUBLIC_ID, TX_PUBLIC_ID);
 

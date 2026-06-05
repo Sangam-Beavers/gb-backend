@@ -61,6 +61,17 @@ class DevMemberClientTest {
     }
 
     @Test
+    @DisplayName("findMember: fixture 히트는 present, 미스는 Real에 위임(empty 그대로 — 폴백 객체 없음)")
+    void findMember_fixture_히트_미스_위임() {
+        DevMemberClient client = new DevMemberClient(delegate);
+        given(delegate.findMember(REAL_USER)).willReturn(Optional.empty());
+
+        assertThat(client.findMember(LINH)).isPresent();      // fixture 히트
+        assertThat(client.findMember(REAL_USER)).isEmpty();   // 위임 — 미존재·장애 = empty
+        verify(delegate).findMember(REAL_USER);
+    }
+
+    @Test
     @DisplayName("getMembers: fixture 히트는 분리하고 미스만 모아 Real에 1회 배치 위임 후 merge(계약: 모든 요청 id 키 포함)")
     void getMembers_fixture_분리_미스만_배치위임() {
         DevMemberClient client = new DevMemberClient(delegate);
