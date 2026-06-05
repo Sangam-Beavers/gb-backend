@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -28,10 +29,12 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -55,6 +58,14 @@ class CommentServiceTest {
     @Mock private PostRepository postRepository;
     @Mock private MemberClient memberClient;
     @InjectMocks private CommentServiceImpl service;
+
+    @BeforeEach
+    void injectSelf() {
+        // 생성자 주입(@RequiredArgsConstructor)에선 @InjectMocks가 비-final self 필드를 채우지 않아 null.
+        // 단위 테스트는 프록시 없이 service 자신을 박아 createComment→createCommentTx 위임 체인을 그대로 탄다
+        // (@Transactional은 단위 테스트에서 no-op — wallet BankAccountServiceTest와 동일 처리).
+        ReflectionTestUtils.setField(service, "self", service);
+    }
 
     private static final String USER = "00000000-0000-0000-0000-000000000001";
     private static final String OTHER = "00000000-0000-0000-0000-000000000002";
@@ -206,6 +217,26 @@ class CommentServiceTest {
                 .isEqualTo(CommunityErrorCode.POST_NOT_FOUND);
 
         verifyNoInteractions(commentRepository, memberClient);
+    }
+
+    @Test
+    @DisplayName("createComment hoist(10D community-1): DB 본문(INSERT·count 증가)이 끝난 뒤에야 MemberClient를 호출하고, 회원 조회 실패가 본문을 막지 않는다")
+    void createComment_member조회는_tx본문_이후() {
+        // 외부 HTTP(MemberClient)가 쓰기 tx + posts 행 락 안에서 호출되지 않도록 분리한 구조의 회귀 가드:
+        // ① 호출 순서 save→incrementCommentCount→getMember, ② getMember가 던져도 save/increment는 이미 수행됨
+        //    (실제 커밋·롤백은 단위 범위 밖 — 프록시 tx가 분리돼 있어 본문 커밋은 보존된다).
+        Post post = post(PID);
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(commentRepository.save(any(Comment.class))).willAnswer(inv -> inv.getArgument(0));
+        given(memberClient.getMember(USER)).willThrow(new RuntimeException("member-service down"));
+
+        assertThatThrownBy(() -> service.createComment(PID, USER, createRequest("내용")))
+                .isInstanceOf(RuntimeException.class);
+
+        InOrder order = inOrder(commentRepository, postRepository, memberClient);
+        order.verify(commentRepository).save(any(Comment.class));
+        order.verify(postRepository).incrementCommentCount(post.getId());
+        order.verify(memberClient).getMember(USER);
     }
 
     private CreateCommentRequest createRequest(String content) {

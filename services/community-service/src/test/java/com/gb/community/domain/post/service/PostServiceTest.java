@@ -24,6 +24,7 @@ import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -49,6 +50,14 @@ class PostServiceTest {
     @Mock private PostRepository postRepository;
     @Mock private MemberClient memberClient;
     @InjectMocks private PostServiceImpl service;
+
+    @BeforeEach
+    void injectSelf() {
+        // 생성자 주입(@RequiredArgsConstructor)에선 @InjectMocks가 비-final self 필드를 채우지 않아 null.
+        // 단위 테스트는 프록시 없이 service 자신을 박아 createPost→createPostTx 등 위임 체인을 그대로 탄다
+        // (@Transactional은 단위 테스트에서 no-op — wallet BankAccountServiceTest와 동일 처리).
+        ReflectionTestUtils.setField(service, "self", service);
+    }
 
     private static final String USER = "00000000-0000-0000-0000-000000000001";
     private static final String OTHER = "00000000-0000-0000-0000-000000000009";
