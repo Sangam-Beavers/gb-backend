@@ -128,6 +128,36 @@ class PostControllerTest {
     }
 
     @Test
+    @DisplayName("11D community-1 — POST 400: content 10,001자(@Size 초과) → COMMON4001, service 미호출(TEXT 컬럼 INSERT 전 차단)")
+    void create_content_상한초과() throws Exception {
+        mockMvc.perform(post("/api/v1/community/posts")
+                        .with(authedJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "category", "JOB",
+                                "title", "제목",
+                                "content", "가".repeat(10_001)))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(postService);
+    }
+
+    @Test
+    @DisplayName("11D community-1 — PATCH 400: content 10,001자(@Size 초과) → COMMON4001, service 미호출(작성과 동일 상한)")
+    void update_content_상한초과() throws Exception {
+        mockMvc.perform(patch("/api/v1/community/posts/{id}", PID)
+                        .with(authedJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "content", "가".repeat(10_001)))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(postService);
+    }
+
+    @Test
     @DisplayName("POST 401: 토큰 없음 → AUTH4011, service 미호출")
     void create_토큰_없음_401() throws Exception {
         mockMvc.perform(post("/api/v1/community/posts")

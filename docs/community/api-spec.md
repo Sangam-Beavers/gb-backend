@@ -68,8 +68,8 @@
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | `category` | string | O | LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION/FREE |
-| `title` | string | O | 제목 |
-| `content` | string | O | 본문 |
+| `title` | string | O | 제목 (1~255자) |
+| `content` | string | O | 본문 (1~10,000자 — 초과 시 COMMON4001. 컬럼 TEXT 한계 내 입력단 상한, 11D community-1) |
 
 **Response 201** — `data`
 | 필드 | 타입 | nullable | 설명 |
@@ -93,7 +93,7 @@
 ## 3. 게시글 단건 조회 / 수정 / 삭제 / 번역
 
 - 단건 조회: `GET /api/v1/community/posts/{id}` → 본문 + 작성자(닉네임/`author_is_verified`) + 카운트. 404 COMMUNITY4001.
-- 수정: `PATCH /api/v1/community/posts/{id}` (본인만, 403 COMMON4031)
+- 수정: `PATCH /api/v1/community/posts/{id}` (본인만, 403 COMMON4031. 부분 수정 — 전송 필드만 변경, title/content 상한은 §2와 동일)
 - 삭제: `DELETE /api/v1/community/posts/{id}` (soft delete, 본인만)
 - 번역 보기: `GET /api/v1/community/posts/{id}/translation?language={}` → `data: { translated_title, translated_content, translated_language }`
 

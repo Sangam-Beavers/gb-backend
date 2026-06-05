@@ -27,7 +27,12 @@ public class PostCreateRequest {
     @Size(max = 255)
     private String title;
 
-    @Schema(description = "본문", example = "베트남에서 온 외국인입니다. 같은 경험 있는 분 계시면 알려주세요.")
+    // 상한 10,000자(api-spec §2) — 컬럼이 TEXT(65,535바이트)라 무제한 입력이 INSERT 단계 500으로
+    // 떨어지는 것을 입력단 400(COMMON4001)으로 막는다(11D community-1). 10,000자는 한글(3바이트)
+    // 기준 30KB로, 4바이트 문자(이모지)가 섞여도 컬럼 한계 안이다.
+    @Schema(description = "본문 (1~10,000자)", example = "베트남에서 온 외국인입니다. 같은 경험 있는 분 계시면 알려주세요.",
+            maxLength = 10000)
     @NotBlank
+    @Size(max = 10000)
     private String content;
 }
