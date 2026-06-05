@@ -8,7 +8,8 @@ dependencies {
     // 방식 B: 외부 IdP가 발급한 JWT를 검증만 하는 "검표원"(Resource Server). issuer-uri로 JWKS 검증.
     implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    // data-redis 제거(미사용) — 조회수 Redis 카운터(database.md §7 계획) 도입 시 dev yml 설정과 함께 복원.
+    //   미사용인데 클래스패스에 있으면 actuator health가 Redis ping을 포함해 무관한 Redis 장애에 unhealthy가 된다.
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.kafka:spring-kafka'
