@@ -67,8 +67,8 @@
 | `nickname` | string | O | 닉네임 |
 | `nationality` | string | O | 국적 (ISO 3166-1 alpha-2, 예: "VN") |
 | `language` | string | O | 주 사용 언어 (BCP 47 소문자, 예: "vi") |
-| `terms_agreed` | boolean | O | 이용약관 동의 |
-| `privacy_agreed` | boolean | O | 개인정보 처리방침 동의 |
+| `terms_agreed` | boolean | △ | 이용약관 동의 (※ 임시: 프론트 미연동으로 **미전송 허용** — 미전송 시 백엔드가 동의 처리. 전송 시 `false`는 거부. 프론트 연동 후 필수(O)로 복구) |
+| `privacy_agreed` | boolean | △ | 개인정보 처리방침 동의 (terms_agreed와 동일 임시 정책) |
 
 **Response 201** — `data`: `{ "public_id": "...", "email": "user@example.com", "nickname": "..." }`
 message: "회원가입이 완료되었습니다."

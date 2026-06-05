@@ -60,6 +60,9 @@ class VerificationServiceImplTest {
                 .nationality("VN")
                 .language("vi")
                 .authProviderId("idp-sub")
+                .termsAgreed(true)
+                .privacyAgreed(true)
+                .consentAgreedAt(java.time.LocalDateTime.now())
                 .build();
     }
 

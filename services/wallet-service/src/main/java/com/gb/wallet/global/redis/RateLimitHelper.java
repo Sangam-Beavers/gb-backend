@@ -54,7 +54,10 @@ public class RateLimitHelper {
                     List.<Object>of(key),
                     String.valueOf(window.toMillis()));
             return count <= limit;
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // RuntimeException(RedisException 등)뿐 아니라 모든 예외를 fail-open으로 정규화한다 —
+            // 같은 패키지 PinVerificationStore의 best-effort catch(Exception)와 일관. rate-limit은 가용성
+            // 우선(throttle 실패가 보안 우회는 아님)이라 Redis 장애에 통과시킨다.
             log.warn("Rate-limit 카운터 접근 실패 — fail-open(통과). key={}", key, e);
             return true;
         }

@@ -2,6 +2,7 @@ package com.gb.member.domain.member.entity;
 
 import com.gb.member.global.common.entity.BaseEntity;
 import jakarta.persistence.*;
+import org.hibernate.annotations.ColumnDefault;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.AccessLevel;
@@ -46,6 +47,27 @@ public class Member extends BaseEntity {
     @Column(nullable = false)
     private String language;    // 주 사용 언어
 
+    // 약관 동의 증적(컴플라이언스). 가입 시 필수 동의를 받았다는 사실과 시각을 보관한다(명세 auth §2).
+    // 동의는 가입 단계에서 @AssertTrue로 강제되므로 저장 값은 항상 true이나, "언제 동의했는지"도 함께 남긴다.
+    // @ColumnDefault: ddl-auto:update가 기존 행이 있는 members 테이블에 NOT NULL 컬럼을 ADD할 때
+    //   DEFAULT가 없으면(특히 DATETIME) MySQL strict 모드에서 실패하므로 DB 기본값을 명시해 기존 행을 백필한다.
+    //   동의 컬럼의 기본값은 "동의(true)"로 둔다(신규 가입은 항상 빌더로 true를 명시하므로 기본값은
+    //   기존 행 마이그레이션 백필 전용 — 기존 회원을 동의 상태로 본다).
+    @Column(name = "terms_agreed", nullable = false)
+    @ColumnDefault("true")
+    private boolean termsAgreed;
+
+    @Column(name = "privacy_agreed", nullable = false)
+    @ColumnDefault("true")
+    private boolean privacyAgreed;
+
+    // 정밀도 주의: LocalDateTime은 MySQL datetime(6)로 매핑되므로 DEFAULT도 CURRENT_TIMESTAMP(6)이어야 한다.
+    //   정밀도 없는 CURRENT_TIMESTAMP를 쓰면 datetime(6)에 대해 MySQL이 error 1067로 거부하고,
+    //   ddl-auto:update가 그 ALTER를 조용히 삼켜 컬럼이 안 생긴다(신규 MySQL 배포 시 가입 INSERT 실패).
+    @Column(name = "consent_agreed_at", nullable = false)
+    @ColumnDefault("CURRENT_TIMESTAMP(6)")
+    private LocalDateTime consentAgreedAt;
+
     // 신분증 인증 배지 여부. user_verifications가 APPROVED 되면 true로 반영(database.md §members).
     // 기본 false(가입 직후 미인증). @Builder에는 포함하지 않아 inline 기본값이 유지된다.
     @Column(name = "is_verified", nullable = false)
@@ -73,7 +95,8 @@ public class Member extends BaseEntity {
     @Builder
     public Member(String publicId, String email, String name,
                   String nickname, String nationality, String language,
-                  String authProviderId) {
+                  String authProviderId,
+                  boolean termsAgreed, boolean privacyAgreed, LocalDateTime consentAgreedAt) {
         this.publicId = publicId;
         this.email = email;
         this.name = name;
@@ -81,6 +104,9 @@ public class Member extends BaseEntity {
         this.nationality = nationality;
         this.language = language;
         this.authProviderId = authProviderId;
+        this.termsAgreed = termsAgreed;
+        this.privacyAgreed = privacyAgreed;
+        this.consentAgreedAt = consentAgreedAt;
     }
 
     /**

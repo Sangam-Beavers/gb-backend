@@ -20,6 +20,7 @@ import com.gb.member.global.exception.code.MemberErrorCode;
 import com.gb.member.global.mail.EmailSender;
 import com.gb.member.global.redis.PasswordResetRateLimiter;
 import com.gb.member.global.redis.PasswordResetTokenStore;
+import java.time.LocalDateTime;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -70,6 +71,11 @@ public class MemberServiceImpl implements MemberService {
                     .nickname(request.getNickname())
                     .nationality(request.getNationality())
                     .language(request.getLanguage())
+                    // TODO(약관): 프론트 미연동 — 미전송(null)은 임시로 동의(true)로 처리한다(@AssertTrue가 명시 false는 차단).
+                    //   프론트가 동의 값을 전송하면 SignupRequest @NotNull 복구 + 아래 null 기본처리를 제거한다.
+                    .termsAgreed(request.getTermsAgreed() == null || request.getTermsAgreed())
+                    .privacyAgreed(request.getPrivacyAgreed() == null || request.getPrivacyAgreed())
+                    .consentAgreedAt(LocalDateTime.now())
                     .build());
         } catch (DataIntegrityViolationException race) {
             // 위 existsBy를 통과한 동시 가입 race가 email/nickname/publicId UNIQUE에 걸린 경우. 어느 제약인지
@@ -125,6 +131,11 @@ public class MemberServiceImpl implements MemberService {
                 .nationality(request.getNationality())
                 .language(request.getLanguage())
                 .authProviderId(authProviderId)
+                // TODO(약관): 이메일 가입과 동일 임시 정책 — 미전송(null)은 동의(true)로 처리한다(consent_agreed_at은 NOT NULL).
+                //   프론트 연동 후 SocialProfileRequest @NotNull 복구 + null 기본처리 제거.
+                .termsAgreed(request.getTermsAgreed() == null || request.getTermsAgreed())
+                .privacyAgreed(request.getPrivacyAgreed() == null || request.getPrivacyAgreed())
+                .consentAgreedAt(LocalDateTime.now())
                 .build();
 
         // saveAndFlush로 INSERT를 이 메서드 안에서 강제해, 위 existsBy를 통과한 동시 호출 race의 UNIQUE 위반

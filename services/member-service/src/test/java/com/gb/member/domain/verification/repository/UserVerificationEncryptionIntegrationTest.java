@@ -118,6 +118,9 @@ class UserVerificationEncryptionIntegrationTest {
                 .nationality("VN")
                 .language("vi")
                 .authProviderId(authProviderId)
+                .termsAgreed(true)
+                .privacyAgreed(true)
+                .consentAgreedAt(java.time.LocalDateTime.now())
                 .build();
         em.persist(member);
         return member;

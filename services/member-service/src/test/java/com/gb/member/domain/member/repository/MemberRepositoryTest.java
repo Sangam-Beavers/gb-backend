@@ -67,6 +67,9 @@ class MemberRepositoryTest {
                 .nationality("VN")
                 .language("vi")
                 .authProviderId("idp-" + publicId)
+                .termsAgreed(true)
+                .privacyAgreed(true)
+                .consentAgreedAt(java.time.LocalDateTime.now())
                 .build();
         em.persist(member);
         return member;
