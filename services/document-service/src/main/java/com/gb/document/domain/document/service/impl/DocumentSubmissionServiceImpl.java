@@ -10,6 +10,7 @@ import com.gb.document.domain.document.dto.response.SubmissionResponse;
 import com.gb.document.domain.document.entity.Document;
 import com.gb.document.domain.document.entity.DocumentResult;
 import com.gb.document.domain.document.entity.DocumentStatus;
+import com.gb.document.domain.document.entity.ProcessingStatus;
 import com.gb.document.domain.document.repository.DocumentRepository;
 import com.gb.document.domain.document.repository.DocumentResultRepository;
 import com.gb.document.domain.document.service.DocumentSubmissionService;
@@ -72,9 +73,35 @@ public class DocumentSubmissionServiceImpl implements DocumentSubmissionService 
     }
 
     @Override
+    @Transactional
     public DocumentStatusResponse getStatus(String userPublicId, String publicId) {
         Document document = loadOwned(userPublicId, publicId);
+        syncStatusFromResultIfArrived(document);
         return DocumentStatusResponse.from(document);
+    }
+
+    /**
+     * status가 ANALYZING인데 분석 결과가 이미 도착해 있으면 결과 기준으로 동기화한다(lazy-sync).
+     *
+     * <p>운영(production)은 SQS Consumer({@link AnalysisResultIngestServiceImpl})가 결과 저장과
+     * status 갱신을 함께 수행하지만, 개발(development) 경로는 Lambda B가 온프렘 MySQL에
+     * document_results만 직접 INSERT해 status가 ANALYZING으로 남을 수 있다(프론트 폴링이 끝나지
+     * 않는 원인 — 2026-06-05 실측). Lambda B에도 status 갱신을 추가했으나, 배포 시점 차이·운영
+     * Consumer 지연/유실에 대한 안전망으로 폴링 시점에 한 번 더 동기화한다.
+     * 매핑은 Consumer와 동일: FAILED→FAILED, COMPLETED/PARTIAL→COMPLETED.
+     */
+    private void syncStatusFromResultIfArrived(Document document) {
+        if (document.getStatus() != DocumentStatus.ANALYZING) {
+            return;
+        }
+        documentResultRepository.findBySubmission_PublicId(document.getPublicId())
+                .ifPresent(result -> {
+                    if (result.getProcessingStatus() == ProcessingStatus.FAILED) {
+                        document.markFailed();
+                    } else {
+                        document.markCompleted();
+                    }
+                });
     }
 
     @Override
