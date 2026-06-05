@@ -71,9 +71,10 @@ public class MemberServiceImpl implements MemberService {
                     .nickname(request.getNickname())
                     .nationality(request.getNationality())
                     .language(request.getLanguage())
-                    // 약관 동의 증적: 동의는 DTO @AssertTrue로 강제되므로 항상 true이나, 동의 사실과 시각을 함께 보관한다(명세 §2).
-                    .termsAgreed(request.getTermsAgreed())
-                    .privacyAgreed(request.getPrivacyAgreed())
+                    // TODO(약관): 프론트 미연동 — 미전송(null)은 임시로 동의(true)로 처리한다(@AssertTrue가 명시 false는 차단).
+                    //   프론트가 동의 값을 전송하면 SignupRequest @NotNull 복구 + 아래 null 기본처리를 제거한다.
+                    .termsAgreed(request.getTermsAgreed() == null || request.getTermsAgreed())
+                    .privacyAgreed(request.getPrivacyAgreed() == null || request.getPrivacyAgreed())
                     .consentAgreedAt(LocalDateTime.now())
                     .build());
         } catch (DataIntegrityViolationException race) {
@@ -130,9 +131,10 @@ public class MemberServiceImpl implements MemberService {
                 .nationality(request.getNationality())
                 .language(request.getLanguage())
                 .authProviderId(authProviderId)
-                // 소셜 가입도 약관 동의 증적을 남긴다(이메일 가입과 동일 — consent_agreed_at은 NOT NULL).
-                .termsAgreed(request.getTermsAgreed())
-                .privacyAgreed(request.getPrivacyAgreed())
+                // TODO(약관): 이메일 가입과 동일 임시 정책 — 미전송(null)은 동의(true)로 처리한다(consent_agreed_at은 NOT NULL).
+                //   프론트 연동 후 SocialProfileRequest @NotNull 복구 + null 기본처리 제거.
+                .termsAgreed(request.getTermsAgreed() == null || request.getTermsAgreed())
+                .privacyAgreed(request.getPrivacyAgreed() == null || request.getPrivacyAgreed())
                 .consentAgreedAt(LocalDateTime.now())
                 .build();
 

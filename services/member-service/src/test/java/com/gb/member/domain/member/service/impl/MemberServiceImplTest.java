@@ -82,8 +82,7 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", "gildong");
         ReflectionTestUtils.setField(request, "nationality", "VN");
         ReflectionTestUtils.setField(request, "language", "vi");
-        ReflectionTestUtils.setField(request, "termsAgreed", true);
-        ReflectionTestUtils.setField(request, "privacyAgreed", true);
+        // 약관 동의 필드는 일부러 미설정(null) — 프론트 미전송 상황을 본떠, Service가 동의로 처리하는지 검증한다.
 
         when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
@@ -133,8 +132,7 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", "gildong");
         ReflectionTestUtils.setField(request, "nationality", "VN");
         ReflectionTestUtils.setField(request, "language", "vi");
-        ReflectionTestUtils.setField(request, "termsAgreed", true);
-        ReflectionTestUtils.setField(request, "privacyAgreed", true);
+        // 약관 동의 필드는 일부러 미설정(null) — 프론트 미전송 상황을 본떠, Service가 동의로 처리하는지 검증한다.
 
         when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
@@ -182,8 +180,7 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", "gildong");
         ReflectionTestUtils.setField(request, "nationality", "VN");
         ReflectionTestUtils.setField(request, "language", "vi");
-        ReflectionTestUtils.setField(request, "termsAgreed", true);
-        ReflectionTestUtils.setField(request, "privacyAgreed", true);
+        // 약관 동의 필드는 일부러 미설정(null) — 프론트 미전송 상황을 본떠, Service가 동의로 처리하는지 검증한다.
         when(memberRepository.existsByEmail("race@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
         // 선검사는 통과했으나 커밋 전 saveAndFlush에서 동시 가입 race가 UNIQUE를 위반.
@@ -206,8 +203,7 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", nickname);
         ReflectionTestUtils.setField(request, "nationality", nationality);
         ReflectionTestUtils.setField(request, "language", language);
-        ReflectionTestUtils.setField(request, "termsAgreed", true);
-        ReflectionTestUtils.setField(request, "privacyAgreed", true);
+        // 약관 동의는 미설정(null) — 프론트 미전송 상황. Service가 동의로 처리해 저장 값이 true가 돼야 한다.
         return request;
     }
 

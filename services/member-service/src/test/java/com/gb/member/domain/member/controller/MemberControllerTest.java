@@ -113,10 +113,20 @@ class MemberControllerTest {
     }
 
     @Test
-    @DisplayName("POST /auth/register 400: terms_agreed 필드 누락(@NotNull 위반) → COMMON4001, service 미호출")
-    void register_약관_필드누락_400() throws Exception {
+    @DisplayName("(임시) POST /auth/register 201: terms/privacy 미전송(프론트 미연동)이어도 가입 성공 — 백엔드가 동의 처리")
+    void register_약관필드_미전송_임시동의_201() throws Exception {
+        given(memberService.signup(any())).willReturn(SignupResponse.builder()
+                .publicId("pub-1").email("new@example.com").nickname("gildong").build());
         Map<String, Object> body = validBody();
         body.remove("terms_agreed");
-        expectBadRequest(body);
+        body.remove("privacy_agreed");   // 프론트가 약관 필드를 아예 안 보내는 상황
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.success").value(true));
+
+        verify(memberService).signup(any());
     }
 }
