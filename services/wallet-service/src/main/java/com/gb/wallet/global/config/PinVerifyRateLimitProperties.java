@@ -12,7 +12,7 @@ import org.springframework.validation.annotation.Validated;
  * 무차별 대입 방어</b>라는 별개의 보안 관심사다. 같은 props를 공유하면 계좌-verify 정책을 조정할 때 PIN
  * throttle이 함께 바뀌어(의도치 않은 보안 약화) 위험하므로, 독립 정책으로 둔다.
  *
- * <p>미지정 시 compact 생성자에서 기본값(60초 윈도 / 10회)을 채운다. {@code @ConfigurationPropertiesScan}
+ * <p>미지정 시 compact 생성자에서 기본값(60초 윈도 / 5회 — 단기 잠금 임계와 동일)을 채운다. {@code @ConfigurationPropertiesScan}
  * (WalletServiceApplication)으로 자동 등록된다. {@code limit<=0}/{@code windowSeconds<=0}은
  * {@code @Min(1)}로 기동 시 fail-fast 한다(VerifyRateLimitProperties와 동일 사상).
  */

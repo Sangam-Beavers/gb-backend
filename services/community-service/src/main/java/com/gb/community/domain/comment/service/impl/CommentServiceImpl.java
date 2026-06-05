@@ -92,6 +92,9 @@ public class CommentServiceImpl implements CommentService {
         //   MockMemberClient는 미존재 시 fallback "Unknown" 반환하므로 null 우려 없음.
         //   실서비스 RealMemberClient 도입 후 HTTP 장애 시 BusinessException 가능 — 그 경우에도 댓글
         //   INSERT는 이미 커밋돼 보존된다(표시 정보 실패가 본문 쓰기를 롤백하지 않음).
+        // TODO(RealMemberClient 전환 시): 본문은 커밋됐는데 응답만 5xx면 클라 재시도가 중복 댓글을
+        //   쌓는다(댓글엔 멱등 키 없음). 전환 이슈에서 표시 정보 실패를 fallback(예: "Unknown")으로
+        //   degrade해 2xx로 성공시키거나, 멱등 키/단시간 dedup 도입을 함께 결정할 것.
         MemberInfo author = memberClient.getMember(userPublicId);
 
         // postPublicId는 URL 경로의 식별자 그대로 — createCommentTx가 같은 값으로 활성 글을 검증했다.

@@ -36,8 +36,8 @@
 | 내 프로필 조회 | GET | `/api/v1/members/me` | ✅ |
 | 프로필 수정 | PATCH | `/api/v1/members/me` | ✅ |
 | 프로필 사진 변경 (※ 미구현) | PATCH | `/api/v1/members/me/profile-image` | ✅ |
-| 인증 상태 조회 (※ 미구현) | GET | `/api/v1/members/me/verification` | ✅ |
-| 신분증 인증 요청 (※ 미구현) | POST | `/api/v1/members/me/verification` | ✅ |
+| 인증 상태 조회 | GET | `/api/v1/members/me/verification` | ✅ |
+| 신분증 인증 요청 | POST | `/api/v1/members/me/verification` | ✅ |
 | 언어 설정 조회 | GET | `/api/v1/members/me/language` | ✅ |
 | 언어 설정 변경 | PATCH | `/api/v1/members/me/language` | ✅ |
 | 탈퇴 | DELETE | `/api/v1/members/me` | ✅ |

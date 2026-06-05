@@ -40,7 +40,7 @@
 | # | 도메인 | 테이블 | 핵심 역할 |
 | --- | --- | --- | --- |
 | 1 | member | `members` | 회원 기본 정보 |
-| 2 | member | `user_verifications` | 신분증 인증 → 인증 배지 근거 (엔티티 미구현·계획) |
+| 2 | member | `user_verifications` | 신분증 인증 → 인증 배지 근거 (엔티티 반영 완료 — 데모 즉시 APPROVED) |
 | 3 | wallet | `banks` | 은행 마스터 (Beaver/Quokka Bank 포함) |
 | 4 | wallet | `wallets` | 사용자 주머니 메타 |
 | 5 | wallet | `wallet_balances` | 통화별 잔액 (캐시 금지) |

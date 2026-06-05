@@ -113,7 +113,10 @@ throw new BusinessException(WalletErrorCode.WALLET_NOT_FOUND);
 | COMMON4011 | 401 | 인증 정보가 유효하지 않습니다. (호환 유지 — 신규는 AUTH4011) |
 | COMMON4031 | 403 | 접근 권한이 없습니다. |
 | COMMON4041 | 404 | 존재하지 않는 리소스입니다. |
+| COMMON4051 | 405 | 허용되지 않은 HTTP 메서드입니다. |
+| COMMON4061 | 406 | 응답할 수 없는 Accept 형식입니다. |
 | COMMON4091 | 409 | 이미 존재하는 리소스입니다. |
+| COMMON4151 | 415 | 지원하지 않는 요청 본문 형식입니다. |
 | COMMON4221 | 422 | 처리할 수 없는 요청입니다. |
 | COMMON4291 | 429 | 요청 횟수를 초과했습니다. |
 | COMMON5000 | 500 | 서버 오류가 발생했습니다. (미처리 예외 전부) |
