@@ -6,6 +6,7 @@ import com.gb.wallet.domain.transaction.service.RemittanceAttemptWriter;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -52,7 +53,7 @@ public class RemittanceAttemptWriterImpl implements RemittanceAttemptWriter {
                     .bankAccountId(bankAccountId)
                     .amount(amount)
                     .currencyCode(currency)
-                    .attemptedAt(LocalDateTime.now())
+                    .attemptedAt(LocalDateTime.now(ZoneOffset.UTC))
                     .build());
         } catch (DataIntegrityViolationException concurrentAttempt) {
             // 같은 idempotency_key로 다른 트랜잭션이 먼저 흔적을 남겼다 → 흔적은 존재하므로 무시.

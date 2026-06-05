@@ -21,6 +21,7 @@ import com.gb.member.global.mail.EmailSender;
 import com.gb.member.global.redis.PasswordResetRateLimiter;
 import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -75,7 +76,7 @@ public class MemberServiceImpl implements MemberService {
                     //   프론트가 동의 값을 전송하면 SignupRequest @NotNull 복구 + 아래 null 기본처리를 제거한다.
                     .termsAgreed(request.getTermsAgreed() == null || request.getTermsAgreed())
                     .privacyAgreed(request.getPrivacyAgreed() == null || request.getPrivacyAgreed())
-                    .consentAgreedAt(LocalDateTime.now())
+                    .consentAgreedAt(LocalDateTime.now(ZoneOffset.UTC))
                     .build());
         } catch (DataIntegrityViolationException race) {
             // 위 existsBy를 통과한 동시 가입 race가 email/nickname/publicId UNIQUE에 걸린 경우. 어느 제약인지
@@ -135,7 +136,7 @@ public class MemberServiceImpl implements MemberService {
                 //   프론트 연동 후 SocialProfileRequest @NotNull 복구 + null 기본처리 제거.
                 .termsAgreed(request.getTermsAgreed() == null || request.getTermsAgreed())
                 .privacyAgreed(request.getPrivacyAgreed() == null || request.getPrivacyAgreed())
-                .consentAgreedAt(LocalDateTime.now())
+                .consentAgreedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
 
         // saveAndFlush로 INSERT를 이 메서드 안에서 강제해, 위 existsBy를 통과한 동시 호출 race의 UNIQUE 위반

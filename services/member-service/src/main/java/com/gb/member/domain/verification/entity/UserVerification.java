@@ -16,6 +16,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
@@ -95,7 +96,7 @@ public class UserVerification extends BaseEntity {
                 .documentNumber(documentNumber)
                 .s3Key(s3Key)
                 .status(VerificationStatus.APPROVED)
-                .reviewedAt(LocalDateTime.now())
+                .reviewedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
     }
 }

@@ -12,6 +12,7 @@ import com.gb.document.domain.document.entity.DocumentStatus;
 import com.gb.document.domain.document.repository.DocumentRepository;
 import com.gb.document.global.config.AnalysisProperties;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -56,9 +57,10 @@ class StaleSubmissionSweeperTest {
                 eq(DocumentStatus.ANALYZING), any(LocalDateTime.class)))
                 .willReturn(List.of());
 
-        LocalDateTime before = LocalDateTime.now().minusMinutes(TIMEOUT_MINUTES);
+        // sweeper의 임계 계산이 UTC(10D 시각 통일 — audited updated_at과 동일 축)이므로 기대값도 UTC로 잡는다.
+        LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(TIMEOUT_MINUTES);
         sweeper().sweepStaleSubmissions();
-        LocalDateTime after = LocalDateTime.now().minusMinutes(TIMEOUT_MINUTES);
+        LocalDateTime after = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(TIMEOUT_MINUTES);
 
         ArgumentCaptor<LocalDateTime> cap = ArgumentCaptor.forClass(LocalDateTime.class);
         verify(documentRepository).findAllByStatusAndUpdatedAtBefore(

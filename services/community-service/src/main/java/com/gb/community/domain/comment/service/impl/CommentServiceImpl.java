@@ -14,6 +14,7 @@ import com.gb.community.global.client.MemberClient;
 import com.gb.community.global.client.MemberInfo;
 import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
@@ -148,7 +149,7 @@ public class CommentServiceImpl implements CommentService {
         //     같은 댓글을 동시에 삭제하는 두 요청은 행 락으로 직렬화돼 패자는 affected==0을 받는다. 반환값이
         //     1일 때만 comment_count를 감소시켜 과차감을 막는다(post unlike의 affected-row 게이트 미러링, COM1
         //     회귀). entity softDelete()는 행 가드가 없어 동시 중복 삭제 시 둘 다 통과·둘 다 -1 되므로 쓰지 않는다.
-        int affected = commentRepository.softDeleteByPublicId(commentPublicId, LocalDateTime.now());
+        int affected = commentRepository.softDeleteByPublicId(commentPublicId, LocalDateTime.now(ZoneOffset.UTC));
         if (affected == 0) {
             return; // 다른 트랜잭션이 이미 삭제(멱등 no-op) — comment_count를 감소시키지 않는다.
         }

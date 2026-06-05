@@ -92,6 +92,7 @@
 - 응답 필드에서 식별자는 `public_id`로 명명. 벤더 접두사(`tx-`, `ex_`, `qt_` 등) 붙이지 않는다.
 - **통화 필드는 `_code` 접미사**: `currency_code`, `from_currency_code`, `to_currency_code`, `receive_currency_code`, `fee_currency_code`
 - **시각은 ISO 8601 UTC `Z`**: `"2026-05-25T12:00:00Z"`
+  - **저장(DATETIME 컬럼)도 UTC 기준으로 캡처한다** — JPA Auditing은 각 서비스 JpaConfig의 `utcDateTimeProvider`, 비감사 캡처는 `LocalDateTime.now(ZoneOffset.UTC)`로 통일(4서비스 공통, 10D member-core-4·community-3). 직렬화의 "저장값 = UTC" 간주가 JVM 기본존과 무관하게 항상 참이 되게 한다. 예외: 정기송금 영업일(`next_run_date` 등 LocalDate)은 사용자 체감 실행일 정책으로 의도적 KST(`NextRunDateCalculator.ZONE_KST`).
 - 액션이 필요하면 동사를 마지막에: `/transfers/{id}/execute`, `/members/check-email`
   - ❌ URL에 동사 앞세우기: `/getWallet`, `/cancelTransfer`
 - **JSON 필드는 snake_case.** 단, DTO 자바 필드는 **camelCase로 두고** 전역 설정으로 변환한다. 필드마다 `@JsonProperty`를 붙이지 않는다.
