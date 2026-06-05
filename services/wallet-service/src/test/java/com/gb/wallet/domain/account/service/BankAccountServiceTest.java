@@ -183,7 +183,7 @@ class BankAccountServiceTest {
     // --- registerAccount (분산락 래퍼) ---
 
     @Test
-    @DisplayName("registerAccount: 락 획득 성공 시 findByCode·inquiry(락 밖) 후 self.registerAccountLocked에 위임하고 락을 해제한다")
+    @DisplayName("registerAccount: 락 획득 성공 시 findByCode·inquiry·verify(락 밖) 후 self.registerAccountLocked에 위임하고 락을 해제한다")
     void registerAccount_락획득_위임_후_해제() {
         RegisterAccountRequest request = registerRequest("004", "1234567890", "tok-abc");
         Bank bank = bank("004", "KB국민은행");
@@ -191,37 +191,40 @@ class BankAccountServiceTest {
         RLock lock = lock();
         given(bankRepository.findByCode("004")).willReturn(Optional.of(bank));
         given(bankClient.inquiry("004", "1234567890")).willReturn(new AccountHolder("홍길동"));
+        given(bankClient.verify("004", "1234567890", "홍길동")).willReturn(new AccountToken("tok-server"));
         given(distributedLockHelper.tryLock(REGISTER_LOCK_KEY)).willReturn(lock);
-        given(self.registerAccountLocked(eq(USER_PUBLIC_ID), eq(request), eq(bank), eq("홍길동")))
+        given(self.registerAccountLocked(eq(USER_PUBLIC_ID), eq(request), eq(bank), eq("홍길동"), eq("tok-server")))
                 .willReturn(expected);
 
         AccountResponse result = service.registerAccount(USER_PUBLIC_ID, request);
 
         assertThat(result).isSameAs(expected);
-        verify(self).registerAccountLocked(USER_PUBLIC_ID, request, bank, "홍길동");
+        verify(self).registerAccountLocked(USER_PUBLIC_ID, request, bank, "홍길동", "tok-server");
         verify(lock).unlock();
     }
 
     @Test
-    @DisplayName("F1(ACC1 회귀): inquiry(동기 HTTP)는 분산락 획득 '이전'에 호출된다 — 락 안에 외부호출이 없다")
+    @DisplayName("F1(ACC1 회귀): inquiry·verify(동기 HTTP)는 분산락 획득 '이전'에 호출된다 — 락 안에 외부호출이 없다")
     void registerAccount_inquiry_락_밖에서_먼저_호출_F1() {
         RegisterAccountRequest request = registerRequest("004", "1234567890", "tok-abc");
         Bank bank = bank("004", "KB국민은행");
         given(bankRepository.findByCode("004")).willReturn(Optional.of(bank));
         given(bankClient.inquiry("004", "1234567890")).willReturn(new AccountHolder("홍길동"));
+        given(bankClient.verify("004", "1234567890", "홍길동")).willReturn(new AccountToken("tok-server"));
         RLock lock = lock();
         given(distributedLockHelper.tryLock(REGISTER_LOCK_KEY)).willReturn(lock);
-        given(self.registerAccountLocked(eq(USER_PUBLIC_ID), eq(request), eq(bank), eq("홍길동")))
+        given(self.registerAccountLocked(eq(USER_PUBLIC_ID), eq(request), eq(bank), eq("홍길동"), eq("tok-server")))
                 .willReturn(stubAccountResponse());
 
         service.registerAccount(USER_PUBLIC_ID, request);
 
-        // 락 lease(5s) < bank read-timeout(10s)이라, inquiry가 락 안에 있으면 lease 만료 창에 2번째 등록이
-        // 끼어 다중 주계좌가 생긴다(ACC1). inquiry가 tryLock '이전'임을 호출 순서로 단언해 회귀를 막는다.
-        // (실제 동시 race는 락이 stub이라 H2로 재현 불가 — 호출 순서 단언으로 갈음.)
+        // 락 lease(5s) < bank read-timeout(10s)이라, 외부호출이 락 안에 있으면 lease 만료 창에 2번째 등록이
+        // 끼어 다중 주계좌가 생긴다(ACC1). inquiry·verify(charge-3 토큰 재발급)가 모두 tryLock '이전'임을
+        // 호출 순서로 단언해 회귀를 막는다. (실제 동시 race는 락이 stub이라 H2로 재현 불가 — 호출 순서 단언으로 갈음.)
         InOrder order = inOrder(bankRepository, bankClient, distributedLockHelper);
         order.verify(bankRepository).findByCode("004");
         order.verify(bankClient).inquiry("004", "1234567890");
+        order.verify(bankClient).verify("004", "1234567890", "홍길동");
         order.verify(distributedLockHelper).tryLock(REGISTER_LOCK_KEY);
     }
 
@@ -238,18 +241,20 @@ class BankAccountServiceTest {
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(CommonErrorCode.INTERNAL_SERVER_ERROR);
 
-        // 길이 선검사는 락 획득 이전 → 락도 등록 본문(self.registerAccountLocked)도 진입하지 않는다.
+        // 길이 선검사는 verify(토큰 재발급)·락 획득 이전 → 셋 다 진입하지 않는다.
+        verify(bankClient, never()).verify(any(), any(), any());
         verify(distributedLockHelper, never()).tryLock(REGISTER_LOCK_KEY);
-        verify(self, never()).registerAccountLocked(any(), any(), any(), any());
+        verify(self, never()).registerAccountLocked(any(), any(), any(), any(), any());
     }
 
     @Test
     @DisplayName("registerAccount: 락 획득 실패(tryLock=null)면 COMMON5031(503), 등록 본문 미진입")
     void registerAccount_락실패_COMMON5031() {
         RegisterAccountRequest request = registerRequest("004", "1234567890", "tok-abc");
-        // F1: findByCode·inquiry는 락 밖에서 먼저 끝난 뒤 tryLock에서 실패한다.
+        // F1: findByCode·inquiry·verify는 락 밖에서 먼저 끝난 뒤 tryLock에서 실패한다.
         given(bankRepository.findByCode("004")).willReturn(Optional.of(bank("004", "KB국민은행")));
         given(bankClient.inquiry("004", "1234567890")).willReturn(new AccountHolder("홍길동"));
+        given(bankClient.verify("004", "1234567890", "홍길동")).willReturn(new AccountToken("tok-server"));
         given(distributedLockHelper.tryLock(REGISTER_LOCK_KEY)).willReturn(null);
 
         assertThatThrownBy(() -> service.registerAccount(USER_PUBLIC_ID, request))
@@ -258,7 +263,7 @@ class BankAccountServiceTest {
                 .isEqualTo(CommonErrorCode.SERVICE_UNAVAILABLE);
 
         // 락 획득 실패는 등록 본문(self.registerAccountLocked) 미진입 — bank_accounts는 손대지 않는다.
-        verify(self, never()).registerAccountLocked(any(), any(), any(), any());
+        verify(self, never()).registerAccountLocked(any(), any(), any(), any(), any());
         verifyNoInteractions(bankAccountRepository);
     }
 
@@ -277,15 +282,17 @@ class BankAccountServiceTest {
         given(bankAccountRepository.saveAndFlush(any(BankAccount.class)))
                 .willAnswer(invocation -> invocation.getArgument(0));
 
-        // bank·holderName은 락 밖(registerAccount)에서 확정돼 파라미터로 전달된다(F1).
-        AccountResponse response = service.registerAccountLocked(USER_PUBLIC_ID, request, bank, "홍길동");
+        // bank·holderName·accountToken은 락 밖(registerAccount)에서 확정돼 파라미터로 전달된다(F1·charge-3).
+        AccountResponse response = service.registerAccountLocked(USER_PUBLIC_ID, request, bank, "홍길동", "tok-server");
 
         ArgumentCaptor<BankAccount> captor = ArgumentCaptor.forClass(BankAccount.class);
         verify(bankAccountRepository).saveAndFlush(captor.capture());
         BankAccount saved = captor.getValue();
         assertThat(saved.getUserPublicId()).isEqualTo(USER_PUBLIC_ID);
         assertThat(saved.getAccountNumber()).isEqualTo("1234567890");
-        assertThat(saved.getMockAccountToken()).isEqualTo("tok-abc");
+        assertThat(saved.getMockAccountToken())
+                .as("charge-3: 클라 토큰(tok-abc)이 아니라 호출자가 verify 재발급으로 확정한 토큰 저장")
+                .isEqualTo("tok-server");
         assertThat(saved.getHolderName()).as("F1: 호출자가 넘긴 은행 권위 예금주명 저장").isEqualTo("홍길동");
         assertThat(saved.isPrimary()).as("첫 계좌면 자동 true").isTrue();
         assertThat(saved.isActive()).isTrue();
@@ -315,7 +322,7 @@ class BankAccountServiceTest {
         given(bankAccountRepository.saveAndFlush(any(BankAccount.class)))
                 .willAnswer(invocation -> invocation.getArgument(0));
 
-        service.registerAccountLocked(USER_PUBLIC_ID, request, bank, "홍길동");
+        service.registerAccountLocked(USER_PUBLIC_ID, request, bank, "홍길동", "tok-server");
 
         ArgumentCaptor<BankAccount> captor = ArgumentCaptor.forClass(BankAccount.class);
         verify(bankAccountRepository).saveAndFlush(captor.capture());
@@ -333,13 +340,13 @@ class BankAccountServiceTest {
                 USER_PUBLIC_ID, "004", "1234567890")).willReturn(true);
 
         assertThatThrownBy(() -> service.registerAccountLocked(
-                USER_PUBLIC_ID, request, bank("004", "KB국민은행"), "홍길동"))
+                USER_PUBLIC_ID, request, bank("004", "KB국민은행"), "홍길동", "tok-server"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(AccountErrorCode.ACCOUNT_ALREADY_REGISTERED);
 
         verify(bankAccountRepository, never()).saveAndFlush(any());
-        verifyNoInteractions(bankClient); // 등록 본문엔 외부호출이 없다(inquiry는 락 밖 registerAccount에서 끝남)
+        verifyNoInteractions(bankClient); // 등록 본문엔 외부호출이 없다(inquiry·verify는 락 밖 registerAccount에서 끝남)
     }
 
     @Test
@@ -352,18 +359,46 @@ class BankAccountServiceTest {
 
         given(bankRepository.findByCode("004")).willReturn(Optional.of(bank));
         given(bankClient.inquiry("004", "1234567890")).willReturn(new AccountHolder("진짜예금주"));
+        given(bankClient.verify(eq("004"), eq("1234567890"), any())).willReturn(new AccountToken("tok-server"));
         RLock lock = lock();
         given(distributedLockHelper.tryLock(REGISTER_LOCK_KEY)).willReturn(lock);
-        given(self.registerAccountLocked(eq(USER_PUBLIC_ID), eq(request), eq(bank), any()))
+        given(self.registerAccountLocked(eq(USER_PUBLIC_ID), eq(request), eq(bank), any(), any()))
                 .willReturn(stubAccountResponse());
 
         service.registerAccount(USER_PUBLIC_ID, request);
 
         ArgumentCaptor<String> holderCaptor = ArgumentCaptor.forClass(String.class);
-        verify(self).registerAccountLocked(eq(USER_PUBLIC_ID), eq(request), eq(bank), holderCaptor.capture());
+        verify(self).registerAccountLocked(eq(USER_PUBLIC_ID), eq(request), eq(bank), holderCaptor.capture(), any());
         assertThat(holderCaptor.getValue())
                 .as("클라 입력(위조된이름) 무시, 은행 권위 예금주명 전달")
                 .isEqualTo("진짜예금주");
+    }
+
+    @Test
+    @DisplayName("charge-3: registerAccount는 클라 토큰이 아니라 은행 verify 재호출로 서버가 발급받은 토큰을 등록 본문에 넘긴다(바인딩 보장)")
+    void registerAccount_accountToken_서버_재발급_전달() {
+        // 클라가 위조/타 계좌의 account_token을 보내도 무시하고, 서버가 (은행 권위 예금주명으로) verify를
+        // 재호출해 직접 발급받은 토큰을 registerAccountLocked로 넘긴다 — 토큰-계좌 바인딩 보장(charge-3).
+        RegisterAccountRequest request = registerRequest("004", "1234567890", "forged-token");
+        Bank bank = bank("004", "KB국민은행");
+
+        given(bankRepository.findByCode("004")).willReturn(Optional.of(bank));
+        given(bankClient.inquiry("004", "1234567890")).willReturn(new AccountHolder("홍길동"));
+        given(bankClient.verify("004", "1234567890", "홍길동")).willReturn(new AccountToken("tok-server"));
+        RLock lock = lock();
+        given(distributedLockHelper.tryLock(REGISTER_LOCK_KEY)).willReturn(lock);
+        given(self.registerAccountLocked(eq(USER_PUBLIC_ID), eq(request), eq(bank), any(), any()))
+                .willReturn(stubAccountResponse());
+
+        service.registerAccount(USER_PUBLIC_ID, request);
+
+        ArgumentCaptor<String> tokenCaptor = ArgumentCaptor.forClass(String.class);
+        verify(self).registerAccountLocked(eq(USER_PUBLIC_ID), eq(request), eq(bank), any(), tokenCaptor.capture());
+        assertThat(tokenCaptor.getValue())
+                .as("클라 토큰(forged-token) 무시, 서버 verify 재발급 토큰 전달")
+                .isEqualTo("tok-server");
+        // verify는 은행 권위 예금주명(inquiry 결과)으로 호출돼야 한다 — 정상 계좌면 항상 통과.
+        verify(bankClient).verify("004", "1234567890", "홍길동");
     }
 
     @Test
@@ -377,7 +412,7 @@ class BankAccountServiceTest {
                 .willThrow(new DataIntegrityViolationException("uk_bank_accounts_user_bank_acct_active"));
 
         assertThatThrownBy(() -> service.registerAccountLocked(
-                USER_PUBLIC_ID, request, bank("004", "KB국민은행"), "홍길동"))
+                USER_PUBLIC_ID, request, bank("004", "KB국민은행"), "홍길동", "tok-server"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(AccountErrorCode.ACCOUNT_ALREADY_REGISTERED);
@@ -394,9 +429,9 @@ class BankAccountServiceTest {
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
 
-        // B안 보장: 잘못된 은행코드는 은행 inquiry·분산락 이전에 차단된다(불필요한 외부호출/락 없음).
+        // B안 보장: 잘못된 은행코드는 은행 inquiry·verify·분산락 이전에 차단된다(불필요한 외부호출/락 없음).
         verifyNoInteractions(bankClient, distributedLockHelper);
-        verify(self, never()).registerAccountLocked(any(), any(), any(), any());
+        verify(self, never()).registerAccountLocked(any(), any(), any(), any(), any());
         verify(bankAccountRepository, never()).saveAndFlush(any());
     }
 

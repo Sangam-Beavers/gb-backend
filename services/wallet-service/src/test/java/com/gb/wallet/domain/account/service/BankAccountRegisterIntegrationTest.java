@@ -17,6 +17,7 @@ import com.gb.wallet.domain.account.repository.BankRepository;
 import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.dto.AccountHolder;
+import com.gb.wallet.global.client.dto.AccountToken;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.redis.DistributedLockHelper;
 import java.util.List;
@@ -80,6 +81,10 @@ class BankAccountRegisterIntegrationTest {
 
         // WACC-05: register는 예금주명을 은행 inquiry 권위 값으로 채운다. Mock 은행은 "홍길동"을 돌려준다.
         given(bankClient.inquiry(anyString(), anyString())).willReturn(new AccountHolder("홍길동"));
+
+        // charge-3: register는 클라 토큰을 신뢰하지 않고 은행 verify를 재호출해 서버 발급 토큰을 저장한다.
+        given(bankClient.verify(anyString(), anyString(), anyString()))
+                .willReturn(new AccountToken("tok-server"));
     }
 
     @AfterEach
@@ -110,7 +115,9 @@ class BankAccountRegisterIntegrationTest {
         BankAccount saved = persisted.get(0);
         assertThat(saved.getUserPublicId()).isEqualTo(USER);
         assertThat(saved.getAccountNumber()).isEqualTo("1234567890");
-        assertThat(saved.getMockAccountToken()).as("verify 토큰이 DB에 저장").isEqualTo("tok-001");
+        assertThat(saved.getMockAccountToken())
+                .as("charge-3: 클라 토큰(tok-001)이 아니라 서버가 verify 재호출로 발급받은 토큰이 DB에 저장")
+                .isEqualTo("tok-server");
         assertThat(saved.getHolderName()).as("예금주명이 DB에 저장").isEqualTo("홍길동");
         assertThat(saved.isPrimary()).as("첫 계좌 자동 주계좌").isTrue();
         assertThat(saved.isActive()).isTrue();

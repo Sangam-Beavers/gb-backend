@@ -114,6 +114,26 @@ class ScheduledTransferControllerTest {
     }
 
     @Test
+    @DisplayName("POST /transfers/scheduled 400: amount 정수부 14자리 초과 → COMMON4001, 서비스 미호출 (잔액 게이트 없는 INSERT의 overflow 500 차단)")
+    void create_amount_정수부_14자리_초과_COMMON4001() throws Exception {
+        // 예약송금 생성은 잔액 게이트 없이 INSERT하므로, DECIMAL(18,4) 초과 금액(정수 15자리)이
+        // DataIntegrityViolation→500으로 떨어지던 실제 경로다. @Pattern \d{1,14}가 400으로 차단하는지
+        // 회귀 고정한다(10D wallet-transfer-2의 구체 재현 경로).
+        Map<String, Object> body = validBody();
+        body.put("amount", "999999999999999.0000");
+
+        mockMvc.perform(post("/api/v1/transfers/scheduled")
+                        .with(authedJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verify(scheduledTransferService, never()).create(any(), any());
+    }
+
+    @Test
     @DisplayName("POST /transfers/scheduled 401: 토큰 없음 → AUTH4011, 서비스 미호출")
     void create_토큰없음_401() throws Exception {
         mockMvc.perform(post("/api/v1/transfers/scheduled")

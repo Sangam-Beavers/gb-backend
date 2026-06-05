@@ -21,6 +21,8 @@ management:
 wallet:
   charge:
     single-limit: 10000000   # 단일 거래 충전 한도(KRW). 초과 시 ACCOUNT4007(명세 §12)
+  exchange:
+    fee-rate: 0.005          # 환전 수수료율(KRW 환산액 기준, 임시 정책 — 운영 확정 시 교체). 미지정 시 ExchangeProperties 기본값(0.5%)
   account:
     # 계좌 인증(verify) rate-limit. 사용자(public_id) 단위 고정 윈도(WACC-02). 미지정 시 VerifyRateLimitProperties 기본값(60s/10회).
     verify-rate-limit:

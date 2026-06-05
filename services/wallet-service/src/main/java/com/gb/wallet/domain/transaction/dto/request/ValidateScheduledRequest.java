@@ -46,11 +46,13 @@ public record ValidateScheduledRequest(
                 example = "7g8h9i0j-1234-5678-90ab-cdef12345678", nullable = true)
         String bankAccountPublicId,
 
-        @Schema(description = "회차당 송금액 (string 십진수, 소수점 최대 4자리, 양수)", example = "500000.0000")
+        @Schema(description = "회차당 송금액 (string 십진수, 정수부 최대 14자리·소수점 최대 4자리, 양수)", example = "500000.0000")
         @NotBlank
         // 양수 십진수만 통과: 0, 0.0, 0.0000 차단(부정형 lookahead). 메시지의 "positive" 계약과 일치.
-        @Pattern(regexp = "^(?!0+(\\.0{1,4})?$)\\d+(\\.\\d{1,4})?$",
-                message = "amount must be a positive decimal with up to 4 fractional digits")
+        // 정수부 ≤14자리 — DECIMAL(18,4) 초과 금액이 500(DataIntegrity)이 아닌 COMMON4001(400)로
+        // 떨어지게 상한을 둔다(ChargeRequest @Digits(integer=14)와 동일 기준).
+        @Pattern(regexp = "^(?!0+(\\.0{1,4})?$)\\d{1,14}(\\.\\d{1,4})?$",
+                message = "amount must be a positive decimal with up to 14 integer and 4 fractional digits")
         String amount,
 
         @Schema(description = "출금 통화 코드", example = "KRW")

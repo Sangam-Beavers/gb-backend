@@ -37,6 +37,7 @@ import com.gb.wallet.global.common.enums.ExchangeType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.common.enums.WalletStatus;
+import com.gb.wallet.global.config.ExchangeProperties;
 import com.gb.wallet.global.exception.code.ExchangeErrorCode;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
@@ -46,6 +47,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -82,6 +84,13 @@ class ExchangeServiceImplTest {
     @InjectMocks private ExchangeServiceImpl exchangeService;
 
     private static final String USER = "user-uuid-1";
+
+    @BeforeEach
+    void injectProperties() {
+        // exchangeProperties는 대응 @Mock이 없어 생성자 주입 시 null → 견적 수수료 계산에서 NPE.
+        // 실제 객체로 기본값(0.5%)을 박아 기존 단언(수수료 0.5% 기준)을 유지한다(BankAccountServiceTest 동일 패턴).
+        ReflectionTestUtils.setField(exchangeService, "exchangeProperties", new ExchangeProperties(null));
+    }
 
     // ───────────────────── 지원 통화 목록 ─────────────────────
 

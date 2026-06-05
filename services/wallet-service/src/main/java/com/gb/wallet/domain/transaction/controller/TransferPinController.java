@@ -58,6 +58,10 @@ public class TransferPinController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409", description = "COMMON4091 - 이미 송금 PIN이 설정되어 있습니다.",
                     content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "422", description = "WALLET4003 - 비활성 지갑입니다. (status≠ACTIVE 시 PIN 설정 차단, WTX-05)",
+                    content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ApiResponse<Void> setPin(
