@@ -6,7 +6,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
@@ -16,7 +15,9 @@ import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequ
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
 
 /**
- * 운영(!dev)용 — AWS SDK v2 {@link S3Presigner}로 실제 Pre-signed PUT URL을 발급한다.
+ * 전 프로파일 공통 — AWS SDK v2 {@link S3Presigner}로 실제 Pre-signed PUT URL을 발급한다.
+ * dev도 진짜 URL을 발급해 업로드→Lambda→온프렘 MySQL E2E를 검증한다(Mock 구현 제거됨).
+ * 발급 시점에 AWS 자격증명이 필요하다(dev/로컬은 AWS_PROFILE 또는 환경변수).
  *
  * <p>{@link PutObjectRequest#metadata(Map)}로 S3 오브젝트 메타데이터를 주입한다. 발급된 URL로
  * 사용자가 파일을 PUT 업로드하면 S3가 메타데이터를 오브젝트에 박고, Lambda A가 그 메타데이터를 읽어
@@ -28,7 +29,6 @@ import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignReques
  * 담아 호출 측이 응답으로 클라이언트에 내려줄 수 있게 한다(host는 HTTP 클라이언트가 자동 설정하므로 제외).
  */
 @Component
-@Profile("!dev")
 @RequiredArgsConstructor
 public class RealS3PresignedUrlClient implements S3PresignedUrlClient {
 

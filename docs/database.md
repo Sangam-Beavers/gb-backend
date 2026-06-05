@@ -309,8 +309,9 @@
 | `analysis_document_type` | VARCHAR(30) | NOT NULL | LABOR_CONTRACT/PAYSLIP/EMPLOYMENT_CONTRACT |
 | `file_name` | VARCHAR(255) | NOT NULL | 원본 파일명 |
 | `status` | VARCHAR(20) | NOT NULL, DEFAULT 'ANALYZING' | ANALYZING/COMPLETED/FAILED |
+| `s3_key` | VARCHAR(512) | NULL | 제출 시 발급한 원본 S3 키(`original/{날짜}/{public_id}/{파일명}`). retry가 재사용(날짜로 재조립하면 제출일과 다른 날 retry 시 키가 어긋남). 컬럼 도입 이전 행은 NULL — created_at 날짜로 복원 |
 | `created_at` | DATETIME | NOT NULL | |
-| `updated_at` | DATETIME | NOT NULL | |
+| `updated_at` | DATETIME | NOT NULL | ANALYZING 고아 건 정리 스케줄러(StaleSubmissionSweeper)의 판정 기준 — 임계(기본 30분) 초과 시 FAILED 처리 |
 
 ### `document_results`
 > 분석 완료 결과 메타 **+ 분석 내용(직접 저장)**. submission과 1:1.

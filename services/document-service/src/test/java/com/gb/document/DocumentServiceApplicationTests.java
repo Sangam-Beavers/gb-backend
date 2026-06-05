@@ -11,8 +11,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 /**
  * 스프링 컨텍스트 로딩 sanity 테스트.
  *
- * <p>test 프로파일에서는 dev/!dev 어디에도 해당하지 않으므로 Mock/Real 클라이언트 빈이 자동 등록되지 않는다.
- * Service가 의존하는 외부 클라이언트는 {@link MockitoBean}으로 채워 컨텍스트가 뜨도록 한다(CLAUDE.md §10).
+ * <p>외부(AWS) 클라이언트는 {@link MockitoBean}으로 대체해 실제 호출 없이 컨텍스트가 뜨도록 한다
+ * (CLAUDE.md §10). S3PresignedUrlClient는 전 프로파일 공통 Real 구현이지만 presign은 호출 시점에만
+ * 자격증명을 요구하므로 컨텍스트 로딩에는 영향이 없고, 여기서는 mock으로 덮는다.
  *
  * <p>방식 B(검표원) 보안 설정은 issuer-uri로 외부 IdP의 JWKS를 받아 {@link JwtDecoder}를 만든다.
  * 테스트엔 실제 IdP가 없으므로 {@code JwtDecoder}를 {@link MockitoBean}으로 대체해 외부 호출을 막는다

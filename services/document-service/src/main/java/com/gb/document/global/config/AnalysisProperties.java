@@ -19,6 +19,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param consumerQueueName        결과 수신 큐 이름 — stage는 {@code gb-analysis-results-stage},
  *                                 prod는 {@code gb-analysis-results-prod}. dev는 빈 값(consumerEnabled=false).
  *                                 큐 URL이 아니라 <b>이름</b>이다(spring-cloud-aws가 URL을 resolve).
+ * @param staleTimeoutMinutes      ANALYZING으로 이 시간(분) 넘게 머문 건을 정리 스케줄러가 FAILED 처리.
+ *                                 기본 30분 — 업로드 URL TTL(10분) + 분석 소요(수 분)보다 넉넉해야 한다.
+ *                                 {@code StaleSubmissionSweeper} 참고.
  */
 @ConfigurationProperties(prefix = "gb.analysis")
 public record AnalysisProperties(
@@ -29,7 +32,8 @@ public record AnalysisProperties(
         int uploadUrlExpiresSeconds,
         String awsRegion,
         boolean consumerEnabled,
-        String consumerQueueName
+        String consumerQueueName,
+        int staleTimeoutMinutes
 ) {
     /** production 계열(stage/prod)에서만 result_queue_arn을 S3 메타데이터에 주입한다. */
     public boolean isProductionSource() {

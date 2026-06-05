@@ -58,17 +58,27 @@ public class Document extends BaseEntity {
     @Column(name = "status", length = 20, nullable = false)
     private DocumentStatus status;
 
+    /**
+     * 제출 시 발급한 Pre-signed URL의 S3 오브젝트 키({@code original/{날짜}/{publicId}/{파일명}}).
+     * retry 시 키를 날짜로 재조립하면 제출일과 다른 날 retry할 때 키가 어긋나므로(원본 미일치 버그)
+     * 발급 시점의 키를 그대로 저장해 재사용한다. 도입 이전 행은 null — 조회 측에서 createdAt 날짜로 복원.
+     */
+    @Column(name = "s3_key", length = 512)
+    private String s3Key;
+
     @Builder
     private Document(String publicId,
                      String userPublicId,
                      AnalysisDocumentType analysisDocumentType,
                      String fileName,
-                     DocumentStatus status) {
+                     DocumentStatus status,
+                     String s3Key) {
         this.publicId = publicId;
         this.userPublicId = userPublicId;
         this.analysisDocumentType = analysisDocumentType;
         this.fileName = fileName;
         this.status = status != null ? status : DocumentStatus.ANALYZING;
+        this.s3Key = s3Key;
     }
 
     /** SQS Consumer가 분석 성공 결과를 받았을 때 호출. */
