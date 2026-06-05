@@ -69,7 +69,7 @@ public class CommentController {
     /** 댓글 목록 조회. 🔒 JWT 필요(본인 식별은 토큰 public_id claim에서 추출). */
     @Operation(
             summary = "댓글 목록 조회",
-            description = "게시글 public_id에 달린 댓글을 작성순(오래된 순)으로 페이지네이션해 반환한다. "
+            description = "게시글 public_id에 달린 댓글을 최신순(최근 작성 순)으로 페이지네이션해 반환한다. "
                     + "삭제된 댓글은 제외된다. 없거나 삭제된 게시글이면 404 COMMUNITY4001. "
                     + "이 API는 본인 식별을 쓰지 않지만 인증은 필요하다. "
                     + "대댓글은 별도 이슈로, 현재 parent_comment_public_id는 항상 null이다.")

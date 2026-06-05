@@ -160,7 +160,7 @@
 
 `GET /api/v1/community/posts/{id}/comments?page=&size=` · Auth ✅
 
-특정 게시글에 달린 댓글을 **작성순(오래된 순)** 으로 페이지네이션해 반환한다. 삭제된 댓글(`deleted_at IS NOT NULL`)은 결과에서 제외된다. 작성자 표시 정보(닉네임/인증 배지)는 MemberClient로 조회해 채운다(DB 직접 SELECT 없음 — MSA 경계, CLAUDE.md §7). 본인 식별을 쓰지 않지만 인증은 필요하다.
+특정 게시글에 달린 댓글을 **최신순(최근 작성 순, created_at DESC)** 으로 페이지네이션해 반환한다. 삭제된 댓글(`deleted_at IS NOT NULL`)은 결과에서 제외된다. 작성자 표시 정보(닉네임/인증 배지)는 MemberClient로 조회해 채운다(DB 직접 SELECT 없음 — MSA 경계, CLAUDE.md §7). 본인 식별을 쓰지 않지만 인증은 필요하다.
 
 **대댓글은 본 사이클 범위 밖** — 모든 항목의 `parent_comment_public_id`는 항상 null이다(§6과 동일 항목 형태).
 
@@ -177,7 +177,7 @@
 **Response 200** — `data`
 | 필드 | 타입 | nullable | 설명 |
 | --- | --- | --- | --- |
-| `comments` | array | N | 댓글 목록 (작성순) |
+| `comments` | array | N | 댓글 목록 (최신순) |
 | `comments[].public_id` | string | N | 댓글 UUID |
 | `comments[].post_public_id` | string | N | 게시글 UUID |
 | `comments[].parent_comment_public_id` | string | Y | 부모 댓글 UUID. **현 사이클은 항상 null** (대댓글 미지원) |

@@ -49,7 +49,7 @@ import org.springframework.test.util.ReflectionTestUtils;
  * {@link CommentServiceImpl} 단위 테스트(Mockito). DB·Spring 컨텍스트 없이 조합/검증/예외를 본다.
  *
  * <p>검증 포인트: ① 없는 게시글이면 댓글 조회 전에 COMMUNITY4001(게시글 종속), ② 작성자 distinct 1회 조회,
- * ③ 빈 결과면 작성자 조회 없음, ④ Pageable에 작성순(createdAt ASC, id ASC)을 싣는지, ⑤ DTO 매핑.
+ * ③ 빈 결과면 작성자 조회 없음, ④ Pageable에 최신순(createdAt DESC, id DESC)을 싣는지, ⑤ DTO 매핑.
  */
 @ExtendWith(MockitoExtension.class)
 class CommentServiceTest {
@@ -107,7 +107,7 @@ class CommentServiceTest {
     }
 
     @Test
-    @DisplayName("Pageable에 작성순(createdAt ASC, id ASC) tie-break를 싣는다")
+    @DisplayName("Pageable에 최신순(createdAt DESC, id DESC) tie-break를 싣는다")
     void getComments_정렬_Pageable() {
         Post post = post(PID);
         ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
@@ -118,7 +118,7 @@ class CommentServiceTest {
         service.getComments(PID, 0, 20);
 
         assertThat(captor.getValue().getSort())
-                .containsExactly(Sort.Order.asc("createdAt"), Sort.Order.asc("id"));
+                .containsExactly(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
     }
 
     @Test

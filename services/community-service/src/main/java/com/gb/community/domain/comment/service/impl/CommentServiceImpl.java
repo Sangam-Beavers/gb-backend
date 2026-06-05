@@ -55,9 +55,10 @@ public class CommentServiceImpl implements CommentService {
         // (단건 조회/좋아요/댓글 작성 등 게시글 종속 API와 동일 정책). 빈 목록과 구분한다.
         Post post = getActivePostOrThrow(postPublicId);
 
-        // 작성순(오래된 순) = createdAt ASC. 동률은 id ASC를 tie-breaker로 둬 정렬을 결정적으로 만든다
-        // (id는 노출 X, 정렬 키로만 사용).
-        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt", "id"));
+        // 최신순(최근 작성 순) = createdAt DESC. 동률은 id DESC를 tie-breaker로 둬 정렬을 결정적으로 만든다
+        // (id는 노출 X, 정렬 키로만 사용 — 같은 시각이면 나중 INSERT가 먼저). 본래 작성순(ASC)이었으나
+        // 최신 댓글 우선 노출 요청으로 반전(api-spec §7 동기 갱신).
+        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt", "id"));
         Page<Comment> result = commentRepository.findByPostAndDeletedAtIsNull(post, pageable);
         List<Comment> comments = result.getContent();
 
