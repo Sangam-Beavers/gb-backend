@@ -20,7 +20,12 @@ public enum CommonErrorCode implements ErrorCode {
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "COMMON4011", "인증 정보가 유효하지 않습니다."),
     FORBIDDEN(HttpStatus.FORBIDDEN, "COMMON4031", "접근 권한이 없습니다."),
     RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "COMMON4041", "존재하지 않는 리소스입니다."),
+    // 405/406/415 — 메서드/콘텐츠 협상 오류 전용 분기(10D common-modules-1). 과거엔 전용 핸들러가 없어
+    // catch-all로 500 COMMON5000이 됐다(클라이언트 잘못을 서버 오류로 오인 + 거짓 알람). conventions §9 등재.
+    METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "COMMON4051", "허용되지 않은 HTTP 메서드입니다."),
+    NOT_ACCEPTABLE(HttpStatus.NOT_ACCEPTABLE, "COMMON4061", "응답할 수 없는 Accept 형식입니다."),
     RESOURCE_ALREADY_EXISTS(HttpStatus.CONFLICT, "COMMON4091", "이미 존재하는 리소스입니다."),
+    UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "COMMON4151", "지원하지 않는 요청 본문 형식입니다."),
     UNPROCESSABLE_ENTITY(HttpStatus.UNPROCESSABLE_ENTITY, "COMMON4221", "처리할 수 없는 요청입니다."),
     TOO_MANY_REQUESTS(HttpStatus.TOO_MANY_REQUESTS, "COMMON4291", "요청 횟수를 초과했습니다. 잠시 후 다시 시도해주세요."),
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON5000", "서버 오류가 발생했습니다."),
