@@ -280,11 +280,11 @@ message: 기본 생성 메시지("성공적으로 생성되었습니다." — �
 
 `DELETE /api/v1/members/me` · Auth ✅ → 200 (요청/응답 바디 없음, `data`는 null).
 
-탈퇴는 두 가지를 함께 처리한다:
-1. **로컬 soft delete** — `members.deleted_at`을 현재 시각으로 세팅(row는 보존). 이후 `findByPublicIdAndDeletedAtIsNull` 조회에서 제외된다.
-2. **외부 IdP(Authentik) 사용자 비활성화** — 저장된 `auth_provider_id`(= Authentik user uuid)로 사용자를 찾아 `is_active=false`로 PATCH한다. 이후 IdP 로그인/토큰 발급이 막힌다(하드 삭제 아님 — 복구·감사 보존). 대상이 IdP에 이미 없으면 멱등 통과한다.
+탈퇴는 두 가지를 **IdP-first 순서**로 처리한다(가입 IdP-first와 동일 사상 — 외부 HTTP를 쓰기 트랜잭션 밖에서):
+1. **외부 IdP(Authentik) 사용자 비활성화** — 저장된 `auth_provider_id`(= Authentik user uuid)로 사용자를 찾아 `is_active=false`로 PATCH한다(트랜잭션 밖). 이후 IdP 로그인/토큰 발급이 막힌다(하드 삭제 아님 — 복구·감사 보존). 대상이 IdP에 이미 없으면 멱등 통과한다.
+2. **로컬 soft delete** — `members.deleted_at`을 현재 시각으로 세팅(row는 보존, 자체 짧은 트랜잭션). 이후 `findByPublicIdAndDeletedAtIsNull` 조회에서 제외된다.
 
-> IdP 비활성화 호출은 서비스 트랜잭션의 마지막 단계라, 실패하면 `@Transactional`이 롤백되어 로컬 soft delete도 반영되지 않는다(정합성).
+> IdP 비활성화가 실패하면 로컬에 손대기 전에 끝나 로컬은 무변경이다(정합성). 드물게 ① 성공 후 ②가 실패하면 "IdP만 비활성·로컬 활성"이 남지만, 비활성화가 멱등이라 재시도(액세스 토큰 만료 전)로 수습된다 — 완전 원자화(saga)는 v1 범위 밖.
 > 탈퇴자 `email`/`nickname`은 여전히 "사용 중"으로 취급되어 동일 값 재가입은 막힌다(`existsBy*`는 `deleted_at`을 필터하지 않음 — 의도된 동작).
 
 **Error**

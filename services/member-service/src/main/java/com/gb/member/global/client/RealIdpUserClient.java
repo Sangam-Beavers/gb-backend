@@ -316,13 +316,13 @@ public class RealIdpUserClient implements IdpUserClient {
                     .toBodilessEntity();
 
         } catch (RestClientResponseException e) {
-            // IdP 응답 에러 — 4xx→COMMON4001, 5xx→COMMON5000. 어느 쪽이든 BusinessException이라 Service의
-            // @Transactional이 롤백돼 로컬 soft delete도 반영되지 않는다(IdP에서 계속 로그인 가능 방지).
+            // IdP 응답 에러 — 4xx→COMMON4001, 5xx→COMMON5000. 어느 쪽이든 BusinessException이 Service의
+            // 로컬 soft delete(withdrawLocalTx)에 도달하기 전에 전파돼 로컬은 무변경이다(IdP-first 정합).
             log.error("Authentik 사용자 비활성화 실패: uuid={}, status={}, msg={}",
                     authProviderId, e.getStatusCode(), e.getMessage());
             throw new BusinessException(idpStatusToError(e));
         } catch (RestClientException e) {
-            // 연결 실패·타임아웃 등(응답 없음) → COMMON5000 → @Transactional 롤백.
+            // 연결 실패·타임아웃 등(응답 없음) → COMMON5000 — 위와 동일하게 로컬 무변경.
             log.error("Authentik 사용자 비활성화 연결 실패: uuid={}, msg={}", authProviderId, e.getMessage());
             throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
         }

@@ -57,8 +57,14 @@ public interface MemberService {
     /** 현재 회원의 주 사용 언어를 변경하고 변경된 값을 반환한다. 없는(탈퇴 포함) 회원이면 MEMBER4001. */
     LanguageResponse updateLanguage(String userPublicId, String language);
 
-    /** 현재 회원을 탈퇴 처리한다(로컬 soft delete + IdP 비활성화). 없는(탈퇴 포함) 회원이면 MEMBER4001. */
+    /** 현재 회원을 탈퇴 처리한다(IdP 비활성화 → 로컬 soft delete). 없는(탈퇴 포함) 회원이면 MEMBER4001. */
     void withdraw(String userPublicId);
+
+    /**
+     * 탈퇴의 로컬 soft delete 단계(자체 짧은 tx). {@link #withdraw}가 IdP 비활성화(외부 HTTP)를 끝낸 뒤
+     * self-proxy로 호출하는 내부 단계로, 컨트롤러가 직접 호출하지 않는다(VerificationService.submitVerificationTx 동일 패턴).
+     */
+    void withdrawLocalTx(String userPublicId);
 
     /** 마이페이지 내 프로필을 조회한다. 없는(탈퇴 포함) 회원이면 MEMBER4001. */
     ProfileResponse getMyProfile(String userPublicId);

@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -36,6 +37,7 @@ import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -71,6 +73,13 @@ class MemberServiceImplTest {
     @Mock private EmailSender emailSender;
 
     @InjectMocks private MemberServiceImpl memberService;
+
+    @BeforeEach
+    void injectSelfProxy() {
+        // 생성자 주입(@RequiredArgsConstructor)에선 @InjectMocks가 비-final self 필드를 채우지 않아 null.
+        // 단위 테스트는 프록시 없이 자기 자신을 넣어 withdrawLocalTx 위임을 그대로 실행한다(VerificationServiceImplTest 동일).
+        ReflectionTestUtils.setField(memberService, "self", memberService);
+    }
 
     // ───────────────────────── 회원가입 ─────────────────────────
 
@@ -626,7 +635,7 @@ class MemberServiceImplTest {
     // ───────────────────────────── 탈퇴 ─────────────────────────────
 
     @Test
-    @DisplayName("withdraw: 로컬 soft delete 후 IdP 비활성화(deactivateUser)를 호출한다")
+    @DisplayName("withdraw: IdP 비활성화(tx 밖) 후 로컬 soft delete를 수행한다(IdP-first)")
     void withdraw_성공() {
         Member member = memberWithLanguage("vi");
         when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
@@ -634,8 +643,13 @@ class MemberServiceImplTest {
         memberService.withdraw("pub-1");
 
         assertThat(member.getDeletedAt()).as("로컬 soft delete(deleted_at) 세팅됨").isNotNull();
-        // IdP에는 가입 시 저장한 authProviderId(=user uuid)로 비활성화 요청이 나가야 한다.
-        verify(idpUserClient).deactivateUser("idp-sub-uuid-1");
+        // 활성 조회는 2회 — ① withdraw의 IdP 식별자 확보 ② withdrawLocalTx(짧은 tx)의 race 재확인.
+        verify(memberRepository, times(2)).findByPublicIdAndDeletedAtIsNull("pub-1");
+        // IdP-first 순서를 직접 구속한다(signup 테스트와 동일 방식): 조회 → IdP 비활성화(tx 밖) → 로컬 단계 재조회.
+        InOrder order = inOrder(idpUserClient, memberRepository);
+        order.verify(memberRepository).findByPublicIdAndDeletedAtIsNull("pub-1");
+        order.verify(idpUserClient).deactivateUser("idp-sub-uuid-1");
+        order.verify(memberRepository).findByPublicIdAndDeletedAtIsNull("pub-1");
     }
 
     @Test
@@ -653,7 +667,7 @@ class MemberServiceImplTest {
     }
 
     @Test
-    @DisplayName("withdraw: IdP 비활성화 실패(COMMON5000) 시 예외를 전파한다(@Transactional 롤백 영역)")
+    @DisplayName("withdraw: IdP 비활성화 실패(COMMON5000) 시 예외 전파 + 로컬 soft delete에 도달하지 않는다(IdP-first 정합)")
     void withdraw_IdP실패_예외전파() {
         Member member = memberWithLanguage("vi");
         when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
@@ -665,6 +679,25 @@ class MemberServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INTERNAL_SERVER_ERROR);
 
+        verify(idpUserClient).deactivateUser("idp-sub-uuid-1");
+        // 과거엔 @Transactional 롤백이 정합을 보장했지만, hoist 후엔 "로컬에 손대기 전"이라 무변경이 보장된다.
+        assertThat(member.getDeletedAt()).as("IdP 실패 시 로컬 무변경").isNull();
+    }
+
+    @Test
+    @DisplayName("withdraw: IdP 비활성화 뒤 로컬 단계에서 회원이 사라진 race면 MEMBER4001(비활성화는 멱등이라 재시도 안전)")
+    void withdraw_로컬단계_race_MEMBER4001() {
+        Member member = memberWithLanguage("vi");
+        // ① withdraw의 활성 조회는 성공, ② withdrawLocalTx의 재확인 시점엔 동시 탈퇴로 이미 비활성.
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1"))
+                .thenReturn(Optional.of(member), Optional.empty());
+
+        assertThatThrownBy(() -> memberService.withdraw("pub-1"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
+
+        // IdP 비활성화는 이미 나갔지만(잔여 상태), deactivateUser가 멱등이라 중복 호출이어도 무해하다.
         verify(idpUserClient).deactivateUser("idp-sub-uuid-1");
     }
 

@@ -28,7 +28,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,6 +44,11 @@ public class MemberServiceImpl implements MemberService {
     private final PasswordResetTokenStore passwordResetTokenStore;
     private final PasswordResetRateLimiter passwordResetRateLimiter;
     private final EmailSender emailSender;
+
+    /** self-injection: withdrawLocalTx의 @Transactional 프록시 적용 위함(VerificationServiceImpl 동일 패턴). */
+    @Autowired
+    @Lazy
+    private MemberService self;
 
     /** 재설정 링크 베이스 URL(프론트 비번재설정 페이지). yml app.password-reset.base-url로 주입. */
     @Value("${app.password-reset.base-url}")
@@ -266,17 +273,37 @@ public class MemberServiceImpl implements MemberService {
         return LanguageResponse.from(member);
     }
 
+    /**
+     * 탈퇴 — <b>IdP-first + 로컬 짧은 tx</b>(가입 IdP-first·인증 지갑개설 hoist와 동일 사상).
+     *
+     * <p>과거에는 한 @Transactional 안에서 soft delete 후 IdP HTTP(호출당 최대 ~13s)를 기다려
+     * "IdP 실패 → 롤백" 정합을 얻었으나, 그 대가로 쓰기 tx·Hikari 커넥션을 외부 응답까지 점유했다(core-2 계열).
+     * IdP 비활성화를 tx 밖으로 빼고 로컬 soft delete를 자체 짧은 tx로 분리해도 같은 정합이 유지된다:
+     * <ul>
+     *   <li>IdP 비활성화 실패 → 여기서 예외로 끝나 로컬 무변경(기존 롤백과 동일한 결과).</li>
+     *   <li>로컬 soft delete 실패 → "IdP만 비활성·로컬 활성" — 기존 코드의 커밋 실패 구간과 동일한
+     *       잔여 상태이며, {@link IdpUserClient#deactivateUser}가 멱등이라 재시도(액세스 토큰 만료 전)로 수습된다.
+     *       완전 해소는 PENDING_WITHDRAWAL + outbox/재시도 워커(saga)가 필요하나 v1 범위 밖(기존 보류 유지).</li>
+     * </ul>
+     */
+    @Override
+    public void withdraw(String userPublicId) {
+        // 활성 회원 확인 + IdP 식별자 확보(조회만 — 쓰기 tx를 열지 않는다). 없는(탈퇴 포함) 회원이면 MEMBER4001.
+        Member member = getActiveMemberOrThrow(userPublicId);
+
+        // ① IdP 비활성화 — 트랜잭션 "밖". 실패하면 BusinessException이 그대로 올라와 로컬은 무변경.
+        idpUserClient.deactivateUser(member.getAuthProviderId());
+
+        // ② 로컬 soft delete — self-proxy 자체 짧은 tx(외부 HTTP가 끝난 뒤에만 커넥션을 잡는다).
+        self.withdrawLocalTx(userPublicId);
+    }
+
     @Override
     @Transactional
-    public void withdraw(String userPublicId) {
+    public void withdrawLocalTx(String userPublicId) {
+        // ①과의 사이에 동시 탈퇴가 끼어든 race까지 재확인 — 이미 탈퇴면 MEMBER4001(순차 재탈퇴와 동일 응답).
         Member member = getActiveMemberOrThrow(userPublicId);
-        member.softDelete(); // 로컬 deleted_at 세팅(커밋은 메서드 종료 시)
-        // 외부 호출은 "마지막 단계"로 — IdP 비활성화가 실패하면 BusinessException이 올라와
-        // @Transactional이 롤백되어 로컬 soft delete도 반영되지 않는다(정합성).
-        // TODO(알려진 한계): IdP 비활성화 성공 직후 DB 커밋이 실패하는 드문 구간은 이중 쓰기(dual-write)라
-        //   완전 원자적이지 않다(IdP만 비활성·로컬 활성). 완전 해소는 PENDING_WITHDRAWAL 상태 +
-        //   outbox/재시도 워커(saga)가 필요하나 인프라 비용이 커 v1 범위 밖으로 보류한다.
-        idpUserClient.deactivateUser(member.getAuthProviderId());
+        member.softDelete(); // 로컬 deleted_at 세팅(dirty checking — 커밋은 메서드 종료 시)
     }
 
     @Override
