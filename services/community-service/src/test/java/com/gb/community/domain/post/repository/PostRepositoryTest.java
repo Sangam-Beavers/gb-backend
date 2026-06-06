@@ -257,7 +257,7 @@ class PostRepositoryTest {
                 .containsExactly(c3.getPublicId(), c2.getPublicId());
     }
 
-    // ----- like_count 증감 정합(C-O4) — 좋아요/취소가 쓰는 벌크 UPDATE의 실 DB 반영·음수 가드 검증 -----
+    // ----- like_count 증감 정합 — 좋아요/취소가 쓰는 벌크 UPDATE의 실 DB 반영·음수 가드 검증 -----
 
     @Test
     @DisplayName("incrementLikeCount: like_count +1이 실 DB에 반영된다(findLikeCountById 재조회)")

@@ -24,6 +24,16 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
     Optional<Transaction> findByPublicId(String publicId);
 
     /**
+     * public_id 단건 조회 + 소유 wallet fetch join. 송금 확인증(getReceipt)처럼 트랜잭션 밖
+     * (NOT_SUPPORTED — 외부 HTTP를 tx/커넥션 보유 중 호출하지 않기 위함)에서 본인 검증을 위해
+     * {@code tx.getWallet().getUserPublicId()}를 탐색해야 하는 호출 측이 사용한다 — LAZY proxy를
+     * detached 상태에서 초기화하면 LazyInitializationException이 나므로 repo의 짧은 tx 안에서
+     * wallet까지 함께 적재해 돌려준다.
+     */
+    @Query("select t from Transaction t join fetch t.wallet where t.publicId = :publicId")
+    Optional<Transaction> findByPublicIdWithWallet(@Param("publicId") String publicId);
+
+    /**
      * 회원의 특정 유형 거래를 페이지로 조회한다. 환전 내역 목록({@code GET /api/v1/exchanges})에서
      * {@code type=EXCHANGE}로 호출하며, 정렬(최근순)은 {@link Pageable}로 받는다.
      * {@code wallet.userPublicId}로 본인 거래만 필터링한다(MSA 경계 — public_id 참조).

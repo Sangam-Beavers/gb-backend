@@ -109,7 +109,7 @@ public class MemberMeController {
                             schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
-                    description = "COMMON5000 - IdP 연동 실패로 탈퇴를 완료하지 못했습니다.(롤백)",
+                    description = "COMMON5000 - IdP 연동 실패로 탈퇴를 완료하지 못했습니다.(로컬 무변경)",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponse.class)))
     })

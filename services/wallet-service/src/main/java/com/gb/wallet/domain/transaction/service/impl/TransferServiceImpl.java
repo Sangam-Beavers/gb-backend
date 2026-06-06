@@ -68,6 +68,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import lombok.RequiredArgsConstructor;
@@ -146,7 +147,11 @@ public class TransferServiceImpl implements TransferService {
     private TransferService self;
 
     @Override
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public RecentRecipientsResponse getRecentInternalRecipients(String userPublicId) {
+        // tx 경계: 외부 HTTP(MemberClient)를 트랜잭션/커넥션 보유 중 호출하지 않는다 — NOT_SUPPORTED로
+        // 클래스 readOnly tx를 차단하고, 아래 repo 호출들은 각자 짧은 readOnly tx로 돈다(community
+        // PostServiceImpl.getPosts와 동일 구조). 엔티티 접근은 스칼라 컬럼뿐이라 detached에서도 안전.
         // 1) 송신자 wallet 조회. 없으면 WALLET4001.
         Wallet sender = walletRepository.findByUserPublicId(userPublicId)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
@@ -183,12 +188,19 @@ public class TransferServiceImpl implements TransferService {
         Map<Long, String> userPublicIdByWallet = walletRepository.findAllById(receiverIds).stream()
                 .collect(Collectors.toMap(Wallet::getId, Wallet::getUserPublicId));
 
-        // 5) 각 수신자에 대해 MemberClient 호출 → RecipientItem 변환. projection 순서(최근순) 유지.
-        // TODO: member-service 도입 시 N번 호출은 batch API(예: GET /members?ids=...)로 최적화.
+        // 5) 수신자 표시 정보를 배치 1회로 조회(getMembers — 건별 N회 HTTP N+1 회피, auth §13-1 배치 API).
+        //    getMembers는 요청한 모든 id를 키로 포함(누락·장애=fallback)하므로 아래 .get(id)는 null이 아니다.
+        List<String> receiverUserIds = recent.stream()
+                .map(p -> userPublicIdByWallet.get(p.getReceiverWalletId()))
+                .distinct()
+                .toList();
+        Map<String, MemberInfo> membersById = memberClient.getMembers(receiverUserIds);
+
+        // 6) RecipientItem 변환. projection 순서(최근순) 유지.
         List<RecipientItem> items = recent.stream()
                 .map(p -> {
                     String receiverUserId = userPublicIdByWallet.get(p.getReceiverWalletId());
-                    MemberInfo member = memberClient.getMember(receiverUserId);
+                    MemberInfo member = membersById.get(receiverUserId);
                     CurrencyType lastCurrency = currencyByReceiver.get(p.getReceiverWalletId());
                     return RecipientItem.builder()
                             .memberPublicId(receiverUserId)
@@ -340,26 +352,40 @@ public class TransferServiceImpl implements TransferService {
     public TransferExecuteResponse execute(String userPublicId, String idempotencyKey,
                                            TransferExecuteRequest request) {
         // 사용자 직접 호출(POST /transfers) — 송금 PIN 게이트 ON(TX-PIN).
-        return executeInternal(userPublicId, idempotencyKey, request, true);
+        // 수신자 표시명은 실행 시점에 MemberClient로 조회한다(HTTP 요청 컨텍스트라 JWT 릴레이 가능).
+        // resolver는 INTERNAL 경로에서 수신 wallet의 user_public_id를 인자로 락 진입 전에 1회 호출된다
+        // (wallet-transfer-2) — REMITTANCE는 미사용.
+        return executeInternal(userPublicId, idempotencyKey, request, true,
+                this::fetchMemberNameSafe);
     }
 
     @Override
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public TransferExecuteResponse executePreAuthorized(String userPublicId, String idempotencyKey,
-                                                        TransferExecuteRequest request) {
+                                                        TransferExecuteRequest request,
+                                                        String receiverNameSnapshot) {
         // 사전 인가된 정기송금 회차 실행(스케줄러) — PIN은 설정 시 1회 검증한 standing order라 게이트 OFF(TX-PIN).
         // NOT_SUPPORTED 유지 필수: 스케줄러 executeSingle(REQUIRES_NEW)의 트랜잭션을 suspend해 자금 이동을
         // 독립 경계에서 커밋해야 한다(execute와 동일 사상).
-        return executeInternal(userPublicId, idempotencyKey, request, false);
+        // 수신자 표시명은 실행 시점에 재조회하지 않고 설정 시점 snapshot을 그대로 쓴다(wallet-sched-1) —
+        // 스케줄러 스레드에는 SecurityContext(JWT)가 없어 RealMemberClient JWT 릴레이가 불가능하고,
+        // 재조회하면 항상 폴백("Unknown")이 확인증(transactions.receiver_name)에 영속되기 때문.
+        // snapshot이 null이면 null 그대로(설정 시점 조회 실패 케이스 — 폴백 문자열을 원장에 만들지 않는다).
+        return executeInternal(userPublicId, idempotencyKey, request, false,
+                ignoredReceiverId -> receiverNameSnapshot);
     }
 
     /**
-     * 송금 실행 공통 본문. {@code requirePinGate}만 사용자 직접 호출({@link #execute}, true)과 사전 인가
-     * 스케줄러({@link #executePreAuthorized}, false)를 가른다 — 그 외 멱등성 3-layer·rate-limit·락 재시도·
-     * 자금 이동은 완전히 동일하다.
+     * 송금 실행 공통 본문. 호출원별로 두 가지가 갈린다 — {@code requirePinGate}: 사용자 직접 호출
+     * ({@link #execute}, true) vs 사전 인가 스케줄러({@link #executePreAuthorized}, false).
+     * {@code receiverNameResolver}: INTERNAL 확인증 수신자명 결정 함수(인자 = 수신 wallet의
+     * user_public_id) — 직접 호출은 실행 시점 MemberClient 조회(fail-open), 스케줄러는 인자를 무시하고
+     * 설정 시점 snapshot 그대로(wallet-sched-1). 그 외 멱등성 3-layer·rate-limit·락 재시도·자금 이동은
+     * 완전히 동일하다.
      */
     private TransferExecuteResponse executeInternal(String userPublicId, String idempotencyKey,
-                                                    TransferExecuteRequest request, boolean requirePinGate) {
+                                                    TransferExecuteRequest request, boolean requirePinGate,
+                                                    Function<String, String> receiverNameResolver) {
         // 비-HTTP 경로(스케줄러·내부 직접 호출) 서비스단 가드(WTX-02): HTTP는 컨트롤러
         // @RequestHeader("Idempotency-Key") @NotBlank로 막지만(WTX-01), 빈 키가 멱등 3-layer 키 스코프
         // (cacheKey/findByIdempotencyKey)를 무력화하므로 모든 side effect(rate-limit/캐시/DB) 전에
@@ -428,7 +454,8 @@ public class TransferServiceImpl implements TransferService {
 
         // 6) 실 처리 + 락 경합 재시도 래퍼 — race(UNIQUE 위반)와 락 경합을 도메인별 분기에 공통 처리.
         TransferExecuteResponse response = executeWithRetry(
-                userPublicId, idempotencyKey, request, currency, transferType, scopeId);
+                userPublicId, idempotencyKey, request, currency, transferType, scopeId,
+                receiverNameResolver);
 
         // 7) 커밋 이후 Redis 캐시 채우기 (Layer 1).
         writeToCache(cacheKey, response);
@@ -447,14 +474,16 @@ public class TransferServiceImpl implements TransferService {
      */
     private TransferExecuteResponse executeWithRetry(
             String userPublicId, String idempotencyKey, TransferExecuteRequest request,
-            CurrencyType currency, TransactionType transferType, String scopeId) {
+            CurrencyType currency, TransactionType transferType, String scopeId,
+            Function<String, String> receiverNameResolver) {
         int attempt = 0;
         while (true) {
             try {
                 if (transferType == TransactionType.REMITTANCE) {
                     return executeRemittancePath(userPublicId, idempotencyKey, request, currency);
                 }
-                return executeInternalTransferPath(userPublicId, idempotencyKey, request, currency, transferType);
+                return executeInternalTransferPath(userPublicId, idempotencyKey, request, currency, transferType,
+                        receiverNameResolver);
             } catch (DataIntegrityViolationException race) {
                 // 멱등 Layer 3: idempotency_key UNIQUE 충돌(진짜 동시 race)만 첫 결과 재반환으로 흡수한다.
                 //   같은 키의 prior가 실제로 존재할 때만 race로 간주하고, prior가 없으면 idempotency 충돌이
@@ -481,7 +510,8 @@ public class TransferServiceImpl implements TransferService {
      */
     private TransferExecuteResponse executeInternalTransferPath(
             String userPublicId, String idempotencyKey, TransferExecuteRequest request,
-            CurrencyType currency, TransactionType transferType) {
+            CurrencyType currency, TransactionType transferType,
+            Function<String, String> receiverNameResolver) {
         // 송신/수신 wallet 조회 (락 키용 id 확보).
         Wallet senderWallet = walletRepository.findByUserPublicId(userPublicId)
                 .orElseThrow(() -> new BusinessException(WalletErrorCode.WALLET_NOT_FOUND));
@@ -498,10 +528,12 @@ public class TransferServiceImpl implements TransferService {
             throw new BusinessException(TransferErrorCode.SELF_TRANSFER_NOT_ALLOWED);
         }
 
-        // 수신자 본명 snapshot을 분산 락/FOR UPDATE 진입 *전*에 외부 MemberClient로 미리 조회한다(wallet-transfer-2).
-        // 확인증용 read-only 보강이라 트랜잭션·정합성 의존이 없어(fail-open, 실패 시 null) 락 밖에서 안전하게 빼낼 수
-        // 있다 — 락/잔액행 락을 보유한 채 외부 HTTP를 호출해 같은 송신자의 다른 송금/환전을 대기시키던 것을 제거한다.
-        String receiverName = fetchMemberNameSafe(receiverWallet.getUserPublicId());
+        // 수신자 본명 snapshot을 분산 락/FOR UPDATE 진입 *전*에 확보한다(wallet-transfer-2 — 락 보유 중 외부
+        // HTTP 금지). 공급원은 호출원별로 다르다: 사용자 직접 호출(execute)은 실행 시점 MemberClient 조회
+        // (fail-open, HTTP 컨텍스트라 JWT 릴레이 가능), 정기송금 회차(executePreAuthorized)는 설정 시점
+        // snapshot 그대로(wallet-sched-1 — 스케줄러 스레드는 SecurityContext가 없어 재조회가 항상 "Unknown"
+        // 폴백이 되므로 재조회하지 않는다). 확인증용 read-only 보강이라 트랜잭션·정합성 의존이 없다.
+        String receiverName = receiverNameResolver.apply(receiverWallet.getUserPublicId());
 
         // 분산 락 획득 (wallet_id 오름차순 — DistributedLockHelper 내부 정책). 실패 → 503.
         RLock lock = distributedLockHelper.tryLockTwoWallets(
@@ -621,15 +653,14 @@ public class TransferServiceImpl implements TransferService {
      *
      * <p>송금 확인증은 격식 있는 영수증 문서라 본명({@link MemberInfo#name})을 사용한다(닉네임이 아님).
      *
-     * <p><b>fail-open:</b> MemberClient 장애·timeout이 본업(송금/확인증 응답)을 막지 않도록, 어떤 예외라도
-     * 잡아 {@code null}을 반환한다. 외부 의존 장애 시 receiverName이 null로 저장되며, 송금 자체는 정상
-     * 진행한다. MockMemberClient는 fallback {@code "Unknown"}까지 반환하므로 일반적으로 null이 나오지
-     * 않지만, 운영 RealMemberClient 도입 후 HTTP 장애·5xx 응답을 흡수하는 안전망이다.
+     * <p><b>조회 실패 = null(명세 §7-1):</b> 원장({@code receiver_name}/{@code sender_name})에 영속되는
+     * 값이라 {@link MemberClient#findMember}(원장용 — 미존재·장애·JWT 부재 = empty, 폴백 객체 없음)를
+     * 쓴다. 표시용 {@code getMember}의 fail-open 폴백("Unknown")을 여기서 쓰면 가짜 이름이 원장에
+     * 박제된다. findMember는 예외를 던지지 않지만, 방어적으로 한 번 더 흡수해 본업(송금/확인증)을 지킨다.
      */
     private String fetchMemberNameSafe(String userPublicId) {
         try {
-            MemberInfo info = memberClient.getMember(userPublicId);
-            return info != null ? info.name() : null;
+            return memberClient.findMember(userPublicId).map(MemberInfo::name).orElse(null);
         } catch (RuntimeException e) {
             log.warn("MemberClient 조회 실패 — name=null 처리. user={}", userPublicId, e);
             return null;
@@ -641,10 +672,13 @@ public class TransferServiceImpl implements TransferService {
     // ──────────────────────────────────────────────────────────────────────────
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public TransferReceiptResponse getReceipt(String userPublicId, String transferPublicId) {
-        // (1) 거래 조회 — 없으면 TRANSFER4001 (정보 누설 방지로 미존재·권한·유형 실패 모두 동일 코드).
-        Transaction tx = transactionRepository.findByPublicId(transferPublicId)
+        // tx 경계: 외부 HTTP(MemberClient 본명 조회)를 트랜잭션/커넥션 보유 중 호출하지 않는다 —
+        // NOT_SUPPORTED로 차단하고 DB 조회는 repo 호출 각자의 짧은 tx로 돈다. 본인 검증이
+        // tx.getWallet()(LAZY)을 탐색하므로 wallet을 fetch join으로 함께 적재해 detached 안전을 보장한다.
+        // (1) 거래 조회(+wallet fetch join) — 없으면 TRANSFER4001 (정보 누설 방지로 미존재·권한·유형 실패 모두 동일 코드).
+        Transaction tx = transactionRepository.findByPublicIdWithWallet(transferPublicId)
                 .orElseThrow(() -> new BusinessException(TransferErrorCode.TRANSFER_NOT_FOUND));
 
         // (2) 본인 검증 — 송신자(거래 wallet 주인)만 조회 가능. 수신자는 별도 "받은 거래 내역" API 영역.
@@ -666,22 +700,20 @@ public class TransferServiceImpl implements TransferService {
             throw new BusinessException(TransferErrorCode.TRANSFER_NOT_FOUND);
         }
 
-        // (4) 송신자 본명 조회(MemberClient fail-open). 본인이라 호출 실패 시 null이어도 영수증 자체는 응답.
-        // TODO(RealMemberClient 전환 시): 이 호출은 readOnly tx "안"의 외부 호출이라 HTTP 장애 시 DB 커넥션을
-        //   read-timeout까지 점유한다(11D transfer-2 — 무락·단건 조회라 영향 소, 현 MockMemberClient는
-        //   인프로세스라 무해). 전환 이슈에서 DB 조회(1~3,5)를 짧은 tx로 분리하고 본 호출을 tx 밖으로
-        //   hoist할 것 — tx.getWallet()이 LAZY라 단순 NOT_SUPPORTED 전환은 불가, 값 추출 후 분리 필요.
-        String senderName = fetchMemberNameSafe(userPublicId);
-
-        // (5) 도메인별 부가 데이터 조달.
+        // (4) 도메인별 부가 데이터 조달(DB — 자체 짧은 tx).
         //     INTERNAL은 외부 계좌 없음 → bankAccount=null로 응답(bankName·accountNumber 모두 null).
-        //     REMITTANCE는 bank_account_id로 BankAccount를 풀어 bank명·계좌번호(마스킹)를 응답에 채운다.
+        //     REMITTANCE는 bank_account_id로 BankAccount를 풀어 bank명·계좌번호(마스킹)를 응답에 채운다 —
+        //     응답 조립이 tx 밖에서 bank.name을 탐색하므로 bank까지 즉시 페치(findWithBankById, @EntityGraph).
         //     bank_account_id가 어떤 이유로든 사라진 비정상 상태는 정합성 위반 → COMMON5000.
         BankAccount bankAccount = null;
         if (type == TransactionType.REMITTANCE) {
-            bankAccount = bankAccountRepository.findById(tx.getBankAccountId())
+            bankAccount = bankAccountRepository.findWithBankById(tx.getBankAccountId())
                     .orElseThrow(() -> new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR));
         }
+
+        // (5) 송신자 본명 조회(MemberClient fail-open) — 외부 HTTP는 모든 DB 조회 "뒤", tx 밖에서 마지막으로.
+        //     본인이라 호출 실패 시 null이어도 영수증 자체는 응답한다.
+        String senderName = fetchMemberNameSafe(userPublicId);
 
         return TransferReceiptResponse.of(tx, senderName, bankAccount);
     }

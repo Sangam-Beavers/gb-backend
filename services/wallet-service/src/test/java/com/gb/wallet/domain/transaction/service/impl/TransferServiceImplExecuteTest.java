@@ -200,15 +200,15 @@ class TransferServiceImplExecuteTest {
         stubBalanceLocks(sender, receiver, senderBalance, receiverBalance);
         stubTransactionSaveAndAuditLog();
         given(objectMapper.writeValueAsString(any())).willReturn("{}");
-        given(memberClient.getMember(RECEIVER_USER))
-                .willReturn(new MemberInfo(RECEIVER_USER, "r@example.com", "수취인본명", "닉", "VN", true));
+        given(memberClient.findMember(RECEIVER_USER))
+                .willReturn(Optional.of(new MemberInfo(RECEIVER_USER, "r@example.com", "수취인본명", "닉", "VN", true)));
 
         service.execute(SENDER_USER, KEY, request("10000.0000"));
 
-        // 핵심: getMember(외부 HTTP)가 분산락 획득보다 *먼저* 호출된다 — 락은 그 뒤에 잡히고 FOR UPDATE는
+        // 핵심: findMember(외부 HTTP)가 분산락 획득보다 *먼저* 호출된다 — 락은 그 뒤에 잡히고 FOR UPDATE는
         //   다시 그 안에서 일어나므로, 외부 HTTP가 락/FOR UPDATE 보유 구간 밖이라는 것이 증명된다(wallet-transfer-2).
         InOrder inOrder = Mockito.inOrder(memberClient, distributedLockHelper);
-        inOrder.verify(memberClient).getMember(RECEIVER_USER);
+        inOrder.verify(memberClient).findMember(RECEIVER_USER);
         inOrder.verify(distributedLockHelper).tryLockTwoWallets(SENDER_WALLET_ID, RECEIVER_WALLET_ID);
         // 조회한 본명이 Transaction에 snapshot됐는지 확인(락 밖 조회값이 그대로 전달됨).
         ArgumentCaptor<Transaction> txCaptor = ArgumentCaptor.forClass(Transaction.class);
@@ -231,7 +231,7 @@ class TransferServiceImplExecuteTest {
         stubBalanceLocks(sender, receiver, senderBalance, receiverBalance);
         stubTransactionSaveAndAuditLog();
         given(objectMapper.writeValueAsString(any())).willReturn("{}");
-        given(memberClient.getMember(RECEIVER_USER)).willThrow(new RuntimeException("member-service down"));
+        given(memberClient.findMember(RECEIVER_USER)).willThrow(new RuntimeException("member-service down"));
 
         TransferExecuteResponse response = service.execute(SENDER_USER, KEY, request("10000.0000"));
 
@@ -1234,7 +1234,8 @@ class TransferServiceImplExecuteTest {
     }
 
     @Test
-    @DisplayName("TX-PIN: executePreAuthorized(스케줄러)는 PIN 게이트를 건너뛰고 자금을 이동한다(standing order)")
+    @DisplayName("TX-PIN: executePreAuthorized(스케줄러)는 PIN 게이트를 건너뛰고 자금을 이동한다(standing order)"
+            + " — receiver_name은 snapshot 복사, MemberClient 재조회 없음(wallet-sched-1)")
     void executePreAuthorized_게이트_우회_정상송금() throws Exception {
         Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
         Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
@@ -1250,17 +1251,49 @@ class TransferServiceImplExecuteTest {
         stubTransactionSaveAndAuditLog();
         given(objectMapper.writeValueAsString(any())).willReturn("{}");
 
-        TransferExecuteResponse response =
-                service.executePreAuthorized(SENDER_USER, KEY, request("10000.0000"));
+        TransferExecuteResponse response = service.executePreAuthorized(
+                SENDER_USER, KEY, request("10000.0000"), "Nguyen Thi Linh");
 
         assertThat(response.status()).isEqualTo("COMPLETED");
         assertThat(senderBalance.getBalance()).isEqualByComparingTo("990000");
         assertThat(receiverBalance.getBalance()).isEqualByComparingTo("10000");
         // 핵심: 사전 인가 경로라 PIN 게이트를 호출하지 않는다(설정 시 1회 인가한 standing order).
         verifyNoInteractions(transferPinGate);
-        verify(transactionRepository, times(1)).save(any(Transaction.class));
+        // wallet-sched-1: 수신자 표시명은 설정 시점 snapshot을 그대로 복사 — 스케줄러 스레드에는
+        // SecurityContext(JWT)가 없어 실행 시점 재조회는 항상 "Unknown" 폴백이 되므로 재조회하지 않는다.
+        ArgumentCaptor<Transaction> txCaptor = ArgumentCaptor.forClass(Transaction.class);
+        verify(transactionRepository, times(1)).save(txCaptor.capture());
+        assertThat(txCaptor.getValue().getReceiverName()).isEqualTo("Nguyen Thi Linh");
+        verifyNoInteractions(memberClient);
         // schedule-pin-3: 단, rate-limit은 수동 송금과 동일하게 공유한다(스케줄러 폭주 backstop).
         verify(rateLimitHelper).tryAcquire(anyString(), Mockito.anyLong(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("wallet-sched-1: snapshot이 null(설정 시점 조회 실패)이면 receiver_name=null로 저장 — 실행 시점 재조회로 'Unknown'을 만들지 않는다")
+    void executePreAuthorized_snapshot_null이면_null저장_재조회없음() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        WalletBalance receiverBalance = balance(receiver, BigDecimal.ZERO);
+        RLock lock = lock();
+
+        stubCacheMiss();
+        stubDbMiss();
+        stubWalletLookups(sender, receiver);
+        stubLockAcquired(lock);
+        stubBalanceLocks(sender, receiver, senderBalance, receiverBalance);
+        stubTransactionSaveAndAuditLog();
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+
+        service.executePreAuthorized(SENDER_USER, KEY, request("10000.0000"), null);
+
+        ArgumentCaptor<Transaction> txCaptor = ArgumentCaptor.forClass(Transaction.class);
+        verify(transactionRepository).save(txCaptor.capture());
+        // null은 null대로 — 폴백 문자열("Unknown")이 확인증 원장에 영속되지 않는다(fetchMemberNameSafe
+        // javadoc의 "장애 시 null 저장" 의미 보존). 표시는 읽기 계층이 결정한다.
+        assertThat(txCaptor.getValue().getReceiverName()).isNull();
+        verifyNoInteractions(memberClient);
     }
 
     @Test
@@ -1270,8 +1303,8 @@ class TransferServiceImplExecuteTest {
         given(idempotencyCacheHelper.get(anyString())).willReturn(Optional.of("{\"cached\":\"json\"}"));
         given(objectMapper.readValue(anyString(), eq(TransferExecuteResponse.class))).willReturn(cached);
 
-        TransferExecuteResponse result =
-                service.executePreAuthorized(SENDER_USER, KEY, request("10000.0000"));
+        TransferExecuteResponse result = service.executePreAuthorized(
+                SENDER_USER, KEY, request("10000.0000"), "Nguyen Thi Linh");
 
         assertThat(result).isSameAs(cached);
         verifyNoInteractions(transferPinGate, distributedLockHelper);

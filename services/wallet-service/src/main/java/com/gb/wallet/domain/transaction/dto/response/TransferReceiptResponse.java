@@ -38,9 +38,9 @@ public record TransferReceiptResponse(
                 example = "9b2e4c1a-7f3d-4b8e-9a1c-2d5e6f7a8b9c")
         String publicId,
 
-        @Schema(description = "송금인 본명(name, 요청자 본인). 본인 확인증이므로 호출 시점 user_public_id로 풀어 표시할 수도 있으나, "
-                + "송금 당시 정보 보존을 위해 거래 시점 snapshot 가능. 현재 구현은 호출 시 sender 본명(name) fetch.",
-                example = "Linh")
+        @Schema(description = "송금인 본명(name, 요청자 본인). 호출 시점에 MemberClient로 조회한다 — "
+                + "member-service 장애·미존재 시 null(원장용 findMember — 폴백 문자열 미사용, §7-1 정책).",
+                example = "Linh", nullable = true)
         String senderName,
 
         @Schema(description = "수취인명. INTERNAL은 수신자 본명(name), REMITTANCE는 등록 시 저장된 예금주명"

@@ -17,9 +17,8 @@ import org.springframework.stereotype.Component;
  * 윈도 내 발송 횟수를 제한해 폭탄을 막는다(초과 시 호출 측이 COMMON4291로 거부). 가입 여부와 무관하게
  * 발송 진입 *전*에 적용해, 미가입/가입 사이의 처리 시간 차이도 일부 줄인다.
  *
- * <p><b>원자성:</b> {@code INCR} 후 첫 카운트일 때만 {@code PEXPIRE}를 거는 두 연산을 Lua로 묶어 원자 실행한다
- * (wallet RateLimitHelper와 동일 패턴). 분리하면 INCR 직후 프로세스가 죽을 때 TTL이 안 걸려 키가 영구
- * 잔존(영구 차단)할 수 있다.
+ * <p><b>원자성:</b> {@code INCR} 후 첫 카운트일 때만 {@code PEXPIRE}를 거는 두 연산을 Lua로 묶어 원자 실행한다.
+ * 분리하면 INCR 직후 프로세스 실패 시 TTL이 안 걸려 키가 영구 잔존할 수 있다.
  *
  * <p>Redis 장애 시 fail-open(통과) — rate-limit은 보안 보조 장치이고, 장애로 정상 사용자의 재설정을 막는
  * 쪽이 더 큰 피해다.

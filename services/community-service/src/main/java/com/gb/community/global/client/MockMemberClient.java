@@ -4,21 +4,18 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import org.springframework.context.annotation.Profile;
-import org.springframework.stereotype.Component;
 
 /**
- * 개발용 Mock {@link MemberClient}. member-service 미구현 상태의 임시 구현이다.
- * 운영 전환 시 RealMemberClient(@Profile("!dev"))로 교체된다.
+ * (구) 개발용 Mock {@link MemberClient} — member-service 구현 완료로 역할 종료. <b>삭제 후보.</b>
  *
- * <p>FIXTURES 키는 {@code DevDataInitializer}가 시드하는 게시글 작성자 UUID 3개와 1:1로 맞춘다.
- * 시드 글의 작성자를 조회하면 고정 닉네임/인증여부가 반환돼 챗봇 데모/화면이 자연스럽게 채워진다.
+ * <p>member-service 표시정보 API(auth §13) 신설에 따라 {@link RealMemberClient}(stage·prod)와
+ * {@link DevMemberClient}(dev — FIXTURES 이전됨)로 대체됐다. dev 프로파일에서 DevMemberClient와의
+ * 빈 충돌을 막기 위해 빈 등록({@code @Component @Profile("dev")})을 해제했다. 파일 삭제는 사람이
+ * 확인 후 수행한다(CLAUDE.md §12 — 임의 삭제 금지. {@code MockMemberClientTest}도 함께 삭제 대상).
  *
- * <p>미존재 시 fallback {@link MemberInfo}("Unknown", false, "GREEN")를 반환한다 — 게시글 목록처럼
- * 평탄 매핑이 필요한 표시용 호출에서 null 검사 부담을 없애기 위함(검증 용도가 아니라 fail-fast 불필요).
+ * @deprecated {@link DevMemberClient}(fixture 우선 + Real 위임)로 대체됨.
  */
-@Component
-@Profile("dev")
+@Deprecated
 public class MockMemberClient implements MemberClient {
 
     /** 작성자 미존재 시 안전 표시용 기본값. user_public_id는 응답에 노출하지 않으므로 닉네임만 채운다. */

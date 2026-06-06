@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -21,6 +22,8 @@ import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.request.SocialProfileRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.LanguageResponse;
+import com.gb.member.domain.member.dto.response.MemberDisplayListResponse;
+import com.gb.member.domain.member.dto.response.MemberDisplayResponse;
 import com.gb.member.domain.member.dto.response.ProfileResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.dto.response.SocialProfileResponse;
@@ -32,7 +35,9 @@ import com.gb.member.global.mail.EmailSender;
 import com.gb.member.global.redis.PasswordResetRateLimiter;
 import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -69,6 +74,13 @@ class MemberServiceImplTest {
 
     @InjectMocks private MemberServiceImpl memberService;
 
+    @BeforeEach
+    void injectSelfProxy() {
+        // 생성자 주입(@RequiredArgsConstructor)에선 @InjectMocks가 비-final self 필드를 채우지 않아 null.
+        // 단위 테스트는 프록시 없이 자기 자신을 넣어 withdrawLocalTx 위임을 그대로 실행한다(VerificationServiceImplTest 동일).
+        ReflectionTestUtils.setField(memberService, "self", memberService);
+    }
+
     // ───────────────────────── 회원가입 ─────────────────────────
 
     @Test
@@ -86,7 +98,7 @@ class MemberServiceImplTest {
 
         when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
-        // MEM-02 — 로컬 row를 IdP 호출 전에 먼저 선점(saveAndFlush). publicId는 Service가 채워 넘기므로 그대로 돌려준다.
+        // 로컬 row를 IdP 호출 전에 먼저 선점(saveAndFlush). publicId는 Service가 채워 넘기므로 그대로 돌려준다.
         when(memberRepository.saveAndFlush(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
         // IdP가 사용자를 만들고 식별자(sub=uuid)를 돌려준다. publicId는 Service가 만들어 4번째 인자로 넘긴다.
         when(idpUserClient.provisionUser(eq("new@example.com"), eq("홍길동"), eq("P@ssw0rd!"), anyString()))
@@ -171,7 +183,7 @@ class MemberServiceImplTest {
     }
 
     @Test
-    @DisplayName("WU-F8/IdP-first: 동시 가입 race(saveAndFlush UNIQUE 위반) → COMMON4091 + 방금 만든 IdP 사용자 보상 회수")
+    @DisplayName("동시 가입 race(saveAndFlush UNIQUE 위반) → COMMON4091 + 방금 만든 IdP 사용자 보상 회수")
     void signup_동시가입race_COMMON4091_보상회수() {
         SignupRequest request = new SignupRequest();
         ReflectionTestUtils.setField(request, "email", "race@example.com");
@@ -364,6 +376,82 @@ class MemberServiceImplTest {
         verifyNoInteractions(idpUserClient);
     }
 
+    // ──────────────────── 표시정보 조회 (display-info / by-email) ────────────────────
+
+    @Test
+    @DisplayName("display-info 배치 조회는 Repository IN-batch 1회 결과를 표시정보 DTO로 매핑한다")
+    void getDisplayInfos_배치_매핑() {
+        Member linh = displayMember("pub-linh", "linh@example.com", "Nguyen Thi Linh", "Linh", "VN");
+        Member maria = displayMember("pub-maria", "maria@example.com", "Maria Santos", "Maria", "PH");
+        List<String> requested = List.of("pub-linh", "pub-maria", "pub-missing");
+        when(memberRepository.findByPublicIdInAndDeletedAtIsNull(requested))
+                .thenReturn(List.of(linh, maria));
+
+        MemberDisplayListResponse response = memberService.getDisplayInfos(requested);
+
+        // 존재하는 활성 회원만 항목으로 — 미존재(pub-missing)는 제외(호출 측 Unknown 폴백 계약).
+        assertThat(response.getMembers()).hasSize(2);
+        MemberDisplayResponse first = response.getMembers().get(0);
+        assertThat(first.getPublicId()).isEqualTo("pub-linh");
+        assertThat(first.getName()).isEqualTo("Nguyen Thi Linh");
+        assertThat(first.getNickname()).isEqualTo("Linh");
+        assertThat(first.getNationality()).isEqualTo("VN");
+        assertThat(first.getIsVerified()).isFalse();
+        // 조회만 — IdP/메일 등 다른 의존을 건드리지 않는다.
+        verifyNoInteractions(idpUserClient, emailSender);
+    }
+
+    @Test
+    @DisplayName("display-info: 요청 id가 전부 미존재·탈퇴면 빈 배열을 반환한다(에러 아님)")
+    void getDisplayInfos_전부_미존재_빈배열() {
+        List<String> requested = List.of("pub-none-1", "pub-none-2");
+        when(memberRepository.findByPublicIdInAndDeletedAtIsNull(requested)).thenReturn(List.of());
+
+        MemberDisplayListResponse response = memberService.getDisplayInfos(requested);
+
+        assertThat(response.getMembers()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("by-email: 활성 회원이 있으면 표시정보를 반환한다")
+    void getDisplayInfoByEmail_성공() {
+        Member linh = displayMember("pub-linh", "linh@example.com", "Nguyen Thi Linh", "Linh", "VN");
+        when(memberRepository.findByEmailAndDeletedAtIsNull("linh@example.com"))
+                .thenReturn(Optional.of(linh));
+
+        MemberDisplayResponse response = memberService.getDisplayInfoByEmail("linh@example.com");
+
+        assertThat(response.getPublicId()).isEqualTo("pub-linh");
+        assertThat(response.getNickname()).isEqualTo("Linh");
+        verifyNoInteractions(idpUserClient, emailSender);
+    }
+
+    @Test
+    @DisplayName("by-email: 미존재·탈퇴 회원이면 MEMBER4001로 fail-fast(검증 용도 — 폴백 금지)")
+    void getDisplayInfoByEmail_미존재_MEMBER4001() {
+        when(memberRepository.findByEmailAndDeletedAtIsNull("ghost@example.com"))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> memberService.getDisplayInfoByEmail("ghost@example.com"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
+    }
+
+    /** 표시정보 테스트용 활성 회원(미탈퇴, isVerified 기본 false). */
+    private Member displayMember(String publicId, String email, String name, String nickname,
+                                 String nationality) {
+        return Member.builder()
+                .publicId(publicId)
+                .email(email)
+                .name(name)
+                .nickname(nickname)
+                .nationality(nationality)
+                .language("ko")
+                .authProviderId("idp-" + publicId)
+                .build();
+    }
+
     @Test
     @DisplayName("닉네임이 없으면 사용 가능(available=true)을 반환한다")
     void checkNickname_사용가능() {
@@ -408,7 +496,7 @@ class MemberServiceImplTest {
     }
 
     @Test
-    @DisplayName("11D member-idp-3: 혼합 케이스 입력이어도 토큰·메일은 회원의 저장 이메일(가입 표기 = IdP username)로 흐른다")
+    @DisplayName("혼합 케이스 입력이어도 토큰·메일은 회원의 저장 이메일(가입 표기 = IdP username)로 흐른다")
     void sendPasswordResetEmail_혼합케이스_저장이메일사용() {
         // 가입 표기는 "user@example.com"인데 사용자가 "User@Example.COM"으로 요청한 상황.
         // (MySQL 기본 collation은 대소문자 무시라 findByEmail이 회원을 찾는다 — mock으로 본뜸.)
@@ -547,7 +635,7 @@ class MemberServiceImplTest {
     // ───────────────────────────── 탈퇴 ─────────────────────────────
 
     @Test
-    @DisplayName("withdraw: 로컬 soft delete 후 IdP 비활성화(deactivateUser)를 호출한다")
+    @DisplayName("withdraw: IdP 비활성화(tx 밖) 후 로컬 soft delete를 수행한다(IdP-first)")
     void withdraw_성공() {
         Member member = memberWithLanguage("vi");
         when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
@@ -555,8 +643,13 @@ class MemberServiceImplTest {
         memberService.withdraw("pub-1");
 
         assertThat(member.getDeletedAt()).as("로컬 soft delete(deleted_at) 세팅됨").isNotNull();
-        // IdP에는 가입 시 저장한 authProviderId(=user uuid)로 비활성화 요청이 나가야 한다.
-        verify(idpUserClient).deactivateUser("idp-sub-uuid-1");
+        // 활성 조회는 2회 — ① withdraw의 IdP 식별자 확보 ② withdrawLocalTx(짧은 tx)의 race 재확인.
+        verify(memberRepository, times(2)).findByPublicIdAndDeletedAtIsNull("pub-1");
+        // IdP-first 순서를 직접 구속한다(signup 테스트와 동일 방식): 조회 → IdP 비활성화(tx 밖) → 로컬 단계 재조회.
+        InOrder order = inOrder(idpUserClient, memberRepository);
+        order.verify(memberRepository).findByPublicIdAndDeletedAtIsNull("pub-1");
+        order.verify(idpUserClient).deactivateUser("idp-sub-uuid-1");
+        order.verify(memberRepository).findByPublicIdAndDeletedAtIsNull("pub-1");
     }
 
     @Test
@@ -574,7 +667,7 @@ class MemberServiceImplTest {
     }
 
     @Test
-    @DisplayName("withdraw: IdP 비활성화 실패(COMMON5000) 시 예외를 전파한다(@Transactional 롤백 영역)")
+    @DisplayName("withdraw: IdP 비활성화 실패(COMMON5000) 시 예외 전파 + 로컬 soft delete에 도달하지 않는다(IdP-first 정합)")
     void withdraw_IdP실패_예외전파() {
         Member member = memberWithLanguage("vi");
         when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
@@ -586,6 +679,25 @@ class MemberServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INTERNAL_SERVER_ERROR);
 
+        verify(idpUserClient).deactivateUser("idp-sub-uuid-1");
+        // 과거엔 @Transactional 롤백이 정합을 보장했지만, hoist 후엔 "로컬에 손대기 전"이라 무변경이 보장된다.
+        assertThat(member.getDeletedAt()).as("IdP 실패 시 로컬 무변경").isNull();
+    }
+
+    @Test
+    @DisplayName("withdraw: IdP 비활성화 뒤 로컬 단계에서 회원이 사라진 race면 MEMBER4001(비활성화는 멱등이라 재시도 안전)")
+    void withdraw_로컬단계_race_MEMBER4001() {
+        Member member = memberWithLanguage("vi");
+        // ① withdraw의 활성 조회는 성공, ② withdrawLocalTx의 재확인 시점엔 동시 탈퇴로 이미 비활성.
+        when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1"))
+                .thenReturn(Optional.of(member), Optional.empty());
+
+        assertThatThrownBy(() -> memberService.withdraw("pub-1"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.MEMBER_NOT_FOUND);
+
+        // IdP 비활성화는 이미 나갔지만(잔여 상태), deactivateUser가 멱등이라 중복 호출이어도 무해하다.
         verify(idpUserClient).deactivateUser("idp-sub-uuid-1");
     }
 

@@ -38,7 +38,7 @@ public class LikeServiceImpl implements LikeService {
     @Override
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public LikedPostListResponse getLikedPosts(String userPublicId, String sort, int page, int size) {
-        // 10D community-2 계열 — MemberClient(외부 HTTP)를 readOnly tx/커넥션 보유 중 호출하지 않도록
+        // MemberClient(외부 HTTP)를 readOnly tx/커넥션 보유 중 호출하지 않도록
         // NOT_SUPPORTED로 무트랜잭션 처리(repo 호출은 각자 짧은 readOnly tx, Post/Comment 목록과 동일 정책).
         // 정렬은 Repository JPQL의 ORDER BY로 고정하므로 Pageable에는 sort를 싣지 않는다(page/size만).
         Pageable pageable = PageRequest.of(page, size);

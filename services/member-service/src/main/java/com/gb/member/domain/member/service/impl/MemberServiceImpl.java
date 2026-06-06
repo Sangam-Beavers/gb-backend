@@ -9,6 +9,8 @@ import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.request.SocialProfileRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.LanguageResponse;
+import com.gb.member.domain.member.dto.response.MemberDisplayListResponse;
+import com.gb.member.domain.member.dto.response.MemberDisplayResponse;
 import com.gb.member.domain.member.dto.response.ProfileResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.dto.response.SocialProfileResponse;
@@ -22,10 +24,13 @@ import com.gb.member.global.redis.PasswordResetRateLimiter;
 import com.gb.member.global.redis.PasswordResetTokenStore;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,12 +45,17 @@ public class MemberServiceImpl implements MemberService {
     private final PasswordResetRateLimiter passwordResetRateLimiter;
     private final EmailSender emailSender;
 
+    /** self-injection: withdrawLocalTx의 @Transactional 프록시 적용 위함(VerificationServiceImpl 동일 패턴). */
+    @Autowired
+    @Lazy
+    private MemberService self;
+
     /** 재설정 링크 베이스 URL(프론트 비번재설정 페이지). yml app.password-reset.base-url로 주입. */
     @Value("${app.password-reset.base-url}")
     private String passwordResetBaseUrl;
 
     /**
-     * 이메일 회원가입 — <b>IdP-first 단일 INSERT</b>(11D member-idp-1·core-2 묶음 수정, MEM-02 재설계).
+     * 이메일 회원가입 — <b>IdP-first 단일 INSERT</b>.
      *
      * <p>순서: 중복 선검사 → IdP 프로비저닝(<b>트랜잭션 밖</b>) → 로컬 단일 INSERT(sub 포함, 자체 짧은 tx).
      * 과거(MEM-02)에는 "로컬 row 선점 → IdP → sub UPDATE"를 한 @Transactional로 묶었으나,
@@ -75,9 +85,9 @@ public class MemberServiceImpl implements MemberService {
         // 토큰 custom claim(public_id)과 우리 회원이 일치한다(토큰 sub ↔ publicId 매핑).
         String publicId = UUID.randomUUID().toString();
 
-        // ① IdP 프로비저닝 — 트랜잭션 "밖"이라 IdP가 느려도 DB 커넥션/락을 점유하지 않는다(core-2).
-        //    실패하면 로컬엔 아무것도 만든 게 없어 보상이 필요 없다(set_password 부분실패의 IdP 고아는
-        //    RealIdpUserClient가 내부에서 보상 DELETE — idp-1). 방식 B: 비밀번호는 IdP에만 저장된다.
+        // ① IdP 프로비저닝 — 트랜잭션 "밖"에서 수행하여 DB 커넥션/락을 점유하지 않는다.
+        //    set_password 부분실패 시 내부 보상 DELETE로 IdP 고아를 회수한다.
+        //    비밀번호는 IdP에만 저장되며, 로컬 DB에는 저장하지 않는다.
         String authProviderId = idpUserClient.provisionUser(
                 request.getEmail(), request.getName(), request.getPassword(), publicId);
 
@@ -121,14 +131,11 @@ public class MemberServiceImpl implements MemberService {
             SocialProfileRequest request) {
 
         // 1) 이미 프로필 완료(=members row 존재)면 재생성 거절.
-        //    소셜 신규회원은 토큰(public_id)은 있어도 row가 없는 "미완료" 상태로 시작하므로,
-        //    row가 이미 있으면 완료된 회원이다(중복 호출/이중 제출).
         if (memberRepository.existsByPublicId(publicId)) {
             throw new BusinessException(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
         }
 
-        // 2) 이메일 중복(다른 계정이 이미 사용). 정책상 소셜-기존 계정 자동연결은 안 하므로(거부),
-        //    Authentik Source 단계에서 일차 차단되지만 정합성을 위해 여기서도 방어한다.
+        // 2) 이메일 중복(다른 계정이 이미 사용). 여기서도 방어하여 정합성을 확보한다.
         if (memberRepository.existsByEmail(email)) {
             throw new BusinessException(MemberErrorCode.EMAIL_ALREADY_EXISTS);
         }
@@ -138,8 +145,6 @@ public class MemberServiceImpl implements MemberService {
             throw new BusinessException(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
         }
 
-        // 4) members row 최초 생성. publicId/email/name/authProviderId는 검증된 토큰 claim에서,
-        //    닉네임/국적/언어는 요청에서 채운다. 모든 필드가 갖춰진 시점에 한 번에 INSERT(이메일 가입과 일관).
         Member member = Member.builder()
                 .publicId(publicId)
                 .email(email)
@@ -187,6 +192,28 @@ public class MemberServiceImpl implements MemberService {
 
     @Override
     @Transactional(readOnly = true)
+    public MemberDisplayListResponse getDisplayInfos(List<String> publicIds) {
+        // 탈퇴자는 Repository 레벨에서 제외되며,
+        // 미존재·탈퇴로 빠진 id는 응답에 항목이 없을 뿐 에러가 아니다.
+        List<MemberDisplayResponse> members = memberRepository
+                .findByPublicIdInAndDeletedAtIsNull(publicIds).stream()
+                .map(MemberDisplayResponse::from)
+                .toList();
+        return MemberDisplayListResponse.of(members);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public MemberDisplayResponse getDisplayInfoByEmail(String email) {
+        // 검증(존재 확인) 용도라 폴백 없이 fail-fast(§7) — 미존재·탈퇴 모두 MEMBER4001.
+        // 탈퇴자 제외는 Repository 레벨(findByEmailAndDeletedAtIsNull): 탈퇴 회원은 송금 수신자가 될 수 없다.
+        Member member = memberRepository.findByEmailAndDeletedAtIsNull(email)
+                .orElseThrow(() -> new BusinessException(MemberErrorCode.MEMBER_NOT_FOUND));
+        return MemberDisplayResponse.from(member);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public void sendPasswordResetEmail(PasswordResetEmailRequest request) {
         String email = request.getEmail();
 
@@ -199,17 +226,14 @@ public class MemberServiceImpl implements MemberService {
 
         // 가입 여부 노출 방지(보안): 미가입 이메일이어도 예외/다른 응답 없이 조용히 종료한다.
         // (공격자가 응답 차이로 "이 이메일 가입돼 있나"를 알아내지 못하게 — 호출 측은 항상 200을 받는다.)
-        // 회원을 "조회"해 저장 이메일(가입 당시 표기)을 쓴다(11D member-idp-3): MySQL 기본 collation은
-        // 대소문자 무시라 혼합 케이스 입력으로도 회원이 찾아지는데, 입력값을 그대로 토큰에 실으면 재설정
-        // 단계의 IdP username "정확 일치" 조회(changePassword)가 0건이 되어 500으로 깨진다. IdP username은
-        // 가입 표기와 byte-exact 동일하므로 토큰·발송 모두 저장 이메일로 통일한다.
+        // 저장 이메일(가입 당시 표기)을 사용한다. MySQL 기본 collation은 대소문자를 무시하므로,
+        // IdP username과 byte-exact 일치를 보장하기 위해 입력값이 아닌 저장값을 사용한다.
         Optional<Member> member = memberRepository.findByEmail(email);
         if (member.isEmpty()) {
             return;
         }
         String canonicalEmail = member.get().getEmail();
 
-        // 일회용 재설정 토큰 생성 → Redis에 TTL 저장(토큰→email). 만료는 Redis가 자동 처리.
         String token = UUID.randomUUID().toString();
         passwordResetTokenStore.save(token, canonicalEmail);
 
@@ -226,13 +250,12 @@ public class MemberServiceImpl implements MemberService {
 
     @Override
     public void resetPassword(PasswordResetRequest request) {
-        // 토큰을 원자적으로 소비(GETDEL) — IdP 호출 전에 단 한 번만 쓰이게 한다. 없으면(만료/무효/이미 소비) 거절.
-        // 동시 요청·더블클릭이 들어와도 정확히 한 번만 통과한다(GET-then-DELETE 경쟁 제거).
+        // 토큰을 원자적으로 소비(GETDEL)하여 단 한 번만 사용되게 한다.
+        // 없으면(만료/무효/이미 소비) 거절한다.
         String email = passwordResetTokenStore.consume(request.getToken())
                 .orElseThrow(() -> new BusinessException(MemberErrorCode.INVALID_RESET_TOKEN));
 
         // 비밀번호는 IdP가 보유하므로 IdP 관리 API로 변경한다.
-        // (토큰은 이미 소비됨 — IdP 실패 시 재설정을 다시 요청해야 한다. 토큰 단일 사용 보안 우선.)
         idpUserClient.changePassword(email, request.getNewPassword());
     }
 
@@ -250,17 +273,37 @@ public class MemberServiceImpl implements MemberService {
         return LanguageResponse.from(member);
     }
 
+    /**
+     * 탈퇴 — <b>IdP-first + 로컬 짧은 tx</b>(가입 IdP-first·인증 지갑개설 hoist와 동일 사상).
+     *
+     * <p>과거에는 한 @Transactional 안에서 soft delete 후 IdP HTTP(호출당 최대 ~13s)를 기다려
+     * "IdP 실패 → 롤백" 정합을 얻었으나, 그 대가로 쓰기 tx·Hikari 커넥션을 외부 응답까지 점유했다(core-2 계열).
+     * IdP 비활성화를 tx 밖으로 빼고 로컬 soft delete를 자체 짧은 tx로 분리해도 같은 정합이 유지된다:
+     * <ul>
+     *   <li>IdP 비활성화 실패 → 여기서 예외로 끝나 로컬 무변경(기존 롤백과 동일한 결과).</li>
+     *   <li>로컬 soft delete 실패 → "IdP만 비활성·로컬 활성" — 기존 코드의 커밋 실패 구간과 동일한
+     *       잔여 상태이며, {@link IdpUserClient#deactivateUser}가 멱등이라 재시도(액세스 토큰 만료 전)로 수습된다.
+     *       완전 해소는 PENDING_WITHDRAWAL + outbox/재시도 워커(saga)가 필요하나 v1 범위 밖(기존 보류 유지).</li>
+     * </ul>
+     */
+    @Override
+    public void withdraw(String userPublicId) {
+        // 활성 회원 확인 + IdP 식별자 확보(조회만 — 쓰기 tx를 열지 않는다). 없는(탈퇴 포함) 회원이면 MEMBER4001.
+        Member member = getActiveMemberOrThrow(userPublicId);
+
+        // ① IdP 비활성화 — 트랜잭션 "밖". 실패하면 BusinessException이 그대로 올라와 로컬은 무변경.
+        idpUserClient.deactivateUser(member.getAuthProviderId());
+
+        // ② 로컬 soft delete — self-proxy 자체 짧은 tx(외부 HTTP가 끝난 뒤에만 커넥션을 잡는다).
+        self.withdrawLocalTx(userPublicId);
+    }
+
     @Override
     @Transactional
-    public void withdraw(String userPublicId) {
+    public void withdrawLocalTx(String userPublicId) {
+        // ①과의 사이에 동시 탈퇴가 끼어든 race까지 재확인 — 이미 탈퇴면 MEMBER4001(순차 재탈퇴와 동일 응답).
         Member member = getActiveMemberOrThrow(userPublicId);
-        member.softDelete();                      // 로컬 deleted_at 세팅(아직 커밋 전)
-        // 외부 호출은 "마지막 단계"로 — IdP 비활성화가 실패하면 BusinessException이 올라와
-        // @Transactional이 롤백되어 로컬 soft delete도 반영되지 않는다(정합성).
-        // TODO(알려진 한계): IdP 비활성화 성공 직후 DB 커밋이 실패하는 드문 구간은 이중 쓰기(dual-write)라
-        //   완전 원자적이지 않다(IdP만 비활성·로컬 활성). 완전 해소는 PENDING_WITHDRAWAL 상태 +
-        //   outbox/재시도 워커(saga)가 필요하나 인프라 비용이 커 v1 범위 밖으로 보류한다.
-        idpUserClient.deactivateUser(member.getAuthProviderId());
+        member.softDelete(); // 로컬 deleted_at 세팅(dirty checking — 커밋은 메서드 종료 시)
     }
 
     @Override
@@ -280,7 +323,7 @@ public class MemberServiceImpl implements MemberService {
             throw new BusinessException(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
         }
 
-        member.updateProfile(request.getNickname(), request.getLanguage(), request.getBio()); // dirty checking
+        member.updateProfile(request.getNickname(), request.getLanguage(), request.getBio());
         return ProfileResponse.from(member);
     }
 

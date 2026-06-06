@@ -224,7 +224,7 @@ class CommentServiceTest {
     }
 
     @Test
-    @DisplayName("createComment hoist(10D community-1): DB 본문(INSERT·count 증가)이 끝난 뒤에야 MemberClient를 호출하고, 회원 조회 실패가 본문을 막지 않는다")
+    @DisplayName("createComment: DB 본문(INSERT·count 증가)이 끝난 뒤에야 MemberClient를 호출하고, 회원 조회 실패가 본문을 막지 않는다")
     void createComment_member조회는_tx본문_이후() {
         // 외부 HTTP(MemberClient)가 쓰기 tx + posts 행 락 안에서 호출되지 않도록 분리한 구조의 회귀 가드:
         // ① 호출 순서 save→incrementCommentCount→getMember, ② getMember가 던져도 save/increment는 이미 수행됨
@@ -273,7 +273,7 @@ class CommentServiceTest {
     }
 
     @Test
-    @DisplayName("deleteComment 동시 패자(affected=0): 이미 삭제된 행이면 comment_count 감소하지 않음(COM1 회귀)")
+    @DisplayName("deleteComment 동시 패자(affected=0): 이미 삭제된 행이면 comment_count 감소하지 않음(과차감 방지)")
     void deleteComment_동시패자_affected0_감소안함() {
         Post post = post(PID);
         ReflectionTestUtils.setField(post, "commentCount", 5);

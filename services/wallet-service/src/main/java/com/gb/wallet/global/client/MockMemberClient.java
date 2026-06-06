@@ -1,27 +1,22 @@
 package com.gb.wallet.global.client;
 
+import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
-import org.springframework.context.annotation.Profile;
-import org.springframework.stereotype.Component;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
- * 개발용 Mock {@link MemberClient}. member-service 미구현 상태의 임시 구현이다.
- * 운영 전환 시 RealMemberClient(@Profile("prod"))로 교체된다.
+ * (구) 개발용 Mock {@link MemberClient} — member-service 구현 완료로 역할 종료. <b>삭제 후보.</b>
  *
- * <p>두 조회 메서드의 정책이 다르다:
- * <ul>
- *   <li>{@link #getMember}는 미존재 시 fallback {@link MemberInfo}("Unknown")를 반환 — 최근 송금
- *       목록처럼 평탄 매핑이 필요한 호출 측을 위함.</li>
- *   <li>{@link #findByEmail}은 미존재 시 {@link Optional#empty()} — 앱 사용자 검증 API가 명확히
- *       "없음"으로 응답할 수 있어야 하기 때문.</li>
- * </ul>
+ * <p>member-service 표시정보 API(auth §13) 신설에 따라 {@link RealMemberClient}(stage·prod)와
+ * {@link DevMemberClient}(dev — FIXTURES 5명 이전됨)로 대체됐다. 기존 {@code @Profile({"dev","stage"})}
+ * 점유 중 dev는 DevMemberClient와의 빈 충돌을 막기 위해, stage는 Real로 전환(의도된 변경)하기 위해
+ * 빈 등록을 해제했다. 파일 삭제는 사람이 확인 후 수행한다(CLAUDE.md §12 — 임의 삭제 금지).
  *
- * <p>테스트 시 transactions/wallets 테이블에 동일한 user_public_id를 넣어두면 매칭된다.
- * 이메일은 아래 FIXTURES의 두 번째 컬럼(예: {@code "linh@example.com"})을 사용한다.
+ * @deprecated {@link DevMemberClient}(fixture 우선 + Real 위임) / {@link RealMemberClient}로 대체됨.
  */
-@Component
-@Profile({"dev", "stage"})
+@Deprecated
 public class MockMemberClient implements MemberClient {
 
     /** 개발용 고정 회원 데이터. 키는 wallets.user_public_id와 1:1로 맞춰 사용한다. */
@@ -50,6 +45,20 @@ public class MockMemberClient implements MemberClient {
         }
         // fallback: 없는 회원도 안전하게 표시 가능한 형태로 반환. user_public_id는 그대로 echo.
         return new MemberInfo(userPublicId, null, "Unknown", "Unknown", "UNK", false);
+    }
+
+    @Override
+    public Map<String, MemberInfo> getMembers(Collection<String> userPublicIds) {
+        // 인메모리라 배치 이득은 없지만 인터페이스 계약(요청한 모든 id 키 포함)을 유지한다.
+        return userPublicIds.stream()
+                .distinct()
+                .collect(Collectors.toMap(Function.identity(), this::getMember));
+    }
+
+    @Override
+    public Optional<MemberInfo> findMember(String userPublicId) {
+        // 원장 저장용 계약 — fixture 히트만 present, 미존재는 empty(폴백 객체 없음).
+        return Optional.ofNullable(FIXTURES.get(userPublicId));
     }
 
     @Override

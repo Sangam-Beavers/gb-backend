@@ -77,7 +77,7 @@ class DistributedLockHelperTest {
         assertThat(Thread.currentThread().isInterrupted()).isTrue();
     }
 
-    // --- tryLockWithWatchdog (WSCH-03, redis-util-2) ---
+    // --- tryLockWithWatchdog ---
 
     private static final String BATCH_KEY = "scheduler:scheduled-transfer";
 

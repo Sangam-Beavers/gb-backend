@@ -161,13 +161,20 @@ public class ScheduledTransferServiceImpl implements ScheduledTransferService {
     }
 
     /**
-     * 회원 본명을 안전하게 조회한다 — fail-open. MemberClient 장애 시 null로 저장하고 설정은 진행.
+     * 회원 본명을 안전하게 조회한다 — 조회 실패 시 null로 저장하고 설정은 진행.
+     * snapshot({@code scheduled_transfers.receiver_name})은 영속·회차 복사되는 값이라
+     * {@link MemberClient#findMember}(원장용 — 미존재·장애 = empty, 폴백 객체 없음)를 쓴다. 표시용
+     * {@code getMember}의 "Unknown" 폴백이 snapshot에 박히면 회차마다 가짜 이름이 원장에 복사된다.
      * (TransferServiceImpl.fetchMemberNameSafe와 동일 정책. 향후 공용 헬퍼로 추출 검토.)
+     *
+     * <p><b>수용된 한계(wallet-sched-1):</b> 등록 순간 장애로 null이 박히면 이후 member-service가
+     * 복구돼도 모든 회차의 {@code transactions.receiver_name}이 null로 남는다 — 회차 실행은 스케줄러
+     * 스레드(無JWT)라 재조회가 불가능하다. 가짜 이름 영속보다 null이 낫다는 정책 선택이며, 복구가
+     * 필요하면 사용자가 정기송금을 재등록하면 된다(등록은 HTTP 컨텍스트라 정상 조회).
      */
     private String fetchMemberNameSafe(String userPublicId) {
         try {
-            MemberInfo info = memberClient.getMember(userPublicId);
-            return info != null ? info.name() : null;
+            return memberClient.findMember(userPublicId).map(MemberInfo::name).orElse(null);
         } catch (RuntimeException e) {
             log.warn("MemberClient 조회 실패 — receiverName=null로 저장. user={}", userPublicId, e);
             return null;

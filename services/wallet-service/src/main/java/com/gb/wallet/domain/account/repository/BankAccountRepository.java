@@ -36,6 +36,15 @@ public interface BankAccountRepository extends JpaRepository<BankAccount, Long> 
     List<BankAccount> findAllByIdIn(Collection<Long> ids);
 
     /**
+     * id 단건 조회 + bank 즉시 페치. 내장 {@code findById}는 {@code @EntityGraph}가 안 붙어 bank가
+     * LAZY proxy로 남는다 — 송금 확인증(getReceipt)처럼 <b>트랜잭션 밖(NOT_SUPPORTED)</b>에서 응답 조립이
+     * {@code bankAccount.getBank().getName()}을 탐색하는 호출 측은 detached LAZY 초기화로
+     * LazyInitializationException이 나므로 본 메서드를 쓴다.
+     */
+    @EntityGraph(attributePaths = "bank")
+    Optional<BankAccount> findWithBankById(Long id);
+
+    /**
      * 같은 회원이 동일 은행+계좌번호로 이미 활성 등록한 계좌가 있는지 확인한다(중복 등록 검사 → ACCOUNT4004).
      * 비활성(soft-delete) 레코드는 제외 — 같은 계좌 재등록 허용.
      */

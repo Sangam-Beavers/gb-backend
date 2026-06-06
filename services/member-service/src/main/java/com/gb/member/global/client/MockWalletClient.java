@@ -5,21 +5,20 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 /**
- * 개발/테스트용 Mock {@link WalletClient}. wallet-service 실제 호출 없이 INFO 로깅만 한다.
+ * 테스트 전용 Mock {@link WalletClient}. wallet-service 실제 호출 없이 INFO 로깅만 한다.
  *
- * <p>활성 프로파일이 {@code dev} 또는 {@code test}일 때만 빈으로 등록된다. 운영/스테이징에서는
- * {@link RealWalletClient}가 활성화되어 실제 wallet-service의 {@code POST /api/v1/wallets}를 호출한다.
- *
- * <p>개발기에서도 진짜 지갑 생성을 시험하고 싶으면 본 빈을 임시로 비활성화하거나(@Primary
- * RealWalletClient 빈 추가) 프로파일을 분리해 사용한다 — 본 이슈(#152) 범위 밖.
+ * <p>활성 프로파일이 {@code test}일 때만 빈으로 등록된다 — H2/컨텍스트 로딩 테스트가 외부 HTTP 없이
+ * 돌도록. <b>dev를 포함한 나머지 전 환경은 {@link RealWalletClient}</b>가 실제 wallet-service의
+ * {@code POST /api/v1/wallets}를 호출한다(#155 Mock→Real 정렬 — dev에서도 인증 APPROVED 시 지갑
+ * 자동개설(#152)이 실동작해 prod·stage와 행위가 같아진다. MemberClient 정렬과 동일 사상).
  */
 @Slf4j
 @Component
-@Profile({"dev", "test"})
+@Profile("test")
 public class MockWalletClient implements WalletClient {
 
     @Override
     public void createWalletFor(String userPublicId) {
-        log.info("[MockWalletClient] 지갑 생성 호출 skip (dev/test). user_public_id={}", userPublicId);
+        log.info("[MockWalletClient] 지갑 생성 호출 skip (test). user_public_id={}", userPublicId);
     }
 }

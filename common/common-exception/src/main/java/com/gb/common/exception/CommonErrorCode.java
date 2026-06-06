@@ -14,9 +14,8 @@ public enum CommonErrorCode implements ErrorCode {
 
     INVALID_REQUEST(HttpStatus.BAD_REQUEST, "COMMON4001", "요청 값이 올바르지 않습니다."),
     MISSING_REQUIRED_FIELD(HttpStatus.BAD_REQUEST, "COMMON4002", "필수 입력 항목이 누락되었습니다."),
-    // 사문화: 인증 실패(JWT 누락/무효) 401은 common-security RestAuthenticationEntryPoint가 AUTH4011로 처리한다
-    // (CLAUDE §6·§9). 이 COMMON4011은 현재 코드 사용처가 없는 예약 코드다 — 외부 참조 위험 때문에 제거하지 않고
-    // 남겨두되, 신규 401 경로는 AUTH4011을 쓴다.
+    // 인증 실패(JWT 누락/무효) 401은 common-security RestAuthenticationEntryPoint가 AUTH4011로 처리한다.
+    // COMMON4011은 현재 사용하지 않으나 외부 참조 위험 때문에 유지된다(신규 401 경로는 AUTH4011 사용).
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "COMMON4011", "인증 정보가 유효하지 않습니다."),
     FORBIDDEN(HttpStatus.FORBIDDEN, "COMMON4031", "접근 권한이 없습니다."),
     RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "COMMON4041", "존재하지 않는 리소스입니다."),

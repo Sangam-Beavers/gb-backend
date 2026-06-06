@@ -7,9 +7,12 @@ import com.gb.member.domain.member.dto.request.SignupRequest;
 import com.gb.member.domain.member.dto.request.SocialProfileRequest;
 import com.gb.member.domain.member.dto.response.CheckAvailabilityResponse;
 import com.gb.member.domain.member.dto.response.LanguageResponse;
+import com.gb.member.domain.member.dto.response.MemberDisplayListResponse;
+import com.gb.member.domain.member.dto.response.MemberDisplayResponse;
 import com.gb.member.domain.member.dto.response.ProfileResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.dto.response.SocialProfileResponse;
+import java.util.List;
 
 public interface MemberService {
 
@@ -30,6 +33,18 @@ public interface MemberService {
     /** 닉네임이 사용 가능한지(중복이 아닌지) 확인한다. */
     CheckAvailabilityResponse checkNickname(String nickname);
 
+    /**
+     * 회원 표시정보 배치 조회(display-info). 다른 서비스(community/wallet)의 MemberClient가 호출한다.
+     * 존재하는 활성(미탈퇴) 회원만 반환하고 미존재·탈퇴는 항목에서 제외한다(호출 측이 "Unknown" 폴백).
+     */
+    MemberDisplayListResponse getDisplayInfos(List<String> publicIds);
+
+    /**
+     * 이메일로 활성 회원 표시정보 단건 조회(by-email). wallet validate-member(수신자 검증)가 호출한다.
+     * 미존재·탈퇴 회원이면 MEMBER4001 — 검증 용도라 폴백 없이 fail-fast(§7).
+     */
+    MemberDisplayResponse getDisplayInfoByEmail(String email);
+
     /** 비밀번호 재설정 링크를 이메일로 발송한다(가입된 이메일일 때만 실제 발송, 응답은 항상 동일). */
     void sendPasswordResetEmail(PasswordResetEmailRequest request);
 
@@ -42,8 +57,14 @@ public interface MemberService {
     /** 현재 회원의 주 사용 언어를 변경하고 변경된 값을 반환한다. 없는(탈퇴 포함) 회원이면 MEMBER4001. */
     LanguageResponse updateLanguage(String userPublicId, String language);
 
-    /** 현재 회원을 탈퇴 처리한다(로컬 soft delete + IdP 비활성화). 없는(탈퇴 포함) 회원이면 MEMBER4001. */
+    /** 현재 회원을 탈퇴 처리한다(IdP 비활성화 → 로컬 soft delete). 없는(탈퇴 포함) 회원이면 MEMBER4001. */
     void withdraw(String userPublicId);
+
+    /**
+     * 탈퇴의 로컬 soft delete 단계(자체 짧은 tx). {@link #withdraw}가 IdP 비활성화(외부 HTTP)를 끝낸 뒤
+     * self-proxy로 호출하는 내부 단계로, 컨트롤러가 직접 호출하지 않는다(VerificationService.submitVerificationTx 동일 패턴).
+     */
+    void withdrawLocalTx(String userPublicId);
 
     /** 마이페이지 내 프로필을 조회한다. 없는(탈퇴 포함) 회원이면 MEMBER4001. */
     ProfileResponse getMyProfile(String userPublicId);
