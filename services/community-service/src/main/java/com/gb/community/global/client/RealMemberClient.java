@@ -54,6 +54,14 @@ public class RealMemberClient implements MemberClient {
     public RealMemberClient(
             RestClient memberRestClient,
             @Value("${member.api.base-url}") String memberApiBaseUrl) {
+        // 프로퍼티 "누락"은 placeholder 해석 실패로 기동이 이미 막히지만, "빈 값"(빈 문자열/공백)은 여기까지
+        // 통과해 첫 호출에서야 터진다 — 본 클래스는 두 메서드 모두 fail-open이라 예외가 삼켜져 모든 작성자가
+        // 영구 "Unknown"으로 침묵 강등된다(설정 오류가 장애로 안 보임). 기동 시점에 fail-fast 한다
+        // (wallet RealMemberClient·AesGcmCryptoService 키 검증과 동일 정책, CLAUDE.md §8-1).
+        if (memberApiBaseUrl == null || memberApiBaseUrl.isBlank()) {
+            throw new IllegalStateException(
+                    "member.api.base-url이 비어 있습니다 — MEMBER_API_BASE_URL 환경변수(또는 환경 yml)를 설정하세요.");
+        }
         this.restClient = memberRestClient;
         this.memberApiBaseUrl = memberApiBaseUrl;
     }

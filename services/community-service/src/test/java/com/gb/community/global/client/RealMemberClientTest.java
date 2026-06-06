@@ -1,6 +1,7 @@
 package com.gb.community.global.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
@@ -61,6 +62,20 @@ class RealMemberClientTest {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         return new Fixture(new RealMemberClient(builder.build(), BASE_URL), server);
+    }
+
+    // ----- 생성자 (설정 검증) -----
+
+    @Test
+    @DisplayName("생성자: member.api.base-url이 null/빈 값이면 기동 시점 IllegalStateException — fail-open에 의한 영구 'Unknown' 침묵 강등 방지")
+    void 생성자_빈_baseUrl_fail_fast() {
+        RestClient restClient = RestClient.builder().build();
+
+        assertThatThrownBy(() -> new RealMemberClient(restClient, " "))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("member.api.base-url");
+        assertThatThrownBy(() -> new RealMemberClient(restClient, null))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
