@@ -213,11 +213,16 @@ com.gb.{서비스}/
   `global/client/` 아래에 **인터페이스를 먼저 정의**하고 구현체를 Profile로 분리한다. Service는
   인터페이스에만 의존하므로, Mock ↔ 실제 구현을 갈아끼워도 **Service 코드는 바뀌지 않는다.**
   - 인터페이스 `XxxClient` (예: `MemberClient`, `BankClient`), 응답 DTO는 호출 대상의 응답 형태를 모사.
-  - 구현체: `MockXxxClient`(`@Profile("dev")`) = 미구현/개발용, `RealXxxClient`(`@Profile("!dev")`) = 실제 호출.
+  - 구현체: `MockXxxClient`(`@Profile("dev")`) = 미구현/개발용, `RealXxxClient`(`@Profile("!dev")`) = 실제 호출이
+    기본형. **test 프로파일 처리는 클라이언트별로 두 방식이 공존**한다(어느 쪽이든 프로파일별 빈은 정확히 1개,
+    단위 테스트는 항상 `@Mock` 우선):
+    - test에 **Mock 빈을 등록**해 컨텍스트 로딩이 실외부 의존 없이 뜨게 함 — 예: `MockWalletClient`
+      (`@Profile("test")`, Real은 `!test`라 dev에서도 실호출), `MockExchangeRateClient`(`@Profile({"dev","test"})`).
+    - test에 **빈을 두지 않고** 컨텍스트 로딩은 `@MockitoBean`으로 가림 — 예: `BankClient`(Mock=dev/stage),
+      양쪽 `MemberClient`.
     대상이 구현된 뒤 **dev에서 fixture와 실호출을 병행**하려면 `RealXxxClient`(`@Profile("!dev & !test")`) +
     `DevXxxClient`(`@Profile("dev")`, fixture 우선 → 미스만 Real 인스턴스에 위임) 데코레이터 변형을 쓴다
-    (현재 예: 양쪽 `MemberClient`). test 프로파일은 빈을 등록하지 않고 단위는 `@Mock`,
-    컨텍스트 로딩은 `@MockitoBean`으로 가린다. HTTP 호출·실패 정책 로직은 Real 1벌에만 둔다.
+    (현재 예: 양쪽 `MemberClient` — test 빈 없음 방식). HTTP 호출·실패 정책 로직은 Real 1벌에만 둔다.
   - **MSA 경계 데이터는 DB 직접 참조 금지.** 다른 서비스의 엔티티/테이블을 직접 SELECT하거나, 회원 정보를
     자기 스키마에 중복 저장하지 않는다. 반드시 client(=API 호출)로 받는다.
   - 조회 결과가 "없을 수 있는" 경우, 용도에 따라 반환 정책을 다르게 한다: 표시용 보조 조회는 fallback이
