@@ -5,6 +5,7 @@ import com.gb.document.domain.document.dto.response.DocumentResultResponse;
 import com.gb.document.domain.document.dto.response.DocumentStatusResponse;
 import com.gb.document.domain.document.dto.response.DocumentSummaryResponse;
 import com.gb.document.domain.document.dto.response.SubmissionResponse;
+import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
@@ -19,7 +20,11 @@ public interface DocumentSubmissionService {
 
     DocumentResultResponse getResult(String userPublicId, String publicId);
 
-    Page<DocumentSummaryResponse> list(String userPublicId, Pageable pageable);
+    /**
+     * 본인 분석 요청 목록 조회. statuses는 상태 필터(ANALYZING/COMPLETED/FAILED 문자열) —
+     * null/빈 리스트면 전체 조회, 잘못된 값이면 COMMON4001.
+     */
+    Page<DocumentSummaryResponse> list(String userPublicId, List<String> statuses, Pageable pageable);
 
     SubmissionResponse retry(String userPublicId, String publicId);
 }

@@ -53,6 +53,27 @@ class DocumentRepositoryTest {
     }
 
     @Test
+    @DisplayName("findAllByUserPublicIdAndStatusIn: 지정 상태만 최근순 — FAILED·다른 소유자는 제외")
+    void 상태필터_본인문서_최근순() {
+        Document a = persist(doc("a", "user-A", DocumentStatus.ANALYZING));
+        Document b = persist(doc("b", "user-A", DocumentStatus.COMPLETED));
+        persist(doc("c", "user-A", DocumentStatus.FAILED));          // 필터 밖 상태 — 제외
+        persist(doc("d", "user-OTHER", DocumentStatus.COMPLETED));   // 다른 소유자 — 제외
+        em.flush();
+
+        Page<Document> page = documentRepository.findAllByUserPublicIdAndStatusIn(
+                "user-A",
+                List.of(DocumentStatus.ANALYZING, DocumentStatus.COMPLETED),
+                PageRequest.of(0, 10, Sort.by(Sort.Direction.DESC, "createdAt")));
+
+        assertThat(page.getTotalElements()).isEqualTo(2);
+        // 최신 INSERT가 b → a 순으로 createdAt이 부여되므로 DESC 정렬 시 b, a 순서.
+        assertThat(page.getContent())
+                .extracting(Document::getPublicId)
+                .containsExactly(b.getPublicId(), a.getPublicId());
+    }
+
+    @Test
     @DisplayName("findAllByStatusAndUpdatedAtBefore: 임계 이전의 ANALYZING만 — 최신 ANALYZING·타 상태 과거 건은 제외")
     void 오래된_ANALYZING만_조회() {
         Document stale = persist(doc("stale", "user-A", DocumentStatus.ANALYZING));

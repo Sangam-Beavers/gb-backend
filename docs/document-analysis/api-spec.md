@@ -17,6 +17,7 @@
 | 분석 재요청 (FAILED 시) | POST | `/api/v1/documents/{id}/retry` | ✅ |
 | 문서 분석 결과 단건 조회 (※ 미구현) | GET | `/api/v1/documents/{id}` | ✅ |
 | 후속 질문 챗봇 (SSE 스트리밍) | POST | `/api/v1/documents/{id}/chat` | ✅ |
+| 후속 질문 챗봇 대화 이력 조회 | GET | `/api/v1/documents/{id}/chat/history` | ✅ |
 
 ---
 
@@ -129,7 +130,11 @@
 
 ## 4. 서류 분석 내역 목록
 
-`GET /api/v1/documents?page=&size=` · Auth ✅
+`GET /api/v1/documents?page=&size=&status=` · Auth ✅
+
+**Query**: `status` — 상태 필터(선택, 복수 허용·콤마 구분). `ANALYZING`/`COMPLETED`/`FAILED`.
+생략 시 전체. 잘못된 값은 **400 COMMON4001**. (프론트가 실패 내역을 숨길 때
+`status=ANALYZING,COMPLETED`로 호출.)
 
 **Response 200** — `data`: `documents`(배열) + 페이지네이션 메타.
 각 항목: `public_id`, `analysis_document_type`, `status`, `overall_risk_level`, `created_at` 등 요약.
@@ -162,6 +167,58 @@ FAILED 상태 문서의 분석을 다시 트리거. **S3에 원본이 남아 있
 ## 6. 문서 분석 결과 단건 조회
 
 `GET /api/v1/documents/{id}` · Auth ✅ — 마이페이지 진입용 단건 조회. **(※ 미구현 — 코드에 매핑 없음.)** 응답은 §3의 결과 또는 메타 요약(구현 시 통일).
+
+---
+
+## 7. 후속 질문 챗봇 대화 이력 조회
+
+`GET /api/v1/documents/{id}/chat/history?limit=&cursor=` · Auth ✅
+
+재방문 시 결과 화면 채팅 영역에 이전 대화를 복원(시드)한다. 백엔드는 인증 + 문서 소유자 검증 후
+챗봇 Lambda(`GET /history`, IAM SigV4, 비스트리밍 JSON)로 릴레이하고, Lambda가 DynamoDB
+`chat_sessions`에서 **사용자 노출 턴(`visible=true`)만** 시간 오름차순으로 반환한다.
+설계 상세: [`ai-chatbot-mcp.md`](./ai-chatbot-mcp.md) §6-2. (챗봇 전송 API `POST /chat`의 상세도 같은 문서 §6.)
+
+**Path Variable**: `id` = 문서 public_id (UUID)
+
+**Query**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `limit` | integer | X | 1회 조회 메시지 수. 기본 50, 최대 100 |
+| `cursor` | string | X | 다음 페이지 커서(이전 응답의 `next_cursor` 그대로). 첫 조회 시 생략 |
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `messages` | array | N | 대화 메시지(시간 오름차순). 이력 없으면 `[]` |
+| `messages[].role` | string | N | `user` / `assistant` |
+| `messages[].content` | string | N | 메시지 텍스트 (분석 요약 합성 턴은 미포함) |
+| `messages[].created_at` | string | N | 생성 시각 (ISO 8601 UTC Z) |
+| `next_cursor` | string | Y | 다음 페이지 커서(base64). 마지막 페이지면 null |
+
+```json
+{
+  "success": true,
+  "data": {
+    "messages": [
+      { "role": "user", "content": "이 계약서 월급이 최저임금보다 낮은 거 맞아?", "created_at": "2026-06-05T09:12:41Z" },
+      { "role": "assistant", "content": "네, 맞습니다. 계약서상 월 급여 160만원은...", "created_at": "2026-06-05T09:12:45Z" }
+    ],
+    "next_cursor": null
+  },
+  "message": "요청이 성공적으로 처리되었습니다."
+}
+```
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 403 | COMMON4031 | 접근 권한이 없습니다. |
+| 404 | DOCUMENT4001 | 존재하지 않는 문서입니다. |
+
+> - 이력이 없어도 문서가 존재하고 본인 소유면 **200 + 빈 배열**(404 아님).
+> - 에러 코드는 전부 기존 재사용(신설 0). `limit`/`cursor` 형식 오류는 전역 규칙대로 400 COMMON4001.
 
 ---
 

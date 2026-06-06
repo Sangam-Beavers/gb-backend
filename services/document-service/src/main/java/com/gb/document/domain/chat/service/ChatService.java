@@ -1,6 +1,7 @@
 package com.gb.document.domain.chat.service;
 
 import com.gb.document.domain.chat.dto.request.ChatRequest;
+import com.gb.document.domain.chat.dto.response.ChatHistoryResponse;
 
 /**
  * 챗봇 본 서비스. 정본 흐름: ai-chatbot-mcp.md §6.
@@ -30,4 +31,11 @@ public interface ChatService {
      */
     void streamChat(String documentPublicId, String userPublicId,
                     ChatRequest request, ChatStreamListener listener);
+
+    /**
+     * 대화 이력 조회(재방문 복원, ai-chatbot-mcp.md §6-2) — 챗봇 Lambda {@code /history} 릴레이.
+     * 백엔드는 DynamoDB를 직접 보지 않는다(크로스계정 의존 신설 금지 — §3-3).
+     * 권한 검증은 이미 통과된 상태를 가정(컨트롤러가 {@link #verifyOwnership} 선행 호출).
+     */
+    ChatHistoryResponse getHistory(String documentPublicId, String userPublicId, int limit, String cursor);
 }

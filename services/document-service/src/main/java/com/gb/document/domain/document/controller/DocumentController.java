@@ -18,6 +18,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -29,6 +30,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -150,10 +152,15 @@ public class DocumentController {
 
     @Operation(summary = "내 분석 요청 목록 조회",
             description = "본인이 제출한 분석 요청을 최근순으로 페이지 조회한다. "
-                    + "기본 페이지 크기 20, 정렬 createdAt DESC.")
+                    + "기본 페이지 크기 20, 정렬 createdAt DESC. "
+                    + "status 파라미터(복수 허용, 콤마 구분)로 상태 필터링 — 생략 시 전체.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "조회 성공. data는 Spring Page 구조(content, totalElements, totalPages, ...)."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "COMMON4001 - status 필터 값이 올바르지 않습니다"
+                            + "(ANALYZING/COMPLETED/FAILED 외의 값).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
                     description = "AUTH4011 - 인증이 필요합니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
@@ -162,9 +169,12 @@ public class DocumentController {
     @GetMapping
     public ApiResponse<Page<DocumentSummaryResponse>> list(
             @CurrentUserPublicId String userPublicId,
+            @Parameter(description = "상태 필터(복수 허용, 콤마 구분). ANALYZING/COMPLETED/FAILED. 생략 시 전체.",
+                    example = "ANALYZING,COMPLETED")
+            @RequestParam(name = "status", required = false) List<String> status,
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC)
             Pageable pageable) {
-        return ApiResponse.success(documentSubmissionService.list(userPublicId, pageable));
+        return ApiResponse.success(documentSubmissionService.list(userPublicId, status, pageable));
     }
 
     @Operation(summary = "분석 재요청",

@@ -28,7 +28,8 @@
 | 10 | 콜드 스타트 | EventBridge 5분 워밍업 |
 | 11 | 멱등성 | 대화 저장 `message_uuid` |
 | 12 | 시연 언어 | 한국어(다국어 구조 유지, 값만 ko) |
-| 13 | 화면/API | 기존 무변경 + 결과 화면에 채팅 영역 1개 + `POST /chat` 1개 추가 |
+| 13 | 화면/API | 기존 무변경 + 결과 화면에 채팅 영역 1개 + `POST /chat` · `GET /chat/history` 2개 추가 |
+| 14 | 대화 스레드 식별 | **`(user_public_id, document_public_id)` 영속** — session_id는 로깅용 메타(§3-5) |
 
 ---
 
@@ -82,6 +83,8 @@
 
 분석요약이 messages의 일부가 되므로, **대화내역을 저장/복구하면 분석요약도 함께 저장/복구된다.** 그래서 분석결과를 DynamoDB에 복제할 필요가 없다.
 
+> ⚠️ 이 약속이 지켜지려면 **첫 턴에 주입한 합성 요약 2턴(요약 user 턴 + assistant 확인 턴)도 DynamoDB에 `visible=false`로 저장**해야 한다(§7). user 질문/assistant 답변만 저장하면 Redis 만료(30분) 후 DynamoDB 복구 시 요약만 유실된다.
+
 ```
 MySQL 접근 횟수 = 세션당 1회 (맨 첫 질문 때만, 백엔드가 요약 추출)
 30분 안 후속:  Redis 복구 (messages에 요약 포함) → MySQL 안 봄
@@ -97,16 +100,29 @@ MySQL 접근 횟수 = 세션당 1회 (맨 첫 질문 때만, 백엔드가 요약
 ### 3-4. Redis ↔ DynamoDB 2계층
 
 ```
-턴 끝 → messages 통째:
-  ├─ Redis SETEX chat:session  (TTL 30분 갱신)
-  └─ DynamoDB chat_sessions    (TTL 90일, 누적 저장, message_uuid 멱등)
+턴 끝 → 저장:
+  ├─ Redis SETEX chat:thread:{user}:{doc}  (TTL 30분 갱신, toolUse 블록 포함 messages 통째)
+  └─ DynamoDB chat_sessions                (TTL 90일, 텍스트 턴만 누적, message_uuid 멱등)
 
 다음 질문:
   Redis hit  → 그대로 사용 (빠름)
-  Redis miss(30분↑) → DynamoDB에서 복구 → Redis 재적재 → 계속
+  Redis miss(30분↑) → DynamoDB에서 텍스트 턴 재구성 → Redis 재적재 → 계속
 ```
 
 **TTL 30분은 "대화 제한"이 아니라 "캐시 유효기간"이다.** 30분을 넘겨도 DynamoDB에서 복구되어 대화는 끊김 없이 이어진다.
+
+- 저장 내용의 비대칭: Redis = Bedrock `messages` 배열 통째(toolUse/toolResult 포함 — 컨텍스트 충실도), DynamoDB = 최종 텍스트 턴만(§7). 복구는 텍스트 턴 재구성으로 충분하며, 깨진 toolUse pair가 Bedrock 호출을 깨뜨릴 리스크도 제거된다.
+
+### 3-5. 스레드 모델 — 대화의 정체성은 (user, document)
+
+```
+대화 스레드 식별자 = (user_public_id, document_public_id)   ← 영속 정체성 (DynamoDB PK/SK 구조 그대로)
+session_id        = 접속 단위 메타데이터 (로깅·추적용)         ← 연속성과 무관
+```
+
+- 브라우저를 닫아 session_id를 잃어도 **같은 문서의 대화는 무조건 이어진다**(재방문 복원 §6-2).
+- Redis 키가 session_id가 아니라 스레드 기준인 이유: 재방문 사용자는 session_id 없이 오므로 session_id 키면 항상 miss — 캐시가 무의미해진다.
+- 백엔드의 session_id 발급 로직은 유지(변경 0), 의미만 격하. 프론트는 session_id를 localStorage 등에 저장할 필요 없다 — 서버(DynamoDB)가 SSOT.
 
 ---
 
@@ -117,7 +133,7 @@ MySQL 접근 횟수 = 세션당 1회 (맨 첫 질문 때만, 백엔드가 요약
 
 ### 추가만
 - 와이어프레임: **결과 상세 화면 하단에 채팅 영역 1개**. 결과(면책→위험도→위험항목→급여→번역)는 기존 그대로 두고, 그 아래에 "이 계약서에 대해 더 물어보세요" + 입력창. 새 화면/새 진입점 없음.
-- API: **`POST /api/v1/documents/{id}/chat` 1개** (§6).
+- API: **`POST /api/v1/documents/{id}/chat`** + **`GET /api/v1/documents/{id}/chat/history`** 2개 (§6). 재방문 시 history가 이전 대화를 복원해 채팅 영역에 시드한다.
 
 > 챗봇을 별개 화면이 아니라 결과 화면의 연장으로 둔다. 사용자 동선은 "분석내역 → 결과 클릭 → 스크롤 → 후속 질문"으로 기존 그대로. 대화 세션 중심 UI는 §10 확장으로 미룬다.
 
@@ -209,6 +225,32 @@ if (!doc.getUserPublicId().equals(userPublicId)) {
 > - 매핑: `dev→(source=development, environment=dev)`, `stage→(source=production, environment=stage)`, `prod→(source=production, environment=prod)`. 백엔드가 `application-{dev|stage|prod}.yml`에서 두 값을 주입한다.
 
 - `analysis_summary`는 **첫 대화에만** 채운다(전문 아닌 압축 요약). 이어가는 대화면 생략 — 요약은 이미 messages/DynamoDB에 들어있다.
+- **"첫 턴" 판정 권한은 Lambda에 있다.** 백엔드는 "session_id 없으면 일단 첨부"만 하고, Lambda가 DynamoDB에 기존 스레드가 있으면 요약을 무시한다(§8 `load_thread`). 재방문 사용자가 session_id 없이 와도 요약이 중복 주입되지 않는다(멱등).
+- **요약 생성 = 백엔드 `AnalysisSummaryBuilder`** (document-service `domain/chat/service/`, 현 `buildDummySummary()` 교체 대상) — MySQL `document_results`에서 추출해 **~500자 상한**으로 압축:
+  - 사용 필드: `analysisDocumentType` · `overallRiskLevel` · `wageSummary`(JSON) · `riskItems`(JSON, 위험도 내림차순 **상위 5건만**). `translatedText`는 미사용(토큰 절약 — 전문 참조는 §10 `search_document_detail` 확장).
+  - 출력 예: `"문서유형: 근로계약서. 종합 위험도: HIGH. 급여: 월 160만원(시급 환산 7,655원, 최저임금 미달), 공제: 기숙사비 20만원. 위험 항목: [HIGH] 제4조 임금 — 최저임금 미달 / [MEDIUM] 제6조 근로시간 — 주 50시간 초과 / ..."`
+  - `processingStatus != COMPLETED`면 요약 null 전달(에러코드 신설 금지 — 챗봇은 요약 없이 일반 응대).
+
+### 6-2. 대화 이력 조회 API (재방문 복원, 추가)
+
+`GET /api/v1/documents/{id}/chat/history?limit=50&cursor={base64}` · Auth ✅
+
+| 항목 | 내용 |
+| --- | --- |
+| 권한 | §5와 동일 (JWT `@CurrentUserPublicId` + 문서 소유자 검증 재사용) |
+| 에러 | 401 AUTH4011 / 403 COMMON4031 / 404 DOCUMENT4001 (신설 금지) |
+| 응답 | ApiResponse envelope. `messages: [{role, content, created_at}]` + `next_cursor` — **`visible=true` 턴만** |
+
+**흐름 — 백엔드 경유 Lambda 릴레이 (비스트리밍 JSON):**
+
+```
+프론트 → 계정 A Spring (인증 + 소유자 검증) → 챗봇 Lambda GET /history (IAM SigV4)
+       → Lambda: DynamoDB Query (PK=USER#u, SK begins_with DOC#d) → visible=true만 반환
+```
+
+- **백엔드가 DynamoDB를 크로스계정 직접 조회하지 않는다** — §3-3 "데이터는 쓰는 주체 옆, 크로스계정 0" 위반이고 계정 A에 DynamoDB IAM·SDK 의존이 새로 생긴다. 릴레이는 기존 "백엔드=검증·중계, 데이터 접근=Lambda" 분업과 동일 결이며, 기존 IAM SigV4 호출 클라이언트를 비스트리밍 GET으로 한 벌 더 쓰면 된다.
+- 페이지네이션: DynamoDB `LastEvaluatedKey`를 base64로 감싸 `cursor`로 왕복. 데모 스케일은 limit=50 1페이지로 충분하나 구조는 갖춘다.
+- 프론트: 결과 화면 채팅 영역 마운트 시 1회 호출 → 있으면 messages 시드(이전 대화 그대로 표시), 없으면 기존 초기 상태. 이후 전송은 기존 SSE 흐름 그대로(변경 0).
 
 ---
 
@@ -218,19 +260,25 @@ if (!doc.getUserPublicId().equals(userPublicId)) {
 
 ```
 PK (HASH):  USER#{user_public_id}
-SK (RANGE): DOC#{document_public_id}#TS#{timestamp}
+SK (RANGE): DOC#{document_public_id}#TS#{epoch_ms 13자리}#SEQ#{0|1}
+            └ SEQ: 같은 턴의 user(0) → assistant(1). 동일 ms 충돌에도 복원 순서 결정적
 
-속성: session_id, message_uuid(멱등), role('user'|'assistant'), content,
+속성: session_id(로깅용 메타 — 스레드 식별자 아님, §3-5), message_uuid(멱등),
+      role('user'|'assistant'), content(최종 텍스트만 — toolUse/toolResult 블록 저장 안 함),
+      visible(bool — 합성 요약 턴 false / 사용자 노출 턴 true),
       tools_used(List), language, environment(prod/stage/dev), created_at,
       ttl (만료 epoch = created_at + 90일)
 
-GSI (문서별 조회): GSI-PK = DOC#{document_public_id} / GSI-SK = TS#{timestamp}
+GSI: 없음 — 문서별 조회는 메인 키(PK + SK begins_with DOC#...)로 해결
 TTL: ttl 속성 활성화 → 90일 후 자동 삭제 (PII 보관기간 관리)
+빌링: On-Demand
 ```
 
 - **TTL 90일:** 계약서 대화엔 임금·근무조건 등 PII가 섞인다. 영구보관은 개인정보보호법 부담 + PII 마스킹에 공들인 파이프라인 톤과 불일치. 네이티브 TTL로 보관기간을 명시한다([`ai-pipeline.md`](./ai-pipeline.md) §8 3-Layer 보호와 정합).
 - **멱등성:** 같은 `message_uuid`면 덮어쓰기(재시도 중복 방지). conventions §의 멱등성 원칙과 동일 결.
 - **환경 분기:** `environment` 속성으로 구분, 테이블은 단일.
+- **합성 요약 턴도 저장(`visible=false`):** 첫 턴에 주입한 `[분석된 계약서 요약]` user 턴 + assistant 확인 턴을 함께 저장한다. 안 하면 DynamoDB 복구 시 요약이 유실된다(§3-2). 이력 조회(§6-2)는 `visible=true`만 반환하므로 합성 턴은 화면에 노출되지 않는다.
+- **쓰기 단위:** 턴 종료 시 BatchWrite — 첫 대화면 합성 2턴 + user + assistant = 4건, 이후 턴은 2건.
 
 ---
 
@@ -251,20 +299,22 @@ def search_legal_standard(query_text):
     return "\n".join(r["content"]["text"] for r in res["retrievalResults"])
 ```
 
-### 세션 로드 (Redis → DynamoDB 복구)
+### 스레드 로드 (Redis → DynamoDB 복구 → 진짜 첫 대화만 요약 주입)
 
 ```python
-def load_session(session_id, user_public_id, document_public_id, analysis_summary):
-    raw = chatbot_redis.get(f"chat:session:{session_id}")
-    if raw:                                              # Redis hit
+def load_thread(user_public_id, document_public_id, analysis_summary):
+    raw = chatbot_redis.get(f"chat:thread:{user_public_id}:{document_public_id}")
+    if raw:                                              # Redis hit (toolUse 블록 포함 통째)
         return json.loads(raw)
-    items = chat_table.query(                            # Redis miss → DynamoDB 복구
+    items = chat_table.query(                            # Redis miss → DynamoDB 복구 (visible 무관 전체)
         KeyConditionExpression="PK = :u AND begins_with(SK, :d)",
         ExpressionAttributeValues={":u": f"USER#{user_public_id}", ":d": f"DOC#{document_public_id}"},
         ScanIndexForward=True).get("Items", [])
-    if items:
+    if items:                                            # 합성 요약 턴(visible=false)도 함께 복원 → 재주입 불필요
         return [{"role": it["role"], "content": [{"text": it["content"]}]} for it in items]
-    return [                                             # 첫 대화 — 요약 주입(MySQL 재접근 없음)
+    if not analysis_summary:                             # 첫 대화인데 요약 없음(분석 미완료 등) — 일반 응대
+        return []
+    return [                                             # 진짜 첫 대화 — 요약 주입(MySQL 재접근 없음)
         {"role": "user", "content": [{"text": f"[분석된 계약서 요약]\n{analysis_summary}\n\n위 계약서에 대해 질문하겠습니다."}]},
         {"role": "assistant", "content": [{"text": "네, 확인했습니다. 궁금한 점 물어보세요."}]}]
 ```
@@ -282,8 +332,8 @@ for _ in range(5):
     if output["stopReason"] == "tool_use":
         messages.append({"role": "user", "content": await execute_tools(output, sessions)})
 
-chatbot_redis.setex(f"chat:session:{session_id}", 1800, json.dumps(messages))   # 30분
-save_to_dynamo(session_id, user_public_id, document_public_id, message, reply, environment)  # 90일, message_uuid (DynamoDB environment 속성 = dev/stage/prod)
+chatbot_redis.setex(f"chat:thread:{user_public_id}:{document_public_id}", 1800, json.dumps(messages))  # 30분, toolUse 포함 통째
+save_to_dynamo(...)  # 90일, message_uuid 멱등. 첫 대화면 합성 2턴(visible=false)+user+assistant 4건 BatchWrite, 이후 2건. session_id는 메타 속성
 ```
 
 도구 실행은 `asyncio.gather`로 병렬, 예외는 도구별로 격리해 사용자 친화 메시지로 치환한다(한 도구 실패가 전체를 막지 않음).
@@ -293,6 +343,8 @@ save_to_dynamo(session_id, user_public_id, document_public_id, message, reply, e
 > - `execute_tools(output, sessions)` — `output`의 `tool_use` 블록을 읽어 도구명으로 분기 → KB `retrieve` / MCP1 호출 / MCP2 호출, 결과를 `toolResult` 블록으로 반환. MCP URL은 페이로드 `environment`(§6)로 라우팅.
 > - `stream_to_client(resp)` — `converse_stream` 이벤트에서 **`end_turn` 턴의 텍스트 토큰만** SSE로 흘리고(R2), `tool_use` 턴은 비노출. `(output, reply)` 반환.
 > - `system` — 시스템 프롬프트(역할·답변 언어 = `user_lang`·법령 인용 규칙 등).
+> - `load_thread` / `save_to_dynamo` — §7 키 설계(SEQ·visible)대로 Query/BatchWrite. 컨텍스트 길이는 20턴 초과 시 **합성 요약 2턴 고정 + 최근 턴 슬라이딩 윈도우**(§10 Summary Worker 확장 전 데모 처리).
+> - `GET /history` 라우트 — §6-2. DynamoDB Query 후 `visible=true`만 `{role, content, created_at}`로 반환(비스트리밍 JSON).
 > - **시연 최소 경로:** 환율 질문("베트남 돈으로 얼마야?")은 `get_exchange_rate`(MCP1)만 타면 되고, 법령 질문은 `search_legal_standard`(KB)만 타면 된다. 영상용으로는 이 두 도구가 각각 한 번씩 호출되는 시나리오를 먼저 통과시키면 충분하다.
 
 ---
@@ -336,10 +388,10 @@ save_to_dynamo(session_id, user_public_id, document_public_id, message, reply, e
 
 ## 11. 인프라 변경 범위 요약
 
-**추가 (계정 B):** 챗봇 Lambda(Function URL + Response Streaming) 1 · DynamoDB `chat_sessions` 1(TTL 90일) · 챗봇 전용 Redis 1 · 법령 KB 1(분석과 공유, 백엔드 S3 Vectors) · EventBridge 워밍업 1
+**추가 (계정 B):** 챗봇 Lambda(Function URL + Response Streaming, `POST /chat` + `GET /history`) 1 · DynamoDB `chat_sessions` 1(TTL 90일, On-Demand, GSI 없음) + Lambda 실행 롤에 `dynamodb:Query/PutItem/BatchWriteItem`(테이블 ARN 한정) · 챗봇 전용 Redis 1 · 법령 KB 1(분석과 공유, 백엔드 S3 Vectors) · EventBridge 워밍업 1
 **추가 (각 환경):** 자체 MCP Server 1(환율)·2(커뮤니티) Pod (replicas=2+PDB) · `mcp_reader` 계정
 **추가 (외부 통합):** Tavily Remote MCP 직결 (외부 회사 운영, 우리 인프라 0). 챗봇 Lambda 환경변수 `TAVILY_API_KEY` 만 주입 (운영기엔 Secrets Manager).
-**추가 (계정 A 백엔드):** `POST /api/v1/documents/{id}/chat`(권한검증 + 요약추출 + Lambda 호출 + SSE 중계) · Function URL 호출 클라이언트(IAM 서명)
+**추가 (계정 A 백엔드):** `POST /api/v1/documents/{id}/chat`(권한검증 + 요약추출 + Lambda 호출 + SSE 중계) · `GET /api/v1/documents/{id}/chat/history`(권한검증 + Lambda 비스트리밍 릴레이, §6-2) · `AnalysisSummaryBuilder`(document_results → 압축 요약, §6) · Function URL 호출 클라이언트(IAM 서명, 스트리밍/비스트리밍 겸용)
 **추가 (EC2 HAProxy):** frontend `mcp_community_front`(8000)
 **변경 없음:** 기존 와이어프레임/프론트(결과 화면 하단 영역만 추가) · 기존 분석 API 6개 · VPC/서브넷/NAT/ALB/WireGuard · Lambda A/B · MySQL 스키마 · 기존 Redis · 분석 결과 저장 경로(SQS→Consumer→MySQL)
 
@@ -352,6 +404,7 @@ save_to_dynamo(session_id, user_public_id, document_public_id, message, reply, e
 - **R1 — Function URL 스트리밍 ↔ Spring `SseEmitter` 중계가 가장 어렵다.** Lambda Function URL의 Response Streaming을 IAM(SigV4)으로 호출하면서 그 스트림을 계정 A Spring이 받아 SSE로 재전송하는 어댑터를 직접 짜야 한다. 다른 게 다 정상이어도 여기가 막히면 데모가 안 된다. **더미 Lambda가 토큰 3개를 흘리면 브라우저까지 도달하는 PoC**를 가장 먼저 통과시킨다.
 - **R2 — `converse_stream` + Tool Use 루프의 스트리밍 분기.** 도구를 호출하는 턴(중간 reasoning)은 사용자에게 흘리지 말고, 최종 `end_turn` 턴에서만 토큰을 흘린다.
 - **R3 — 모델 ID(서울 리전 주의).** 서울(`ap-northeast-2`)에서 Claude는 foundation model ID 직접 호출이 막혀 있고 **inference profile로만** 호출된다. 접두사를 틀리면 그대로 깨진다 — **`us.` 접두 프로파일을 서울에서 쓰면 "400 invalid model identifier"** 가 난다(실제 보고된 오류). 서울에서 유효한 형태는 **`apac.anthropic.claude-*` 또는 `global.anthropic.claude-*`** inference profile이다. Day 1에 `aws bedrock list-inference-profiles --region ap-northeast-2`로 계정 B에서 **실제로 보이는** ID를 확정한다(모델 액세스가 활성화돼야 목록에 뜸 / 추정 금지). IAM에는 inference-profile ARN뿐 아니라 라우팅 대상 리전들의 `foundation-model` 리소스도 함께 Allow해야 한다. 또한 **Lambda A의 VLM(이미지→텍스트+마스킹)은 Vision 지원 모델**, **챗봇/Lambda B의 Tool Use는 Tool Use 지원 모델**(Sonnet/Opus 계열 안전)이어야 하므로 선택한 프로파일이 두 기능을 지원하는지 확인한다.
+- **R5 — 구현 순서: DynamoDB 먼저, Redis는 나중에.** 2계층 캐시는 성능 최적화일 뿐 기능 요건이 아니다. DynamoDB 단독으로 멀티턴·재방문 복원 전 기능이 성립하고 데모 스케일(동시 5명)에선 충분히 빠르므로, 동작을 먼저 세우고 캐시를 얹는다(디버깅 면적 최소화). 권장 순서: ① 요약 실데이터화(`AnalysisSummaryBuilder`, `buildDummySummary()` 교체) → ② DynamoDB 저장·복구(멀티턴 성립) → ③ `GET /history` 릴레이 + 프론트 시드(재방문 복원) → ④ Redis 캐시 + 슬라이딩 윈도우 + 멱등 재시도 테스트.
 - **R4 — 법령 KB 동작 확인.** S3 Vectors는 GA(2025-12, 서울 리전 사용 가능)라 가용성 리스크는 없다. 다만 배포 시 콘솔에서 법령 KB 생성·동기화·`retrieve` 동작을 1회 확인한다(데이터 소스 연결·ingestion 완료 여부).
 
 ---
@@ -378,7 +431,11 @@ PII 영구보관?         아니. TTL 90일. 마스킹+보관기간으로 관리
 Pod 죽으면?           replicas=2+PDB 무중단. 도구1개 죽어도 나머지 정상(장애 격리).
 Tavily 외부 장애 시?  시나리오 ⑤만 깨지고 ①②③④는 정상. 장애 격리 그대로.
 Tavily 비용?          Researcher Free Plan 월 1,000 search. 데모/초기 운영 충분. 증가 시 유료 전환.
-기존 안 건드린다며?    화면은 결과 하단 영역만 추가, API는 /chat 1개만 추가, 기존 6개·스키마·인프라 무변경.
+재방문하면 대화 보이나? GET /chat/history(백엔드 릴레이)가 DynamoDB에서 visible=true 턴만 복원해 채팅 영역에 시드.
+session_id 잃으면?     무관. 스레드 정체성 = (user, document)(§3-5). session_id는 로깅용 메타.
+요약 중복 주입 안 되나? 백엔드는 session_id 없으면 첨부만, Lambda가 기존 스레드 있으면 무시(멱등).
+이력조회 왜 Lambda 릴레이? 백엔드가 DynamoDB 직접 보면 크로스계정 의존 신설. 검증=백엔드/데이터=Lambda 분업 유지.
+기존 안 건드린다며?    화면은 결과 하단 영역만 추가, API는 /chat·/chat/history 2개만 추가, 기존 6개·스키마·인프라 무변경.
 ```
 
 ---
