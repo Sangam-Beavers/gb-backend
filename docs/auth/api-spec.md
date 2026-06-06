@@ -315,6 +315,7 @@ message: 기본 생성 메시지("성공적으로 생성되었습니다." — �
 | `public_ids` | string | Y | 회원 public_id(UUID) 콤마 구분 목록. **1~100개**(초과 시 COMMON4001) |
 
 **Response 200** — `data`
+
 | 필드 | 타입 | nullable | 설명 |
 | --- | --- | --- | --- |
 | `members` | array | N | 요청 id 중 **존재하는 활성(미탈퇴) 회원만** 담는다. 미존재·탈퇴 id는 항목에서 제외(에러 아님) — 호출 측 MemberClient가 "Unknown" 폴백으로 채운다. 순서 비보장 |
@@ -325,6 +326,7 @@ message: 기본 생성 메시지("성공적으로 생성되었습니다." — �
 | `members[].is_verified` | boolean | N | 신분증 인증 배지 여부 |
 
 **Error**
+
 | HTTP | code | message |
 | --- | --- | --- |
 | 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (public_ids 누락/빈 값/100개 초과) |
@@ -341,6 +343,7 @@ wallet의 앱 사용자 유효성 검증(`validate-member`)이 호출한다. **�
 **Response 200** — `data`: §13-1의 `members[]` 항목과 동일 필드(`public_id`/`name`/`nickname`/`nationality`/`is_verified`).
 
 **Error**
+
 | HTTP | code | message |
 | --- | --- | --- |
 | 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (이메일 누락/형식 위반) |
