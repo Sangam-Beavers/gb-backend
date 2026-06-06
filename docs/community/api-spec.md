@@ -81,6 +81,7 @@
 | `content` | string | N | 본문 |
 | `author_nickname` | string | N | 작성자 닉네임. 미존재·탈퇴·member-service 장애 시 `"Unknown"` 폴백(표시용 fail-open) |
 | `is_author` | boolean | N | 요청자=작성자 여부. 작성 응답에선 항상 true |
+| `is_liked` | boolean | N | 요청자의 좋아요 여부(하트 상태 표시용). 작성 응답에선 항상 false(방금 생성된 글 — 좋아요 불가능) |
 | `like_count` | integer | N | 좋아요 수(생성 시 0) |
 | `comment_count` | integer | N | 댓글 수(생성 시 0) |
 | `created_at` | string | N | 작성 시각(UTC Z) |
@@ -94,8 +95,8 @@
 
 ## 3. 게시글 단건 조회 / 수정 / 삭제 / 번역
 
-- 단건 조회: `GET /api/v1/community/posts/{id}` → 본문 + 작성자(닉네임/`author_is_verified`) + 카운트 + `is_author`(요청자=작성자 여부, 수정·삭제 버튼 노출 판단용). 404 COMMUNITY4001.
-- 수정: `PATCH /api/v1/community/posts/{id}` (본인만, 403 COMMON4031. 부분 수정 — 전송 필드만 변경, title/content 상한은 §2와 동일)
+- 단건 조회: `GET /api/v1/community/posts/{id}` → 본문 + 작성자(닉네임/`author_is_verified`) + 카운트 + `is_author`(요청자=작성자 여부, 수정·삭제 버튼 노출 판단용) + `is_liked`(요청자의 좋아요 여부, 하트 상태 표시용 — 좋아요 저장의 409 판정과 동일한 likes EXISTS 조건, 항상 true/false). 404 COMMUNITY4001.
+- 수정: `PATCH /api/v1/community/posts/{id}` (본인만, 403 COMMON4031. 부분 수정 — 전송 필드만 변경, title/content 상한은 §2와 동일. 응답의 `is_liked`는 실제 값 — 본인 글 self-like 가능)
 - 삭제: `DELETE /api/v1/community/posts/{id}` (soft delete, 본인만)
 - 번역 보기: `GET /api/v1/community/posts/{id}/translation?language={}` → `data: { translated_title, translated_content, translated_language }`
 

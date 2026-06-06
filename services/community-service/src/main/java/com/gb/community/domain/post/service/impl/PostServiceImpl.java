@@ -2,6 +2,8 @@ package com.gb.community.domain.post.service.impl;
 
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
+import com.gb.community.domain.like.entity.LikeTargetType;
+import com.gb.community.domain.like.repository.LikeRepository;
 import com.gb.community.domain.post.dto.request.PostCreateRequest;
 import com.gb.community.domain.post.dto.request.PostUpdateRequest;
 import com.gb.community.domain.post.dto.response.PostDetailResponse;
@@ -33,6 +35,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class PostServiceImpl implements PostService {
 
     private final PostRepository postRepository;
+    // 단건/수정 응답의 is_liked(요청자의 좋아요 여부) 계산용 — 좋아요 저장의 중복(409) 판정과 동일한
+    // EXISTS 조회를 재사용한다. 같은 서비스 내 도메인 간 repository 주입은 기존 관행(Comment→PostRepository).
+    private final LikeRepository likeRepository;
     private final MemberClient memberClient;
 
     /** self-injection: createPostTx/updatePostTx의 @Transactional 프록시 적용 위함(wallet 동일 패턴). */
@@ -76,9 +81,11 @@ public class PostServiceImpl implements PostService {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public PostDetailResponse getPost(String requesterUserPublicId, String postPublicId) {
         Post post = getActivePostOrThrow(postPublicId);
+        // is_liked: 요청자의 좋아요 여부 — DB 조회(EXISTS)를 외부 HTTP(getMember)보다 먼저 끝낸다.
+        boolean isLiked = isLikedBy(requesterUserPublicId, post);
         // 단건 SELECT 후 외부 호출 — 트랜잭션 불요(NOT_SUPPORTED로 클래스 readOnly tx 차단).
         return PostDetailResponse.from(post, memberClient.getMember(post.getUserPublicId()),
-                requesterUserPublicId);
+                requesterUserPublicId, isLiked);
     }
 
     @Override
@@ -87,8 +94,9 @@ public class PostServiceImpl implements PostService {
         // DB 본문(INSERT)은 self-proxy 쓰기 트랜잭션으로, 작성자 표시 정보 조회는 커밋 후 tx 밖에서.
         Post saved = self.createPostTx(requesterUserPublicId, request);
         // is_author: 작성 응답은 요청자가 곧 작성자 — 항상 true.
+        // is_liked: 방금 INSERT된 글이라 좋아요 행이 존재할 수 없다 — 항상 false(EXISTS 조회 생략, 명세 §2).
         return PostDetailResponse.from(saved, memberClient.getMember(requesterUserPublicId),
-                requesterUserPublicId);
+                requesterUserPublicId, false);
     }
 
     @Override
@@ -111,8 +119,10 @@ public class PostServiceImpl implements PostService {
         // DB 본문(조회→본인검증→dirty checking 변경)은 self-proxy 쓰기 트랜잭션으로, 회원 조회는 커밋 후.
         Post post = self.updatePostTx(requesterUserPublicId, postPublicId, request);
         // is_author: 수정은 본인 검증을 통과한 흐름 — 항상 true.
+        // is_liked: 본인 글도 본인이 좋아요했을 수 있다(self-like 제한 없음) — 실제 EXISTS 값. 커밋 후 조회.
+        boolean isLiked = isLikedBy(requesterUserPublicId, post);
         return PostDetailResponse.from(post, memberClient.getMember(post.getUserPublicId()),
-                requesterUserPublicId);
+                requesterUserPublicId, isLiked);
     }
 
     @Override
@@ -156,6 +166,16 @@ public class PostServiceImpl implements PostService {
         if (!post.getUserPublicId().equals(requesterUserPublicId)) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
+    }
+
+    /**
+     * 요청자가 이 글을 좋아요했는지(is_liked). 좋아요 저장({@code LikeServiceImpl.like})의 중복(COMMON4091)
+     * 판정과 동일한 (user_public_id, POST, target_id) EXISTS 조회 — 복합 UNIQUE 인덱스를 타는 단건 조회라
+     * NOT_SUPPORTED 경로에서 자체 짧은 tx 1건이 추가될 뿐이다.
+     */
+    private boolean isLikedBy(String requesterUserPublicId, Post post) {
+        return likeRepository.existsByUserPublicIdAndTargetTypeAndTargetId(
+                requesterUserPublicId, LikeTargetType.POST, post.getId());
     }
 
     /**

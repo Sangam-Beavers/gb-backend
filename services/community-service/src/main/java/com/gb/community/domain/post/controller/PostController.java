@@ -103,6 +103,7 @@ public class PostController {
             summary = "게시글 단건 조회",
             description = "게시글 public_id로 본문 + 작성자(닉네임/인증배지) + 카운트를 반환한다. "
                     + "is_author는 요청자(JWT public_id)와 작성자 일치 여부 — 수정·삭제 버튼 노출 판단용. "
+                    + "is_liked는 요청자의 좋아요 여부(항상 true/false) — 하트 상태 표시용. "
                     + "삭제됐거나 없는 글이면 404 COMMUNITY4001.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(

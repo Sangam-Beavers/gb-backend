@@ -10,6 +10,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
+import com.gb.community.domain.like.entity.LikeTargetType;
+import com.gb.community.domain.like.repository.LikeRepository;
 import com.gb.community.domain.post.dto.request.PostCreateRequest;
 import com.gb.community.domain.post.dto.request.PostUpdateRequest;
 import com.gb.community.domain.post.dto.response.PostDetailResponse;
@@ -48,6 +50,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 class PostServiceTest {
 
     @Mock private PostRepository postRepository;
+    @Mock private LikeRepository likeRepository;
     @Mock private MemberClient memberClient;
     @InjectMocks private PostServiceImpl service;
 
@@ -82,6 +85,9 @@ class PostServiceTest {
         assertThat(res.getAuthorNickname()).isEqualTo("Minh");
         assertThat(res.isAuthorIsVerified()).isTrue();
         assertThat(res.getIsAuthor()).isTrue(); // 작성 응답은 요청자=작성자 — 항상 true
+        // is_liked: 방금 생성된 글이라 항상 false — EXISTS 조회 자체를 생략한다(불필요 의존 호출 가드, 명세 §2).
+        assertThat(res.getIsLiked()).isFalse();
+        verifyNoInteractions(likeRepository);
         verify(postRepository).save(any(Post.class));
     }
 
@@ -125,6 +131,37 @@ class PostServiceTest {
     }
 
     @Test
+    @DisplayName("단건 조회: 좋아요한 글이면 is_liked=true — 좋아요 저장의 409 판정과 동일한 EXISTS 조건으로 계산")
+    void getPost_좋아요한_글_isLiked_true() {
+        Post post = Post.of(OTHER, PostCategory.VISA, "비자", "내용");
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(memberClient.getMember(OTHER)).willReturn(new MemberInfo("Sokha", false));
+        // 요청자(USER) 기준으로 (user, POST, post.id) EXISTS — 좋아요 중복 판정과 같은 조건이어야 한다.
+        given(likeRepository.existsByUserPublicIdAndTargetTypeAndTargetId(
+                USER, LikeTargetType.POST, post.getId())).willReturn(true);
+
+        PostDetailResponse res = service.getPost(USER, PID);
+
+        assertThat(res.getIsLiked()).isTrue();
+        verify(likeRepository).existsByUserPublicIdAndTargetTypeAndTargetId(
+                USER, LikeTargetType.POST, post.getId());
+    }
+
+    @Test
+    @DisplayName("단건 조회: 좋아요 안 한 글이면 is_liked=false (null 아님 — 항상 true/false)")
+    void getPost_좋아요_안한_글_isLiked_false() {
+        Post post = Post.of(OTHER, PostCategory.VISA, "비자", "내용");
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(memberClient.getMember(OTHER)).willReturn(new MemberInfo("Sokha", false));
+        given(likeRepository.existsByUserPublicIdAndTargetTypeAndTargetId(
+                USER, LikeTargetType.POST, post.getId())).willReturn(false);
+
+        PostDetailResponse res = service.getPost(USER, PID);
+
+        assertThat(res.getIsLiked()).isFalse();
+    }
+
+    @Test
     @DisplayName("단건 조회: 없거나 삭제된 글 → COMMUNITY4001, member 호출 없음")
     void getPost_없음() {
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.empty());
@@ -151,7 +188,22 @@ class PostServiceTest {
         assertThat(res.getTitle()).isEqualTo("new title");
         assertThat(res.getContent()).isEqualTo("old content");
         assertThat(res.getIsAuthor()).isTrue(); // 수정은 본인 검증 통과 흐름 — 항상 true
+        assertThat(res.getIsLiked()).isFalse(); // EXISTS 미스텁(기본 false) — 좋아요 안 한 본인 글
         assertThat(post.getTitle()).isEqualTo("new title");
+    }
+
+    @Test
+    @DisplayName("수정: 본인이 좋아요해 둔 글이면 수정 응답도 is_liked=true (self-like 제한 없음 — 실제 EXISTS 값)")
+    void updatePost_본인_좋아요_글_isLiked_true() {
+        Post post = Post.of(USER, PostCategory.JOB, "old title", "old content");
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(memberClient.getMember(USER)).willReturn(MINH);
+        given(likeRepository.existsByUserPublicIdAndTargetTypeAndTargetId(
+                USER, LikeTargetType.POST, post.getId())).willReturn(true);
+
+        PostDetailResponse res = service.updatePost(USER, PID, updateReq(null, "new title", null));
+
+        assertThat(res.getIsLiked()).isTrue();
     }
 
     @Test

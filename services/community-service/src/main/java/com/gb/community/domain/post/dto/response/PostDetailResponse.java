@@ -21,6 +21,11 @@ import lombok.Getter;
  * 명세 필드명이 is-접두라 boxed {@code Boolean}으로 둔다: primitive면 위 함정으로 {@code author}가 되고,
  * Boolean이면 게터 {@code getIsAuthor()} → 프로퍼티 {@code isAuthor} → {@code is_author}로 정확히 나간다.
  * 작성/수정 응답에서는 요청자가 곧 작성자이므로 항상 true다.
+ *
+ * <p>{@code is_liked}는 "요청자가 이 글을 좋아요했는지" 여부 — 프론트가 상세 화면 하트(♥/♡) 상태를
+ * 그린다(프론트 개선 요청). is_author와 같은 요청자 기준 boolean이라 동일하게 boxed {@code Boolean}로
+ * 둔다(null 없이 항상 true/false로 채움). 좋아요 저장의 중복(409) 판정과 동일한 EXISTS 조회로 계산하며,
+ * 작성 응답에서는 방금 생성된 글이라 항상 false다(좋아요 행이 존재할 수 없음 — 조회 생략).
  */
 @Getter
 public class PostDetailResponse {
@@ -47,6 +52,10 @@ public class PostDetailResponse {
     @Schema(description = "요청자가 작성자 본인인지 여부(수정·삭제 버튼 노출 판단용)", example = "false")
     private final Boolean isAuthor;
 
+    @Schema(description = "요청자가 이 게시글을 좋아요했는지 여부(하트 상태 표시용). 작성 응답에선 항상 false",
+            example = "true")
+    private final Boolean isLiked;
+
     @Schema(description = "좋아요 수", example = "3")
     private final Integer likeCount;
 
@@ -62,7 +71,7 @@ public class PostDetailResponse {
     @Builder
     private PostDetailResponse(String publicId, String category, String title, String content,
                               String authorNickname, boolean authorIsVerified, Boolean isAuthor,
-                              Integer likeCount, Integer commentCount,
+                              Boolean isLiked, Integer likeCount, Integer commentCount,
                               String createdAt, String updatedAt) {
         this.publicId = publicId;
         this.category = category;
@@ -71,6 +80,7 @@ public class PostDetailResponse {
         this.authorNickname = authorNickname;
         this.authorIsVerified = authorIsVerified;
         this.isAuthor = isAuthor;
+        this.isLiked = isLiked;
         this.likeCount = likeCount;
         this.commentCount = commentCount;
         this.createdAt = createdAt;
@@ -81,8 +91,11 @@ public class PostDetailResponse {
      * @param requesterUserPublicId 요청자(인증 JWT public_id). 작성자와 비교해 {@code is_author}를 계산한다 —
      *                              수정/삭제의 {@code verifyOwner}와 동일한 public_id equals 비교.
      *                              작성/수정 흐름은 요청자가 곧 (검증된) 작성자라 항상 true가 된다.
+     * @param isLiked 요청자의 좋아요 여부. Service가 흐름별로 계산해 넘긴다 — 단건/수정은 likes EXISTS
+     *                조회(좋아요 409 판정과 동일 조건), 작성은 false 고정(방금 생성된 글 — 조회 생략).
      */
-    public static PostDetailResponse from(Post post, MemberInfo author, String requesterUserPublicId) {
+    public static PostDetailResponse from(Post post, MemberInfo author, String requesterUserPublicId,
+                                          boolean isLiked) {
         return PostDetailResponse.builder()
                 .publicId(post.getPublicId())
                 .category(post.getCategory().name())
@@ -91,6 +104,7 @@ public class PostDetailResponse {
                 .authorNickname(author.nickname())
                 .authorIsVerified(author.isVerified())
                 .isAuthor(post.getUserPublicId().equals(requesterUserPublicId))
+                .isLiked(isLiked)
                 .likeCount(post.getLikeCount())
                 .commentCount(post.getCommentCount())
                 .createdAt(UtcTime.toUtcZ(post.getCreatedAt()))

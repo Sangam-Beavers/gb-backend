@@ -217,7 +217,7 @@ class PostControllerTest {
     // ----- GET /posts/{id} -----
 
     @Test
-    @DisplayName("GET /{id} 200: 정상 단건 조회 — is_author가 정확히 'is_author' 키로 직렬화(Boolean 게터 함정 회귀 가드)")
+    @DisplayName("GET /{id} 200: 정상 단건 조회 — is_author/is_liked가 정확히 그 키로 직렬화(Boolean 게터 함정 회귀 가드)")
     void getPost_정상() throws Exception {
         given(postService.getPost(USER, PID)).willReturn(stubDetail());
 
@@ -228,7 +228,10 @@ class PostControllerTest {
                 .andExpect(jsonPath("$.data.author_is_verified").value(true))
                 // primitive boolean이었다면 'is'가 떨어져 $.data.author로 나간다 — 키 이름 자체를 단언.
                 .andExpect(jsonPath("$.data.is_author").value(true))
-                .andExpect(jsonPath("$.data.author").doesNotExist());
+                .andExpect(jsonPath("$.data.author").doesNotExist())
+                // is_liked도 동일 함정 가드 — primitive면 $.data.liked로 어긋난다(프론트는 is_liked를 읽음).
+                .andExpect(jsonPath("$.data.is_liked").value(true))
+                .andExpect(jsonPath("$.data.liked").doesNotExist());
 
         verify(postService).getPost(USER, PID); // 요청자(public_id claim)가 서비스로 전달됨
     }
@@ -409,6 +412,7 @@ class PostControllerTest {
                 .authorNickname("Minh")
                 .authorIsVerified(true)
                 .isAuthor(true)
+                .isLiked(true) // true로 둬야 is_liked 직렬화 키 단언이 '키 부재=실패'로 동작(false면 값 혼동)
                 .likeCount(0)
                 .commentCount(0)
                 .createdAt("2026-05-30T04:15:30Z")
