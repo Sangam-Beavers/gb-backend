@@ -122,6 +122,9 @@ class RealMemberClientTest {
 
         assertThat(result).containsOnlyKeys("pub-1", "pub-2");
         assertThat(result.values()).allMatch(RealMemberClient.FALLBACK::equals);
+        // HTTP 호출이 실제로 발생했는지 단언 — 없으면 "호출 없이 폴백"(JWT부재 경로와 동일 결과)이어도
+        // 통과하는 false positive가 된다(5xx를 "받고" fail-open했는지가 검증 대상).
+        f.server().verify();
     }
 
     @Test
@@ -135,6 +138,7 @@ class RealMemberClientTest {
         Map<String, MemberInfo> result = f.client().getMembers(List.of("pub-1"));
 
         assertThat(result.get("pub-1")).isEqualTo(RealMemberClient.FALLBACK);
+        f.server().verify(); // 연결 실패를 "겪고" 폴백했는지 — 호출 자체가 없었어도 통과하는 것 방지
     }
 
     @Test
