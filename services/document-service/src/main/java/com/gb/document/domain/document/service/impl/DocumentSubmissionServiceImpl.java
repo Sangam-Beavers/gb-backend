@@ -118,14 +118,29 @@ public class DocumentSubmissionServiceImpl implements DocumentSubmissionService 
     }
 
     @Override
-    public Page<DocumentSummaryResponse> list(String userPublicId, Pageable pageable) {
-        Page<Document> documents = documentRepository.findAllByUserPublicId(userPublicId, pageable);
+    public Page<DocumentSummaryResponse> list(String userPublicId, List<String> statuses, Pageable pageable) {
+        Page<Document> documents = (statuses == null || statuses.isEmpty())
+                ? documentRepository.findAllByUserPublicId(userPublicId, pageable)
+                : documentRepository.findAllByUserPublicIdAndStatusIn(
+                        userPublicId, toStatusEnums(statuses), pageable);
         List<Long> ids = documents.stream().map(Document::getId).toList();
         Map<Long, DocumentResult> resultBySubmissionId = ids.isEmpty() ? Map.of()
                 : documentResultRepository.findAllBySubmission_IdIn(ids).stream()
                         .collect(java.util.stream.Collectors.toMap(
                                 r -> r.getSubmission().getId(), r -> r));
         return documents.map(d -> DocumentSummaryResponse.from(d, resultBySubmissionId.get(d.getId())));
+    }
+
+    /**
+     * 목록 status 필터 문자열 → enum 변환. enum 검증은 @Pattern이 아닌 Service에서 한다(CLAUDE §6).
+     * 잘못된 값(오타 등)은 COMMON4001 — 필터 입력값 오류라 도메인 코드 신설 없이 공통 검증 코드 사용.
+     */
+    private List<DocumentStatus> toStatusEnums(List<String> statuses) {
+        try {
+            return statuses.stream().map(DocumentStatus::valueOf).toList();
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+        }
     }
 
     /**

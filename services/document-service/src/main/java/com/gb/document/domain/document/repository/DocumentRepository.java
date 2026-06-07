@@ -3,6 +3,7 @@ package com.gb.document.domain.document.repository;
 import com.gb.document.domain.document.entity.Document;
 import com.gb.document.domain.document.entity.DocumentStatus;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
@@ -29,6 +30,13 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
      * (보통 createdAt DESC — 최신 업로드부터.)
      */
     Page<Document> findAllByUserPublicId(String userPublicId, Pageable pageable);
+
+    /**
+     * 특정 사용자의 분석 요청 목록을 상태 필터와 함께 페이지로 조회한다.
+     * 목록 API의 {@code ?status=} 필터용 — 프론트가 실패(FAILED) 내역을 숨길 때 사용.
+     */
+    Page<Document> findAllByUserPublicIdAndStatusIn(
+            String userPublicId, Collection<DocumentStatus> statuses, Pageable pageable);
 
     /**
      * 특정 상태로 기준 시각보다 오래 머문 문서를 찾는다 — 미업로드/결과 유실 건 FAILED 정리 스케줄러용

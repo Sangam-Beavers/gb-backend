@@ -4,11 +4,14 @@ import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.document.domain.chat.dto.request.ChatRequest;
 import com.gb.document.domain.chat.dto.request.ChatbotPayload;
+import com.gb.document.domain.chat.dto.response.ChatHistoryResponse;
+import com.gb.document.domain.chat.service.AnalysisSummaryBuilder;
 import com.gb.document.domain.chat.service.ChatService;
 import com.gb.document.domain.chat.service.ChatStreamListener;
 import com.gb.document.domain.chat.service.ChatbotLambdaClient;
 import com.gb.document.domain.document.entity.Document;
 import com.gb.document.domain.document.repository.DocumentRepository;
+import com.gb.document.domain.document.repository.DocumentResultRepository;
 import com.gb.document.global.exception.code.DocumentErrorCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,8 +26,9 @@ import java.util.UUID;
  * <ol>
  *   <li>{@link #verifyOwnership}: DocumentRepository.findByPublicId → 없으면 DOCUMENT4001,
  *       userPublicId 불일치면 COMMON4031.</li>
- *   <li>{@link #streamChat}: sessionId 발급 → 첫 대화면 analysis_summary 추출(임시 하드코딩) →
- *       페이로드 조립 → {@link ChatbotLambdaClient#streamChat}로 토큰 흐름 위임.</li>
+ *   <li>{@link #streamChat}: sessionId 발급 → 첫 대화면 document_results에서 analysis_summary 추출
+ *       ({@link AnalysisSummaryBuilder}) → 페이로드 조립 → {@link ChatbotLambdaClient#streamChat}로
+ *       토큰 흐름 위임.</li>
  * </ol>
  */
 @Slf4j
@@ -34,6 +38,8 @@ import java.util.UUID;
 public class ChatServiceImpl implements ChatService {
 
     private final DocumentRepository documentRepository;
+    private final DocumentResultRepository documentResultRepository;
+    private final AnalysisSummaryBuilder analysisSummaryBuilder;
     private final ChatbotLambdaClient chatbotLambdaClient;
 
     /** source: development | production. 페이로드 메타로 함께 전송(ai-chatbot-mcp §6 주석). */
@@ -62,9 +68,10 @@ public class ChatServiceImpl implements ChatService {
         boolean isFirstTurn = (request.sessionId() == null || request.sessionId().isBlank());
         String sessionId = isFirstTurn ? UUID.randomUUID().toString() : request.sessionId();
 
-        // 첫 대화에만 analysis_summary 주입(ai-chatbot-mcp §3-2). 이후 턴은 messages 맥락에 묻어 따라감.
-        // TODO Phase 4 — document_results 테이블에서 진짜 추출 + result-json-schema-agreement.md §6 포맷으로 조립.
-        String analysisSummary = isFirstTurn ? buildDummySummary() : null;
+        // 첫 대화에만 analysis_summary 첨부(ai-chatbot-mcp §3-2). 이후 턴은 messages 맥락에 묻어 따라감.
+        // "첫 턴" 최종 판정 권한은 Lambda에 있다(§6) — DynamoDB에 기존 스레드가 있으면 Lambda가 요약을
+        // 무시하므로, 여기서는 session_id 부재 시 첨부만 한다(재방문 시 중복 주입 없음 — 멱등).
+        String analysisSummary = isFirstTurn ? buildAnalysisSummary(documentPublicId) : null;
 
         ChatbotPayload payload = ChatbotPayload.builder()
                 .message(request.message())
@@ -80,13 +87,20 @@ public class ChatServiceImpl implements ChatService {
         chatbotLambdaClient.streamChat(payload, listener);
     }
 
+    @Override
+    public ChatHistoryResponse getHistory(String documentPublicId, String userPublicId,
+                                          int limit, String cursor) {
+        // 백엔드는 검증·중계만 — 이력 데이터 접근은 Lambda(계정 B DynamoDB) 소관(ai-chatbot-mcp §6-2).
+        return chatbotLambdaClient.fetchHistory(userPublicId, documentPublicId, limit, cursor);
+    }
+
     /**
-     * 임시 분석 요약. Phase 4에서 MySQL document_results의 v1.0 스키마 값을 읽어 다음 포맷으로 조립한다:
-     * "위험도 {overall_risk_level}. {top risk_items.description}. 임금: ... 문서유형: ...".
-     * (result-json-schema-agreement.md §6)
+     * document_results에서 압축 요약 추출(ai-chatbot-mcp.md §6 — MySQL 접근은 세션당 이 1회뿐).
+     * 결과가 없거나 미완료(COMPLETED 아님)면 null — 페이로드에서 생략되고 챗봇은 일반 응대한다.
      */
-    private String buildDummySummary() {
-        return "위험도 HIGH. 최저임금 미달(시급 9,620원 기준 미충족), 주 50시간 초과근무 조항 존재. "
-             + "임금: 월 2,000,000원 / 시급 9,620원. 문서유형: 근로계약서.";
+    private String buildAnalysisSummary(String documentPublicId) {
+        return documentResultRepository.findBySubmission_PublicId(documentPublicId)
+                .map(analysisSummaryBuilder::build)
+                .orElse(null);
     }
 }

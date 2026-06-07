@@ -1,6 +1,7 @@
 package com.gb.document.domain.chat.service;
 
 import com.gb.document.domain.chat.dto.request.ChatbotPayload;
+import com.gb.document.domain.chat.dto.response.ChatHistoryResponse;
 
 /**
  * 챗봇 Lambda(계정 B) Function URL을 IAM(SigV4)로 호출하고, Response Streaming으로
@@ -25,4 +26,14 @@ public interface ChatbotLambdaClient {
      * 예외 시 {@link ChatStreamListener#onError(Throwable)}가 정확히 한 번 호출된다.
      */
     void streamChat(ChatbotPayload payload, ChatStreamListener listener);
+
+    /**
+     * 대화 이력 조회 — Function URL {@code GET /history} (비스트리밍 JSON, ai-chatbot-mcp.md §6-2).
+     * 권한 검증은 호출자(백엔드 컨트롤러)가 끝낸 상태를 가정한다 — Lambda는 인가 레이어가 아니다(§5).
+     *
+     * @param limit  1~100 (Lambda가 클램프)
+     * @param cursor 이전 응답의 next_cursor. 첫 페이지면 null
+     * @throws IllegalStateException Lambda 호출 실패(HTTP 비2xx 등) — GlobalExceptionHandler가 COMMON5000 처리
+     */
+    ChatHistoryResponse fetchHistory(String userPublicId, String documentPublicId, int limit, String cursor);
 }

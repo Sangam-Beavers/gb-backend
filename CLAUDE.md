@@ -21,8 +21,10 @@
   처리된다. 본체(`document-service`)는 분석 요청(Pre-signed URL 발급)과 결과 수신(SQS Consumer)만
   담당하고, 분석 자체는 본체 밖에서 돈다. 상세: `docs/document-analysis/ai-pipeline.md`.
 - **AI 후속 질문 챗봇**(분석 결과를 본 사용자의 후속 질문)은 계정 B 챗봇 Lambda에서 **동기 + SSE 스트리밍**으로
-  처리되고, 본체는 `POST /api/v1/documents/{id}/chat` 1개를 **추가**해 권한검증 + 분석요약 추출 + Lambda 호출 + SSE 중계만 한다.
+  처리되고, 본체는 `POST /api/v1/documents/{id}/chat`(SSE 중계)과 `GET /api/v1/documents/{id}/chat/history`(재방문 대화 복원,
+  Lambda 비스트리밍 릴레이) 2개를 **추가**해 권한검증 + 분석요약 추출 + Lambda 호출 + 중계만 한다.
   대화기록은 계정 B DynamoDB(`chat_sessions`) + Redis 캐시에 저장(분석 결과는 여전히 MySQL — 별개 워크로드).
+  대화 스레드 정체성은 `(user_public_id, document_public_id)` — session_id는 로깅용 메타.
   도구 4종: **법령 = KB 직접** (우리 도메인) · **환율·커뮤니티 = 자체 MCP 어댑터(MCP1/2)** (같은 회사 다른 팀 도메인 분리) ·
   **웹 검색 = 외부 Tavily Remote MCP 직결(MCP3)** — 챗봇 Lambda 가 Python `mcp` SDK 의 Streamable HTTP 클라이언트로
   `https://mcp.tavily.com/mcp/` 에 직접 붙는다(자체 어댑터 서버 없음, 외부 회사 시스템을 표준 인터페이스로 통합).
@@ -245,9 +247,11 @@ com.gb.{서비스}/
   `document_submissions`/`document_results`에 저장한다. 분석 요청(`source=production/development`)의
   출처에 따라 결과 경로가 갈리며, 운영기는 SQS, 개발기는 온프렘 직접 INSERT(계정 B 소관)다.
   본체(운영기)는 SQS Consumer만 구현하면 된다. (환경↔source 매핑: dev→`development` 온프렘 직결, stage·prod→`production` SQS→Aurora. `source`는 2개 값뿐이며 인프라 계열만 가른다. **production 계열 안에서 stage·prod는 별도 SQS 큐(`gb-analysis-results-stage`/`gb-analysis-results-prod`)로 분리** — 각 환경 Consumer는 자기 큐만 구독해 자기 Aurora에 저장하므로 결과가 환경 간 섞이지 않는다. Consumer 코드는 동일, 큐 이름만 프로필로 분리.) 상세: `docs/document-analysis/ai-pipeline.md`, `docs/document-analysis/result-queue-routing.md`.
-- **AI 후속 질문 챗봇(계정 B):** `document-service`에 `POST /api/v1/documents/{id}/chat` 1개만 **추가**한다.
-  컨트롤러는 ① 권한 검증(본인 문서인지) ② 첫 대화면 MySQL에서 분석요약 추출 ③ 챗봇 Lambda Function URL 호출(IAM 서명)
-  ④ `SseEmitter`로 토큰 스트림 중계만 한다. **로직은 Lambda(계정 B)에 있고 본체는 검증·중계만.**
+- **AI 후속 질문 챗봇(계정 B):** `document-service`에 `POST /api/v1/documents/{id}/chat`과
+  `GET /api/v1/documents/{id}/chat/history` 2개만 **추가**한다.
+  컨트롤러는 ① 권한 검증(본인 문서인지) ② 첫 대화면 MySQL에서 분석요약 추출(`AnalysisSummaryBuilder`) ③ 챗봇 Lambda Function URL 호출(IAM 서명)
+  ④ `SseEmitter`로 토큰 스트림 중계만 한다. 이력 조회는 백엔드가 DynamoDB를 직접 보지 않고 Lambda `GET /history`로
+  비스트리밍 릴레이한다(크로스계정 의존 신설 금지). **로직은 Lambda(계정 B)에 있고 본체는 검증·중계만.**
   대화기록은 계정 B DynamoDB에 저장되며 본체 MySQL 스키마는 건드리지 않는다. 신규 에러코드 없이 `AUTH4011`(인증)·`COMMON4031`(권한)·`DOCUMENT4001` 재사용.
   **SSE는 Spring MVC `SseEmitter`로 구현(WebFlux 도입 금지 — tech-stack §2).** 상세: `docs/document-analysis/ai-chatbot-mcp.md`.
 

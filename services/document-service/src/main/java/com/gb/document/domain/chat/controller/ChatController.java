@@ -1,7 +1,9 @@
 package com.gb.document.domain.chat.controller;
 
+import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
 import com.gb.document.domain.chat.dto.request.ChatRequest;
+import com.gb.document.domain.chat.dto.response.ChatHistoryResponse;
 import com.gb.document.domain.chat.service.ChatService;
 import com.gb.document.domain.chat.util.SseRelayListener;
 import com.gb.document.global.security.CurrentUserPublicId;
@@ -16,10 +18,12 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -131,5 +135,49 @@ public class ChatController {
         });
 
         return emitter;
+    }
+
+    @Operation(
+            summary = "챗봇 대화 이력 조회 (재방문 복원)",
+            description = "해당 문서에 대한 이전 챗봇 대화를 시간 오름차순으로 반환한다. 결과 화면 채팅 영역 "
+                    + "마운트 시 1회 호출해 이전 대화를 복원(시드)하는 용도. 이력 데이터는 계정 B DynamoDB에 "
+                    + "있으며 본체는 권한 검증 후 챗봇 Lambda /history로 릴레이만 한다(ai-chatbot-mcp.md §6-2). "
+                    + "첫 턴에 주입된 분석요약 합성 턴은 내려오지 않는다. 이력이 없어도 본인 문서면 200 + 빈 배열.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "조회 성공(이력 없으면 messages 빈 배열)."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다(토큰 누락·만료·위조).",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "COMMON4031 - 다른 사용자의 문서.",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON4031", value = EX_COMMON4031))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "DOCUMENT4001 - 존재하지 않는 문서.",
+                    content = @Content(
+                            schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "DOCUMENT4001", value = EX_DOCUMENT4001)))
+    })
+    @GetMapping("/{publicId}/chat/history")
+    public ApiResponse<ChatHistoryResponse> history(
+            @Parameter(description = "분석 문서 식별자(UUID)",
+                    example = "00000000-0000-0000-0000-000000000001")
+            @PathVariable("publicId") String documentPublicId,
+            @CurrentUserPublicId String userPublicId,
+            @Parameter(description = "1회 조회 메시지 수(기본 50, 최대 100 — 초과는 Lambda가 클램프)")
+            @RequestParam(name = "limit", defaultValue = "50") int limit,
+            @Parameter(description = "다음 페이지 커서(이전 응답의 next_cursor). 첫 조회 시 생략")
+            @RequestParam(name = "cursor", required = false) String cursor
+    ) {
+        chatService.verifyOwnership(documentPublicId, userPublicId);
+        return ApiResponse.success(chatService.getHistory(documentPublicId, userPublicId, limit, cursor));
     }
 }

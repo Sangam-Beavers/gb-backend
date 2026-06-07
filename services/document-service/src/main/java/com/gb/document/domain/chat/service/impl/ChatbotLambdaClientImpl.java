@@ -2,6 +2,7 @@ package com.gb.document.domain.chat.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.document.domain.chat.dto.request.ChatbotPayload;
+import com.gb.document.domain.chat.dto.response.ChatHistoryResponse;
 import com.gb.document.domain.chat.service.ChatStreamListener;
 import com.gb.document.domain.chat.service.ChatbotLambdaClient;
 import lombok.RequiredArgsConstructor;
@@ -99,7 +100,80 @@ public class ChatbotLambdaClientImpl implements ChatbotLambdaClient {
         }
     }
 
+    @Override
+    public ChatHistoryResponse fetchHistory(String userPublicId, String documentPublicId,
+                                            int limit, String cursor) {
+        try {
+            HttpRequest request = buildHistoryRequest(userPublicId, documentPublicId, limit, cursor);
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() / 100 != 2) {
+                throw new IllegalStateException(
+                        "Chatbot Lambda history HTTP " + response.statusCode()
+                                + " — " + truncateForLog(response.body()));
+            }
+            return objectMapper.readValue(response.body(), ChatHistoryResponse.class);
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("Chatbot Lambda history call failed", e);
+        }
+    }
+
     /* ─────────── 요청 빌드 + 서명 ─────────── */
+
+    /**
+     * {@code GET /history} 요청 빌드. 쿼리 인코딩 불일치로 인한 SignatureDoesNotMatch를 피하려고
+     * 쿼리 조립을 SDK에 맡긴다 — {@link SdkHttpFullRequest}에 raw 쿼리 파라미터를 넣고, 서명 후
+     * {@code signed.getUri()}(SDK가 canonical 인코딩한 URI)를 실제 요청 URI로 그대로 사용한다.
+     * 서명이 본 쿼리 문자열과 와이어에 나가는 쿼리 문자열이 항상 동일해진다.
+     */
+    private HttpRequest buildHistoryRequest(String userPublicId, String documentPublicId,
+                                            int limit, String cursor) {
+        URI base = URI.create(functionUrl.endsWith("/") ? functionUrl + "history" : functionUrl + "/history");
+        boolean local = isLocalHost(base.getHost());
+
+        SdkHttpFullRequest.Builder unsignedBuilder = SdkHttpFullRequest.builder()
+                .method(SdkHttpMethod.GET)
+                .uri(base)
+                // GET은 body가 없으므로 빈 페이로드 hash를 명시(POST 경로와 동일한 이유 — applySigV4 주석 참고)
+                .putHeader("x-amz-content-sha256", sha256Hex(new byte[0]))
+                .putRawQueryParameter("user_public_id", userPublicId)
+                .putRawQueryParameter("document_public_id", documentPublicId)
+                .putRawQueryParameter("limit", String.valueOf(limit));
+        if (cursor != null && !cursor.isBlank()) {
+            unsignedBuilder.putRawQueryParameter("cursor", cursor);
+        }
+        SdkHttpFullRequest unsigned = unsignedBuilder.build();
+
+        SdkHttpFullRequest effective = unsigned;
+        if (authEnabled && !local) {
+            Aws4SignerParams params = Aws4SignerParams.builder()
+                    .awsCredentials(DefaultCredentialsProvider.create().resolveCredentials())
+                    .signingName("lambda")
+                    .signingRegion(Region.of(awsRegion))
+                    .build();
+            effective = Aws4Signer.create().sign(unsigned, params);
+        } else {
+            log.debug("history signing skipped (host={}, authEnabled={})", base.getHost(), authEnabled);
+        }
+
+        HttpRequest.Builder builder = HttpRequest.newBuilder(effective.getUri())
+                .timeout(Duration.ofSeconds(requestTimeoutSeconds))
+                .GET();
+        for (Map.Entry<String, List<String>> entry : effective.headers().entrySet()) {
+            if (isRestrictedByJavaHttpClient(entry.getKey())) continue;
+            for (String value : entry.getValue()) {
+                builder.header(entry.getKey(), value);
+            }
+        }
+        return builder.build();
+    }
+
+    private static String truncateForLog(String body) {
+        if (body == null) return "(no body)";
+        return body.length() > 2000 ? body.substring(0, 2000) : body;
+    }
 
     private HttpRequest buildRequest(byte[] body) {
         URI uri = URI.create(functionUrl);
