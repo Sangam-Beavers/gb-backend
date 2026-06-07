@@ -75,8 +75,8 @@
 | `email` | VARCHAR(255) | UNIQUE, NOT NULL | 이메일 |
 | `name` | VARCHAR(100) | NOT NULL | 이름 |
 | `nickname` | VARCHAR(50) | NOT NULL | 닉네임 |
-| `nationality` | VARCHAR(10) | NOT NULL | 국적 코드 (KR, VN, PH 등) |
-| `language` | VARCHAR(10) | NOT NULL | 주 사용 언어 (BCP 47 소문자, 예: "vi") |
+| `nationality` | VARCHAR(10) | NOT NULL | 국적 코드 (ISO 3166-1 alpha-2). **MVP 4개 확정**: `KR`, `US`, `VN`, `PH` (화이트리스트는 프론트 select로 강제 / 결정문 `심규보/결정-국적언어-스코프-확정.md`) |
+| `language` | VARCHAR(10) | NOT NULL | 주 사용 언어 (BCP 47 소문자). **MVP 4개 확정**: `ko`, `en`, `vi`, `fil` |
 | `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | 인증 배지 여부. `user_verifications` APPROVED 시 true로 반영(엔티티 `Member.isVerified` 반영 완료). |
 | `terms_agreed` | BOOLEAN | NOT NULL, DEFAULT TRUE | 이용약관 동의 여부(가입 시 필수 동의 — 명세 auth §2). DTO `@AssertTrue`로 강제되어 신규 가입은 항상 true. 기본값 TRUE = 기존 행은 동의로 백필. |
 | `privacy_agreed` | BOOLEAN | NOT NULL, DEFAULT TRUE | 개인정보 처리방침 동의 여부(가입 시 필수 동의 — 명세 auth §2). |
