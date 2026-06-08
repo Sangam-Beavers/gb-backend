@@ -1,5 +1,4 @@
 // community-service-pipeline.groovy
-// gb-backend(모노레포) → Harbor(멀티아키 이미지) → gb-infra(values.yaml 갱신) → ArgoCD 자동 배포
 pipeline {
   agent {
     kubernetes {
@@ -125,8 +124,8 @@ pipeline {
         container('regctl') {
           sh '''
             regctl image index create ${IMAGE_BASE}:${IMAGE_TAG} \
-              --ref ${IMAGE_BASE}:${IMAGE_TAG}-amd64 \
-              --ref ${IMAGE_BASE}:${IMAGE_TAG}-arm64
+              ${IMAGE_BASE}:${IMAGE_TAG}-amd64 \
+              ${IMAGE_BASE}:${IMAGE_TAG}-arm64
           '''
         }
       }
