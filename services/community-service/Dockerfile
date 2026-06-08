@@ -19,7 +19,8 @@ FROM eclipse-temurin:17-jre
 WORKDIR /app
 
 # 비루트 사용자
-RUN groupadd -r spring && useradd -r -g spring spring
+RUN groupadd -r -f spring && \
+    (id -u spring >/dev/null 2>&1 || useradd -r -g spring spring)
 USER spring
 
 # 버전 변경에 강하게 glob 사용
