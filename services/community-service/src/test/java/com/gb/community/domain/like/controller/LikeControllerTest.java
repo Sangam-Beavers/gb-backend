@@ -21,6 +21,7 @@ import com.gb.community.domain.like.dto.response.PostLikeResponse;
 import com.gb.community.domain.like.service.LikeService;
 import com.gb.community.domain.post.controller.PostController;
 import com.gb.community.domain.post.service.PostService;
+import com.gb.community.domain.post.service.PostTranslationService;
 import com.gb.community.global.config.WebConfig;
 import com.gb.community.global.exception.code.CommunityErrorCode;
 import com.gb.community.global.security.CurrentUserPublicIdArgumentResolver;
@@ -63,6 +64,10 @@ class LikeControllerTest {
 
     @MockitoBean
     private PostService postService; // PostController 의존성 충족 + 라우팅 격리 검증용
+
+    // PostController에 추가된 번역 서비스 의존성 충족 (라우팅 공존 검증만 하고 호출 안 함).
+    @MockitoBean
+    private PostTranslationService postTranslationService;
 
     // 방식 B 보안 필터 체인(oauth2ResourceServer)이 요구하는 JwtDecoder를 가린다(실제 IdP 호출 차단).
     @MockitoBean

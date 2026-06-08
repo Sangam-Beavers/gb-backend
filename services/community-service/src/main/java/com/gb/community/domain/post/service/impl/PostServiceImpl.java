@@ -12,6 +12,7 @@ import com.gb.community.domain.post.dto.response.PostSummaryResponse;
 import com.gb.community.domain.post.entity.Post;
 import com.gb.community.domain.post.entity.PostCategory;
 import com.gb.community.domain.post.repository.PostRepository;
+import com.gb.community.domain.post.repository.PostTranslationRepository;
 import com.gb.community.domain.post.service.PostService;
 import com.gb.community.global.client.MemberClient;
 import com.gb.community.global.client.MemberInfo;
@@ -39,6 +40,9 @@ public class PostServiceImpl implements PostService {
     // EXISTS 조회를 재사용한다. 같은 서비스 내 도메인 간 repository 주입은 기존 관행(Comment→PostRepository).
     private final LikeRepository likeRepository;
     private final MemberClient memberClient;
+    // #161 — 게시글 본문/제목 수정 시 모든 언어 번역 캐시 무효화.
+    // 카테고리만 바뀌는 PATCH는 무효화 대상 아님(요구사항 §6).
+    private final PostTranslationRepository postTranslationRepository;
 
     /** self-injection: createPostTx/updatePostTx의 @Transactional 프록시 적용 위함(wallet 동일 패턴). */
     @Autowired
@@ -141,6 +145,12 @@ public class PostServiceImpl implements PostService {
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
         post.update(newCategory, newTitle, newContent);
+        // 본문/제목 변경 시 해당 글의 모든 언어 번역 캐시 삭제 — translation.md §5 무효화 정책.
+        // 카테고리만 바뀐 PATCH(newTitle == null && newContent == null)는 본문 동일이라 무효화 불요.
+        // 같은 트랜잭션에서 DELETE → (커밋 후) 사용자가 번역 보기 재요청 시 미스 → Lambda 재호출 → 재INSERT.
+        if (newTitle != null || newContent != null) {
+            postTranslationRepository.deleteByPostId(post.getId());
+        }
         // 변경은 영속성 컨텍스트 dirty checking으로 커밋 시 반영(별도 save 불필요).
         return post;
     }

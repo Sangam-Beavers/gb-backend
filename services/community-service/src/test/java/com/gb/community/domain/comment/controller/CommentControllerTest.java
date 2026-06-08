@@ -68,6 +68,10 @@ class CommentControllerTest {
     @MockitoBean
     private CommentService commentService;
 
+    // 컨트롤러가 추가로 의존하는 번역 서비스(#161) — 본 테스트가 번역 시나리오를 안 보지만 컨텍스트 로딩에 필요.
+    @MockitoBean
+    private com.gb.community.domain.comment.service.CommentTranslationService commentTranslationService;
+
     // 방식 B 보안 필터 체인(oauth2ResourceServer)이 요구하는 JwtDecoder를 가린다(실제 IdP 호출 차단).
     @MockitoBean
     private JwtDecoder jwtDecoder;

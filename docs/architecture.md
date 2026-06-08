@@ -50,9 +50,9 @@ Redis                      (분산 락, 캐시, 세션 등)
 | 계정 | 역할 | 주요 리소스 |
 | --- | --- | --- |
 | **계정 A** | 운영 서비스(백엔드) | EKS, Aurora MySQL, ALB, Redis, SQS |
-| **계정 B** | AI 서류 분석 + 후속 챗봇 전용 | Lambda(A/B), **챗봇 Lambda**, Bedrock, **Bedrock Knowledge Bases(법령 RAG)** + S3 Vectors(KB 백엔드), S3, **DynamoDB(챗봇 대화기록)**, **챗봇 전용 Redis** |
+| **계정 B** | AI 서류 분석 + 후속 챗봇 + **커뮤니티 번역** 전용 | Lambda(A/B), **챗봇 Lambda**, **번역 Lambda(Bedrock Claude Haiku — 게시글·댓글 lazy 번역)**, Bedrock, **Bedrock Knowledge Bases(법령 RAG)** + S3 Vectors(KB 백엔드), S3, **DynamoDB(챗봇 대화기록)**, **챗봇 전용 Redis** |
 
-분석 작업은 계정 B에서 격리되어 돌아간다. 자세한 파이프라인은 [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md), 후속 챗봇은 [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md) 참고.
+분석 작업은 계정 B에서 격리되어 돌아간다. 자세한 파이프라인은 [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md), 후속 챗봇은 [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md), **커뮤니티 번역**은 [`community/translation.md`](./community/translation.md) 참고. 분석·챗봇·번역 모두 Bedrock Claude 라인업을 공유하지만 도메인이 다른 별도 Lambda로 분리한다(번역은 Haiku 단발 호출, 분석/챗봇은 Sonnet 계열 + Tool Use).
 
 > ⚠️ **저장 정책 (확정):** AI **분석 결과**는 **계정 A의 MySQL `document_results`에 직접 저장**한다. **분석 결과 저장에는 DynamoDB를 사용하지 않는다.**
 > ➕ **단, 챗봇 대화기록은 예외:** 후속 질문 챗봇의 대화기록은 분석 결과와 **무관한 별도 워크로드**라, 계정 B에 **DynamoDB(`chat_sessions`, TTL 90일) + Redis 캐시(TTL 30분)** 로 신규 도입한다. 이는 위 "분석 결과는 MySQL" 원칙과 충돌하지 않는다(저장 대상이 다름). 상세: [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md).
