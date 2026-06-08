@@ -1,0 +1,166 @@
+// community-service-pipeline.groovy
+// gb-backend(모노레포) → Harbor(멀티아키 이미지) → gb-infra(values.yaml 갱신) → ArgoCD 자동 배포
+pipeline {
+  agent {
+    kubernetes {
+      yaml '''
+        spec:
+          containers:
+          - name: jdk
+            image: eclipse-temurin:17-jdk
+            command: ["sleep"]
+            args: ["infinity"]
+          - name: scanner
+            image: sonarsource/sonar-scanner-cli:latest
+            command: ["sleep"]
+            args: ["infinity"]
+          - name: kaniko
+            image: gcr.io/kaniko-project/executor:debug
+            command: ["sleep"]
+            args: ["infinity"]
+            volumeMounts:
+            - name: harbor-dockercfg
+              mountPath: /kaniko/.docker
+          - name: regctl
+            image: ghcr.io/regclient/regctl:alpine
+            command: ["sleep"]
+            args: ["infinity"]
+            volumeMounts:
+            - name: harbor-dockercfg
+              mountPath: /home/appuser/.docker
+          - name: git
+            image: alpine/git:latest
+            command: ["sleep"]
+            args: ["infinity"]
+          volumes:
+          - name: harbor-dockercfg
+            secret:
+              secretName: harbor-dockercfg
+              items:
+              - key: .dockerconfigjson
+                path: config.json
+      '''
+    }
+  }
+
+  environment {
+    REGISTRY     = "harbor.sb.fisa"
+    IMAGE_BASE   = "${REGISTRY}/global_bridge/community"
+    IMAGE_TAG    = "${BUILD_NUMBER}"
+    CONFIG_REPO  = "github.com/Sangam-Beavers/gb-infra"
+    VALUES_PATH  = "charts/community/values.yaml"
+    SERVICE_PATH = "services/community-service"
+  }
+
+  stages {
+    stage('1) Gradle 빌드') {
+      steps {
+        container('jdk') {
+          sh '''
+            chmod +x gradlew
+            ./gradlew :services:community-service:bootJar -x test --no-daemon
+          '''
+        }
+      }
+    }
+
+    stage('2) SonarQube 분석') {
+      steps {
+        container('scanner') {
+          withSonarQubeEnv('sonarqube') {
+            sh '''
+              sonar-scanner \
+                -Dsonar.projectKey=gb-community-service \
+                -Dsonar.sources=${SERVICE_PATH}/src/main/java \
+                -Dsonar.java.binaries=${SERVICE_PATH}/build/classes
+            '''
+          }
+        }
+      }
+    }
+
+    stage('3) 품질 게이트') {
+      steps {
+        timeout(time: 5, unit: 'MINUTES') {
+          waitForQualityGate abortPipeline: true
+        }
+      }
+    }
+
+    stage('4) 이미지 빌드 & push (멀티아키 병렬)') {
+      parallel {
+        stage('amd64') {
+          steps {
+            container('kaniko') {
+              sh '''
+                /kaniko/executor \
+                  --context `pwd` \
+                  --dockerfile ${SERVICE_PATH}/Dockerfile \
+                  --destination ${IMAGE_BASE}:${IMAGE_TAG}-amd64 \
+                  --custom-platform=linux/amd64 \
+                  --skip-tls-verify
+              '''
+            }
+          }
+        }
+        stage('arm64') {
+          steps {
+            container('kaniko') {
+              sh '''
+                /kaniko/executor \
+                  --context `pwd` \
+                  --dockerfile ${SERVICE_PATH}/Dockerfile \
+                  --destination ${IMAGE_BASE}:${IMAGE_TAG}-arm64 \
+                  --custom-platform=linux/arm64 \
+                  --skip-tls-verify
+              '''
+            }
+          }
+        }
+      }
+    }
+
+    stage('5) 멀티아키 manifest 합치기') {
+      steps {
+        container('regctl') {
+          sh '''
+            regctl image index create ${IMAGE_BASE}:${IMAGE_TAG} \
+              --ref ${IMAGE_BASE}:${IMAGE_TAG}-amd64 \
+              --ref ${IMAGE_BASE}:${IMAGE_TAG}-arm64
+          '''
+        }
+      }
+    }
+
+    stage('6) Config repo 업데이트 (GitOps)') {
+      steps {
+        container('git') {
+          withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
+            sh '''
+              set -e
+              git config --global user.name  "Jenkins CI"
+              git config --global user.email "jenkins@sb.fisa"
+              git clone https://oauth2:${GITHUB_TOKEN}@${CONFIG_REPO}.git config-repo
+              cd config-repo
+              sed -i 's|^\\(  tag:\\).*|\\1 "'"${IMAGE_TAG}"'"|' ${VALUES_PATH}
+              echo "=== 변경된 내용 ==="
+              grep "tag:" ${VALUES_PATH}
+              if git diff --quiet; then
+                echo "변경사항 없음 — 커밋 생략"
+                exit 0
+              fi
+              git add ${VALUES_PATH}
+              git commit -m "ci: bump community image to ${IMAGE_TAG} (multi-arch)"
+              git push origin main
+            '''
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    success { echo "✅ 멀티아키 이미지 ${IMAGE_BASE}:${IMAGE_TAG} → gb-infra 커밋 → ArgoCD 자동 배포" }
+    failure { echo "❌ 실패 — 어느 stage에서 멈췄는지 확인하세요." }
+  }
+}
