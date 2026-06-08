@@ -301,6 +301,14 @@ public class ChatbotLambdaClientImpl implements ChatbotLambdaClient {
                         if ("token".equals(currentEvent)) {
                             listener.onToken(data.toString());
                         }
+                        if ("error".equals(currentEvent)) {
+                            // Lambda가 예외 시 event:error 한 번 흘리고 종료(app.py sse_stream).
+                            // 무시하면 EOF에서 onDone("")로 끝나 클라이언트엔 "빈 답변"으로 보인다 —
+                            // 반드시 onError로 표면화한다.
+                            listener.onError(new IllegalStateException(
+                                    "Chatbot Lambda stream error — " + data));
+                            return;
+                        }
                     }
                     currentEvent = "message";
                     data.setLength(0);
