@@ -62,16 +62,9 @@ public class Post extends BaseSoftDeleteEntity {
     @Column(name = "content", nullable = false, columnDefinition = "TEXT")
     private String content;
 
-    /** 번역 캐시 — 동일 언어 재요청 시 AWS Translate 재호출 없이 반환 (docs §4). */
-    @Column(name = "translated_title", length = 255)
-    private String translatedTitle;
-
-    @Lob
-    @Column(name = "translated_content", columnDefinition = "TEXT")
-    private String translatedContent;
-
-    @Column(name = "translated_language", length = 10)
-    private String translatedLanguage;
+    // 구버전 번역 캐시 3컬럼(translated_title/content/language)은 제거됨 — #161.
+    // 다국어 동시 보관을 위해 별도 테이블 post_translations((post_id, language) 복합 PK)로 분리.
+    // 번역 엔진은 Bedrock Claude Haiku(계정 B Lambda) — AWS Translate가 아니다. 상세: docs/community/translation.md.
 
     /** 조회수 (Redis 카운터 → 배치 동기화 가능, docs §4). */
     @Column(name = "view_count", nullable = false)

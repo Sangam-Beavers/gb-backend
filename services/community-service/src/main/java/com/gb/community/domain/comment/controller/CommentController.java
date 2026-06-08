@@ -6,7 +6,9 @@ import com.gb.common.response.SuccessStatus;
 import com.gb.community.domain.comment.dto.request.CreateCommentRequest;
 import com.gb.community.domain.comment.dto.response.CommentListResponse;
 import com.gb.community.domain.comment.dto.response.CommentResponse;
+import com.gb.community.domain.comment.dto.response.CommentTranslationResponse;
 import com.gb.community.domain.comment.service.CommentService;
+import com.gb.community.domain.comment.service.CommentTranslationService;
 import com.gb.community.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -63,8 +65,13 @@ public class CommentController {
             "{\"success\":false,\"code\":\"COMMUNITY4002\",\"message\":\"존재하지 않는 댓글입니다.\"}";
     private static final String EX_COMMON4031 =
             "{\"success\":false,\"code\":\"COMMON4031\",\"message\":\"접근 권한이 없습니다.\"}";
+    private static final String EX_COMMUNITY4003 =
+            "{\"success\":false,\"code\":\"COMMUNITY4003\",\"message\":\"지원하지 않는 언어입니다.\"}";
+    private static final String EX_COMMUNITY4004 =
+            "{\"success\":false,\"code\":\"COMMUNITY4004\",\"message\":\"본문이 너무 깁니다.\"}";
 
     private final CommentService commentService;
+    private final CommentTranslationService commentTranslationService;
 
     /** 댓글 목록 조회. 🔒 JWT 필요(본인 식별은 토큰 public_id claim에서 추출). */
     @Operation(
@@ -201,5 +208,57 @@ public class CommentController {
             @CurrentUserPublicId String userPublicId) {
         commentService.deleteComment(postPublicId, commentPublicId, userPublicId);
         return ApiResponse.success(null);
+    }
+
+    /** 댓글 번역 보기 (#161). 🔒 JWT 필요. 화이트리스트(ko/en/vi/fil) + 5000자 캡. */
+    @Operation(
+            summary = "댓글 번역 보기",
+            description = "댓글 본문을 사용자 언어로 번역해 반환한다(lazy). 댓글에는 별도 작성 언어 컬럼이 없어 "
+                    + "부모 게시글의 language를 기준으로 같은-언어 판정을 한다. 캐시 hit 시 즉시 반환, "
+                    + "미스 시 계정 B Bedrock(Claude Haiku) Lambda 호출 후 comment_translations에 저장한다. "
+                    + "지원 언어: ko/en/vi/fil. 본문 5000자 초과는 COMMUNITY4004로 거절.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "번역 성공. data에 CommentTranslationResponse가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - language 누락/형식 위반 또는 path variable 형식 위반. / "
+                            + "COMMUNITY4003 - 지원하지 않는 언어. / "
+                            + "COMMUNITY4004 - 본문이 너무 깁니다(5000자 초과).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = {
+                                    @ExampleObject(name = "COMMON4001", value = EX_COMMON4001),
+                                    @ExampleObject(name = "COMMUNITY4003", value = EX_COMMUNITY4003),
+                                    @ExampleObject(name = "COMMUNITY4004", value = EX_COMMUNITY4004)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "COMMUNITY4001 - 존재하지 않는 게시글입니다. / "
+                            + "COMMUNITY4002 - 존재하지 않는 댓글입니다(미존재·이미 삭제·URL 불일치).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = {
+                                    @ExampleObject(name = "COMMUNITY4001", value = EX_COMMUNITY4001),
+                                    @ExampleObject(name = "COMMUNITY4002", value = EX_COMMUNITY4002)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류 (예: Bedrock Lambda 호출 실패 — 폴백 없음).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000)))
+    })
+    @GetMapping("/{postId}/comments/{commentId}/translation")
+    public ApiResponse<CommentTranslationResponse> getCommentTranslation(
+            @CurrentUserPublicId String userPublicId,
+            @PathVariable("postId") @NotBlank @Size(max = 36) String postPublicId,
+            @PathVariable("commentId") @NotBlank @Size(max = 36) String commentPublicId,
+            @RequestParam("language") @NotBlank @Size(max = 10) String language) {
+        return ApiResponse.success(
+                commentTranslationService.getOrTranslate(postPublicId, commentPublicId, language));
     }
 }

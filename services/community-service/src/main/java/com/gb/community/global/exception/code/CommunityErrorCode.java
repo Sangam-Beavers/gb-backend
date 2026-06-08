@@ -22,7 +22,14 @@ import org.springframework.http.HttpStatus;
 public enum CommunityErrorCode implements ErrorCode {
 
     POST_NOT_FOUND(HttpStatus.NOT_FOUND, "COMMUNITY4001", "존재하지 않는 게시글입니다."),
-    COMMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "COMMUNITY4002", "존재하지 않는 댓글입니다.");
+    COMMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "COMMUNITY4002", "존재하지 않는 댓글입니다."),
+    // #161 동적 번역 — 화이트리스트 외(ko/en/vi/fil 아님) 언어 거절. COMMON4001 대신 도메인 코드로 두는
+    // 이유: "지원하지 않는 언어"는 입력 형식 오류가 아니라 비즈니스 제약(번역 비용·품질 화이트리스트). UI가
+    // 사용자에게 표시할 메시지가 형식 오류와 다르다.
+    UNSUPPORTED_LANGUAGE(HttpStatus.BAD_REQUEST, "COMMUNITY4003", "지원하지 않는 언어입니다."),
+    // #161 동적 번역 — 본문 5000자 초과 거절(Bedrock 단발 호출 비용·지연 캡). 작성 상한(게시글 10000자/
+    // 댓글 2000자)과는 별도 — 번역은 더 짧은 캡으로 비용 보호.
+    CONTENT_TOO_LONG(HttpStatus.BAD_REQUEST, "COMMUNITY4004", "본문이 너무 깁니다.");
 
     private final HttpStatus httpStatus; // @Getter가 getHttpStatus/getCode/getMessage 생성 → ErrorCode 충족
     private final String code;

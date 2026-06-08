@@ -11,6 +11,15 @@ spring:
 server:
   port: 8082
 
+# 계정 B 번역 Lambda(Bedrock Claude Haiku) — stage·prod에서만 실제 호출.
+# dev/test는 MockTranslationClient가 활성화돼 본 설정을 읽지 않는다(빈 값이어도 무방).
+translation:
+  lambda:
+    # 환경별 yml(application-{stage|prod}.yml) 또는 환경변수 TRANSLATION_LAMBDA_URL로 주입.
+    url: ${TRANSLATION_LAMBDA_URL:}
+  aws:
+    region: ${TRANSLATION_AWS_REGION:ap-northeast-2}
+
 management:
   endpoints:
     web:
