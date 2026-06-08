@@ -52,9 +52,11 @@
 | 11 | wallet | `scheduled_transfers` | 정기 송금 설정 (매주/매월 자동 실행 대상) |
 | 12 | document | `document_submissions` | 문서 업로드 ~ 분석 전 메타 |
 | 13 | document | `document_results` | 분석 완료 결과 메타 **+ 분석 내용** |
-| 14 | community | `posts` | 게시글 + 번역 캐시 |
+| 14 | community | `posts` | 게시글 |
 | 15 | community | `comments` | 댓글 + 대댓글 |
 | 16 | community | `likes` | 게시글/댓글 좋아요 통합 |
+| 17 | community | `post_translations` | 게시글 번역 캐시 (다국어 동시 보관) |
+| 18 | community | `comment_translations` | 댓글 번역 캐시 (다국어 동시 보관) |
 
 > **통화 마스터 테이블 없음** — 지원 통화 4개(KRW/USD/PHP/VND) 고정. `currency_code`를 VARCHAR로 직접 저장.
 
@@ -365,7 +367,8 @@
 ## 5. community 도메인
 
 ### `posts`
-> 게시글 + 번역 캐시. category VARCHAR. soft delete.
+> 게시글. category VARCHAR. soft delete.
+> **번역 캐시는 별도 테이블(`post_translations`)로 분리됨** — 한 글에 여러 언어를 동시 보관해 사용자별 언어 차이를 캐시 hit로 흡수.
 
 | 컬럼 | 타입 | 제약 | 설명 |
 | --- | --- | --- | --- |
@@ -376,15 +379,16 @@
 | `language` | VARCHAR(10) | NOT NULL | 작성 언어 코드 |
 | `title` | VARCHAR(255) | NOT NULL | |
 | `content` | TEXT | NOT NULL | |
-| `translated_title` | VARCHAR(255) | NULL | 번역 캐시 |
-| `translated_content` | TEXT | NULL | 번역 캐시 |
-| `translated_language` | VARCHAR(10) | NULL | 번역 언어 코드 |
 | `view_count` | INT | NOT NULL, DEFAULT 0 | (Redis 카운터 → 배치 동기화) |
 | `like_count` | INT | NOT NULL, DEFAULT 0 | likes 집계 캐시 |
 | `comment_count` | INT | NOT NULL, DEFAULT 0 | comments 집계 캐시 |
 | `created_at` | DATETIME | NOT NULL | |
 | `updated_at` | DATETIME | NOT NULL | |
 | `deleted_at` | DATETIME | NULL | soft delete |
+
+> **`translated_title`/`translated_content`/`translated_language` 3컬럼 제거 (#161)**:
+> 한 글에 한 언어만 보관해 사용자 언어가 바뀌면 매번 캐시 미스가 났다. dev 전용 운영이라 `ddl-auto:update`로
+> 컬럼 잔존 가능 — stage/prod 전환 시 수동 `ALTER TABLE posts DROP COLUMN translated_title, DROP COLUMN translated_content, DROP COLUMN translated_language;` 필요.
 
 ### `comments`
 > 대댓글은 `parent_id`. soft delete.
@@ -414,6 +418,32 @@
 | `created_at` | DATETIME | NOT NULL | |
 
 > `(user_public_id, target_type, target_id)` 복합 UNIQUE.
+
+### `post_translations`
+> 게시글 번역 캐시. **다국어 동시 보관** — `(post_id, language)` 복합 PK. 본문/제목 수정 시 해당 post_id의 모든 행 삭제(`deleteByPostId`).
+> 번역 엔진: 계정 B Bedrock Claude Haiku. 호출은 lazy(사용자 "번역 보기" 클릭 시).
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| `post_id` | BIGINT | PK, FK → posts.id, NOT NULL | 스키마 내부 참조 (CASCADE 미지정 — Service에서 `deleteByPostId`로 명시 무효화) |
+| `language` | VARCHAR(10) | PK, NOT NULL | 번역 대상 언어 코드 (`ko`/`en`/`vi`/`fil` 화이트리스트) |
+| `translated_title` | VARCHAR(255) | NOT NULL | 번역 제목 |
+| `translated_content` | TEXT | NOT NULL | 번역 본문 |
+| `translated_at` | DATETIME | NOT NULL | 번역 캐시 INSERT 시각(`@CreatedDate`). 업데이트는 발생하지 않음(캐시 삭제 후 재생성 패턴) |
+
+### `comment_translations`
+> 댓글 번역 캐시. 게시글과 동일한 패턴 — `(comment_id, language)` 복합 PK. 댓글 본문 수정 시 `deleteByCommentId`.
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| `comment_id` | BIGINT | PK, FK → comments.id, NOT NULL | 스키마 내부 참조 |
+| `language` | VARCHAR(10) | PK, NOT NULL | 번역 대상 언어 코드 (화이트리스트 동일) |
+| `translated_content` | TEXT | NOT NULL | 번역 본문 (댓글은 제목 없음) |
+| `translated_at` | DATETIME | NOT NULL | INSERT 시각(`@CreatedDate`) |
+
+> **인덱스**: PK가 `(post_id|comment_id, language)`라 해당 글 단건 번역 조회는 PK 인덱스를 그대로 탄다.
+> **무효화 전략**: 게시글/댓글 본문(또는 제목) 수정 시 Service가 `delete*ById`를 명시 호출 — DB CASCADE에 의존하지 않는다(엔티티/Repository 표준 인터페이스로 일관 유지).
+> **상세**: [`community/translation.md`](./community/translation.md) (Lambda 계약·비용·운영 노트).
 
 ---
 

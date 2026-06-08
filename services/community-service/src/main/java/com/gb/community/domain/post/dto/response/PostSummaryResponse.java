@@ -42,6 +42,9 @@ public class PostSummaryResponse {
     @Schema(description = "본문 미리보기(앞 100자, 초과 시 … 표기)", example = "베트남에서 온 외국인입니다. 같은 경험 있는 분 계시면…")
     private final String contentPreview;
 
+    @Schema(description = "작성 언어 코드(ko/en/vi/fil)", example = "ko")
+    private final String language;
+
     @Schema(description = "작성자 닉네임", example = "Minh")
     private final String authorNickname;
 
@@ -59,12 +62,13 @@ public class PostSummaryResponse {
 
     @Builder
     private PostSummaryResponse(String publicId, String category, String title, String contentPreview,
-                               String authorNickname, Boolean isAuthor,
+                               String language, String authorNickname, Boolean isAuthor,
                                Integer likeCount, Integer commentCount, String createdAt) {
         this.publicId = publicId;
         this.category = category;
         this.title = title;
         this.contentPreview = contentPreview;
+        this.language = language;
         this.authorNickname = authorNickname;
         this.isAuthor = isAuthor;
         this.likeCount = likeCount;
@@ -82,6 +86,7 @@ public class PostSummaryResponse {
                 .category(post.getCategory().name())
                 .title(post.getTitle())
                 .contentPreview(preview(post.getContent()))
+                .language(post.getLanguage())
                 .authorNickname(author.nickname())
                 .isAuthor(post.getUserPublicId().equals(requesterUserPublicId))
                 .likeCount(post.getLikeCount())

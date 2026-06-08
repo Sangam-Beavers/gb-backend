@@ -7,7 +7,9 @@ import com.gb.community.domain.post.dto.request.PostCreateRequest;
 import com.gb.community.domain.post.dto.request.PostUpdateRequest;
 import com.gb.community.domain.post.dto.response.PostDetailResponse;
 import com.gb.community.domain.post.dto.response.PostListResponse;
+import com.gb.community.domain.post.dto.response.PostTranslationResponse;
 import com.gb.community.domain.post.service.PostService;
+import com.gb.community.domain.post.service.PostTranslationService;
 import com.gb.community.global.security.CurrentUserPublicId;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -55,8 +57,13 @@ public class PostController {
             "{\"success\":false,\"code\":\"COMMON5000\",\"message\":\"서버 오류가 발생했습니다.\"}";
     private static final String EX_COMMUNITY4001 =
             "{\"success\":false,\"code\":\"COMMUNITY4001\",\"message\":\"존재하지 않는 게시글입니다.\"}";
+    private static final String EX_COMMUNITY4003 =
+            "{\"success\":false,\"code\":\"COMMUNITY4003\",\"message\":\"지원하지 않는 언어입니다.\"}";
+    private static final String EX_COMMUNITY4004 =
+            "{\"success\":false,\"code\":\"COMMUNITY4004\",\"message\":\"본문이 너무 깁니다.\"}";
 
     private final PostService postService;
+    private final PostTranslationService postTranslationService;
 
     /** 게시글 목록·검색. 🔒 JWT 필요(본인 식별은 토큰 public_id claim에서 추출). */
     @Operation(
@@ -254,5 +261,55 @@ public class PostController {
             @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId) {
         postService.deletePost(userPublicId, postPublicId);
         return ApiResponse.success(null);
+    }
+
+    /** 게시글 번역 보기 (#161). 🔒 JWT 필요. 화이트리스트(ko/en/vi/fil) + 5000자 캡. */
+    @Operation(
+            summary = "게시글 번역 보기",
+            description = "게시글 본문을 사용자 언어로 번역해 반환한다(lazy). 동일 언어 요청 시 원문 반환, "
+                    + "캐시(post_translations) hit 시 즉시 반환, 미스 시 계정 B Bedrock(Claude Haiku) Lambda 호출 후 캐시. "
+                    + "지원 언어 화이트리스트: ko/en/vi/fil. 본문 5000자 초과는 COMMUNITY4004로 거절(번역 비용 캡). "
+                    + "본문/제목 수정 시 해당 글의 모든 언어 번역 캐시가 무효화된다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "번역 성공. data에 PostTranslationResponse가 담긴다."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "COMMON4001 - language 누락/형식 위반 또는 path variable 형식 위반. / "
+                            + "COMMUNITY4003 - 지원하지 않는 언어. / "
+                            + "COMMUNITY4004 - 본문이 너무 깁니다(5000자 초과).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = {
+                                    @ExampleObject(name = "COMMON4001", value = EX_COMMON4001),
+                                    @ExampleObject(name = "COMMUNITY4003", value = EX_COMMUNITY4003),
+                                    @ExampleObject(name = "COMMUNITY4004", value = EX_COMMUNITY4004)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "COMMUNITY4001 - 존재하지 않는 게시글입니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMUNITY4001", value = EX_COMMUNITY4001))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류 (예: Bedrock Lambda 호출 실패 — 폴백 없음).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "COMMON5000", value = EX_COMMON5000)))
+    })
+    @GetMapping("/{id}/translation")
+    public ApiResponse<PostTranslationResponse> getPostTranslation(
+            // 컨트롤러는 요청자 식별을 위해 인증된 JWT가 필요하다(authenticated()) — 값을 직접 쓰진 않지만
+            // 본인 식별을 강제하려면 @CurrentUserPublicId를 둬야 한다(claim 누락 시 AUTH4011 fail-fast).
+            @CurrentUserPublicId String userPublicId,
+            @PathVariable("id") @NotBlank @Size(max = 36) String postPublicId,
+            // language는 필수 — null/blank·길이 위반은 @NotBlank/@Size에서 COMMON4001로 컷.
+            // 화이트리스트(ko/en/vi/fil) 검증은 Service에서(잘못된 값은 COMMUNITY4003 — 도메인 코드).
+            @RequestParam("language") @NotBlank @Size(max = 10) String language) {
+        return ApiResponse.success(postTranslationService.getOrTranslate(postPublicId, language));
     }
 }

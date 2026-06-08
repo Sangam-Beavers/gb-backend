@@ -19,6 +19,7 @@ import com.gb.community.domain.post.dto.response.PostListResponse;
 import com.gb.community.domain.post.entity.Post;
 import com.gb.community.domain.post.entity.PostCategory;
 import com.gb.community.domain.post.repository.PostRepository;
+import com.gb.community.domain.post.repository.PostTranslationRepository;
 import com.gb.community.domain.post.service.impl.PostServiceImpl;
 import com.gb.community.global.client.MemberClient;
 import com.gb.community.global.client.MemberInfo;
@@ -52,6 +53,8 @@ class PostServiceTest {
     @Mock private PostRepository postRepository;
     @Mock private LikeRepository likeRepository;
     @Mock private MemberClient memberClient;
+    // #161 — 본문/제목 수정 시 번역 캐시 무효화 의존성. updatePost 외 경로는 호출되지 않음.
+    @Mock private PostTranslationRepository postTranslationRepository;
     @InjectMocks private PostServiceImpl service;
 
     @BeforeEach
@@ -177,7 +180,7 @@ class PostServiceTest {
     // ----- update -----
 
     @Test
-    @DisplayName("수정 정상: 보낸 필드(title)만 변경되고 본문은 유지된다")
+    @DisplayName("수정 정상: 보낸 필드(title)만 변경되고 본문은 유지된다 + 번역 캐시 무효화(deleteByPostId 호출)")
     void updatePost_정상() {
         Post post = Post.of(USER, PostCategory.JOB, "old title", "old content");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
@@ -190,6 +193,8 @@ class PostServiceTest {
         assertThat(res.getIsAuthor()).isTrue(); // 수정은 본인 검증 통과 흐름 — 항상 true
         assertThat(res.getIsLiked()).isFalse(); // EXISTS 미스텁(기본 false) — 좋아요 안 한 본인 글
         assertThat(post.getTitle()).isEqualTo("new title");
+        // #161 — title 변경되었으므로 모든 언어 번역 캐시 무효화.
+        verify(postTranslationRepository).deleteByPostId(post.getId());
     }
 
     @Test

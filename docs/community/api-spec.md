@@ -15,7 +15,8 @@
 | 게시글 작성 | POST | `/api/v1/community/posts` | ✅ |
 | 게시글 수정 | PATCH | `/api/v1/community/posts/{id}` | ✅ |
 | 게시글 삭제 | DELETE | `/api/v1/community/posts/{id}` | ✅ |
-| 번역 보기 | GET | `/api/v1/community/posts/{id}/translation?language={}` | ✅ |
+| 게시글 번역 보기 | GET | `/api/v1/community/posts/{id}/translation?language={}` | ✅ |
+| 댓글 번역 보기 | GET | `/api/v1/community/posts/{postId}/comments/{commentId}/translation?language={}` | ✅ |
 | 관심글 목록 | GET | `/api/v1/community/posts/liked?sort=&page=&size=` | ✅ |
 | 게시글 좋아요 | POST | `/api/v1/community/posts/{id}/likes` | ✅ |
 | 게시글 좋아요 취소 | DELETE | `/api/v1/community/posts/{id}/likes` | ✅ |
@@ -96,9 +97,26 @@
 ## 3. 게시글 단건 조회 / 수정 / 삭제 / 번역
 
 - 단건 조회: `GET /api/v1/community/posts/{id}` → 본문 + 작성자(닉네임/`author_is_verified`) + 카운트 + `is_author`(요청자=작성자 여부, 수정·삭제 버튼 노출 판단용) + `is_liked`(요청자의 좋아요 여부, 하트 상태 표시용 — 좋아요 저장의 409 판정과 동일한 likes EXISTS 조건, 항상 true/false). 404 COMMUNITY4001.
-- 수정: `PATCH /api/v1/community/posts/{id}` (본인만, 403 COMMON4031. 부분 수정 — 전송 필드만 변경, title/content 상한은 §2와 동일. 응답의 `is_liked`는 실제 값 — 본인 글 self-like 가능)
+- 수정: `PATCH /api/v1/community/posts/{id}` (본인만, 403 COMMON4031. 부분 수정 — 전송 필드만 변경, title/content 상한은 §2와 동일. 응답의 `is_liked`는 실제 값 — 본인 글 self-like 가능. **본문/제목 변경 시 해당 게시글의 모든 언어 번역 캐시(`post_translations`)가 삭제된다** — §6 참고)
 - 삭제: `DELETE /api/v1/community/posts/{id}` (soft delete, 본인만)
-- 번역 보기: `GET /api/v1/community/posts/{id}/translation?language={}` → `data: { translated_title, translated_content, translated_language }`
+- 번역 보기: `GET /api/v1/community/posts/{id}/translation?language={vi|en|ko|fil}` · Auth ✅
+  - 동작: 화이트리스트(ko/en/vi/fil) 검증 → 본문 길이 검증(5000자) → 같은 언어면 원문 그대로 → `post_translations`에 캐시 hit면 즉시 반환 → 캐시 미스면 계정 B Bedrock(Claude Haiku) 호출 후 INSERT.
+  - 응답 200 — `data`
+    | 필드 | 타입 | nullable | 설명 |
+    | --- | --- | --- | --- |
+    | `translated_title` | string | N | 번역된 제목(target_lang) |
+    | `translated_content` | string | N | 번역된 본문(target_lang) |
+    | `translated_language` | string | N | 실제 응답 언어 코드 (`ko`/`en`/`vi`/`fil`) |
+  - 에러
+    | HTTP | code | message |
+    | --- | --- | --- |
+    | 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (language 누락/형식 위반 등) |
+    | 400 | COMMUNITY4003 | 지원하지 않는 언어입니다. (화이트리스트 외) |
+    | 400 | COMMUNITY4004 | 본문이 너무 깁니다. (5000자 초과 — 번역 비용 캡) |
+    | 401 | AUTH4011 | 인증이 필요합니다. |
+    | 404 | COMMUNITY4001 | 존재하지 않는 게시글입니다. |
+    | 500 | COMMON5000 | 서버 오류(예: Bedrock Lambda 호출 실패 — 폴백 없음, 실패는 그대로 노출) |
+  - 캐시 정책·Lambda 계약·비용 추정: [`translation.md`](./translation.md) 참고.
 
 ---
 
@@ -266,6 +284,62 @@
 
 ---
 
+## 7-3. 댓글 번역 보기
+
+`GET /api/v1/community/posts/{postId}/comments/{commentId}/translation?language={vi|en|ko|fil}` · Auth ✅
+
+댓글 본문을 사용자 언어로 번역해 반환한다. 게시글 번역(§3)과 동일한 lazy 정책(사용자가 번역 보기 버튼 클릭 시 호출).
+
+**Path Variable**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `postId` | string | O | 게시글 public_id (UUID), 최대 36자 |
+| `commentId` | string | O | 댓글 public_id (UUID), 최대 36자 |
+
+**Query Parameter**
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `language` | string | O | 대상 언어. 화이트리스트: `ko`/`en`/`vi`/`fil` |
+
+**동작**
+- 화이트리스트 검증 → 본문 5000자 캡 검증 → 게시글·댓글 활성 조회(없으면 COMMUNITY4001/4002)
+  → URL `postId`와 댓글의 실제 게시글 일치 검증(불일치=COMMUNITY4002, §7-2와 동일 통합 처리)
+  → 댓글의 작성 언어가 target_lang과 같으면 원문 그대로 반환(Bedrock 호출·캐시 INSERT 없음)
+  → `comment_translations` 캐시 hit이면 즉시 반환 → 캐시 미스면 계정 B Bedrock(Claude Haiku) 호출 후 INSERT.
+- 댓글 본문 수정 API는 본 사이클 범위 밖이지만, 도입 시 본문 변경에 캐시 무효화(`deleteByCommentId`)를 반드시 호출한다.
+
+**Response 200** — `data`
+| 필드 | 타입 | nullable | 설명 |
+| --- | --- | --- | --- |
+| `translated_content` | string | N | 번역된 댓글 본문(target_lang) |
+| `translated_language` | string | N | 실제 응답 언어 코드 (`ko`/`en`/`vi`/`fil`) |
+
+```json
+{
+  "success": true,
+  "data": {
+    "translated_content": "Tôi cũng từng trải qua chuyện tương tự năm ngoái...",
+    "translated_language": "vi"
+  },
+  "message": "요청이 성공적으로 처리되었습니다."
+}
+```
+
+**Error**
+| HTTP | code | message |
+| --- | --- | --- |
+| 400 | COMMON4001 | 요청 값이 올바르지 않습니다. (language 누락/형식 위반, path variable 형식 위반) |
+| 400 | COMMUNITY4003 | 지원하지 않는 언어입니다. |
+| 400 | COMMUNITY4004 | 본문이 너무 깁니다. (5000자 초과) |
+| 401 | AUTH4011 | 인증이 필요합니다. |
+| 404 | COMMUNITY4001 | 존재하지 않는 게시글입니다. |
+| 404 | COMMUNITY4002 | 존재하지 않는 댓글입니다. (미존재·이미 삭제·URL 불일치 통합) |
+| 500 | COMMON5000 | 서버 오류 (예: Bedrock Lambda 호출 실패) |
+
+> 캐시 정책·Lambda 계약·비용 추정은 [`translation.md`](./translation.md) 참고. 게시글 번역과 동일한 lazy/캐시/언어 화이트리스트 정책을 공유한다.
+
+---
+
 ## 8. 주요 QnA 목록
 
 `GET /api/v1/community/qna` · **Auth ❌ (공개)**
@@ -321,6 +395,8 @@
 | --- | --- | --- |
 | `COMMUNITY4001` | 404 | 존재하지 않는 게시글입니다. |
 | `COMMUNITY4002` | 404 | 존재하지 않는 댓글입니다. |
+| `COMMUNITY4003` | 400 | 지원하지 않는 언어입니다. (번역 화이트리스트 외 — ko/en/vi/fil) |
+| `COMMUNITY4004` | 400 | 본문이 너무 깁니다. (번역 5000자 캡 초과) |
 
 > 잘못된 카테고리/정렬 값은 `COMMON4001`로 통일. 중복(좋아요)은 `COMMON4091`.
 > 도메인 고유 코드가 더 필요하면 COMMUNITY 표에 새 번호로 등록 후 사용(번호 재배치 금지).
