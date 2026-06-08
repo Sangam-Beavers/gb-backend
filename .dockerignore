@@ -1,0 +1,43 @@
+# 빌드 산출물
+**/build/
+**/out/
+**/target/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Gradle 캐시
+.gradle/
+**/.gradle/
+
+# 로그/임시
+*.log
+*.tmp
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker 자체
+**/Dockerfile
+.dockerignore
+
+# 환경/시크릿 (이미지에 들어가면 안 됨)
+.env
+.env.*
+**/application-dev.yml
+**/application-stage.yml
+**/application-prod.yml
+
+# 문서/CI 설정 (이미지엔 불필요)
+docs/
+*.md
+.github/
