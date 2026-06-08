@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.module.SimpleModule;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Optional;
@@ -42,12 +44,22 @@ public class JpaConfig {
      * 레코드에 {@code @JsonProperty}를 붙이지 않는다(CLAUDE.md §5).
      *
      * <p>{@code FAIL_ON_UNKNOWN_PROPERTIES=false}로 결과 JSON에 record 미정의 필드가 있어도 무시한다.
+     *
+     * <p><b>금액 필드 관대 파싱({@link LenientBigDecimalDeserializer}):</b> 결과 JSON은 계정 B Lambda B가
+     * 비결정적 LLM 출력으로 쓰는데, {@code deductions[].amount} 등 금액에 {@code "약 103,500원"}처럼
+     * 통화기호·콤마·한글이 섞인 표시용 문자열이 들어오는 경우가 실측됐다(2026-06-08). {@code BigDecimal}
+     * 역직렬화가 깨지면 그 행이 섞인 <b>목록 조회 전체가 500</b>으로 떨어지므로(엔티티 hydration 실패),
+     * 읽기 측 안전망으로 숫자 외 문자를 제거해 파싱하고 실패 시 null로 강등한다. 이 매퍼는 Hibernate
+     * JSON 컬럼 전용이라 API 요청/응답 ObjectMapper의 엄격함은 그대로 유지된다.
      */
     @Bean
     HibernatePropertiesCustomizer jsonSnakeCaseFormatMapper() {
+        SimpleModule lenientNumbers = new SimpleModule()
+                .addDeserializer(BigDecimal.class, new LenientBigDecimalDeserializer());
         ObjectMapper objectMapper = JsonMapper.builder()
                 .propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
                 .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+                .addModule(lenientNumbers)
                 .build();
         return props -> props.put(
                 AvailableSettings.JSON_FORMAT_MAPPER, new JacksonJsonFormatMapper(objectMapper));

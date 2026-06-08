@@ -45,6 +45,15 @@ public final class SseRelayListener implements ChatStreamListener {
     @Override
     public void onError(Throwable t) {
         log.warn("Chat stream error", t);
+        // 클라이언트에 event:error를 먼저 흘린다 — completeWithError만 하면 (특히 토큰이 이미
+        // 나간 뒤엔) 연결이 그냥 끊겨 프론트가 원인 없이 "빈 답변"으로 보게 된다.
+        // 상세 사유는 서버 로그에만 남기고, 사용자에겐 일반 안내 문구만 보낸다.
+        try {
+            emitter.send(SseEmitter.event().name("error")
+                    .data(Map.of("message", "답변 생성 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.")));
+        } catch (IOException ignored) {
+            // 이미 끊긴 연결 — 보낼 수 없으면 그대로 종료.
+        }
         emitter.completeWithError(t);
     }
 }
