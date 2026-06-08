@@ -1,0 +1,25 @@
+dependencies {
+    implementation project(':common:common-exception')
+    implementation project(':common:common-response')
+    implementation project(':common:common-security')
+
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    // 방식 B: 외부 IdP가 발급한 JWT를 검증만 하는 "검표원"(Resource Server). issuer-uri로 JWKS 검증.
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // Phase 1: /actuator/prometheus 노출용 — Phase 2(Grafana/Prometheus 인프라)에서 스크레이프할 자리.
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+    // 2.8.15~2.8.17은 /swagger-ui/**/*swagger-initializer.js 패턴 버그(#3146 회귀)로 기동 실패.
+    // 2.8.14가 2.8 계열 마지막 정상 버전(ant_path_matcher 설정으로도 해결 안 됨). 패치 버전 나오면 재상향.
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.14'
+
+    runtimeOnly 'com.mysql:mysql-connector-j'
+
+    // 테스트 전용 인메모리 DB. spring-boot-starter-test는 루트 build.gradle subprojects에서 이미 적용됨.
+    testRuntimeOnly 'com.h2database:h2'
+    // 컨트롤러 슬라이스 테스트에서 jwt() 요청 후처리기로 인증 주체를 주입하기 위해 필요(spring-boot-starter-test 미포함).
+    testImplementation 'org.springframework.security:spring-security-test'
+}

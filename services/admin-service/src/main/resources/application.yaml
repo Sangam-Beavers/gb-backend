@@ -1,0 +1,74 @@
+spring:
+  application:
+    name: admin-service
+  profiles:
+    # 기본 활성 프로파일을 dev로 둔다(타 서비스와 동일 패턴).
+    # 운영/스테이징은 SPRING_PROFILES_ACTIVE 환경변수로 덮어쓴다.
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  jackson:
+    # 전역 설정: 모든 응답 JSON 필드명을 camelCase → snake_case로 직렬화 (명세 규칙).
+    property-naming-strategy: SNAKE_CASE
+
+server:
+  port: 8085
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Phase 1: prometheus 엔드포인트 노출(추후 Phase 2에서 Prometheus가 스크레이프).
+        include: health, info, prometheus
+
+# 모니터링 — 다른 서비스의 /actuator/health 호출 base URL. dev 기본값은 로컬 포트.
+# 환경별 yml에서 덮어쓴다(stage/prod는 k8s 내부 DNS 등).
+admin:
+  service-health:
+    urls:
+      member: ${MEMBER_HEALTH_URL:http://localhost:8081}
+      community: ${COMMUNITY_HEALTH_URL:http://localhost:8082}
+      document: ${DOCUMENT_HEALTH_URL:http://localhost:8083}
+      wallet: ${WALLET_HEALTH_URL:http://localhost:8084}
+    timeout-ms: 1000
+  # 도메인 서비스 /internal/admin/* 호출 base URL. 다음 스프린트에 mTLS·NetworkPolicy 로 격리.
+  internal-api:
+    urls:
+      member: ${MEMBER_INTERNAL_URL:http://localhost:8081}
+      community: ${COMMUNITY_INTERNAL_URL:http://localhost:8082}
+      document: ${DOCUMENT_INTERNAL_URL:http://localhost:8083}
+      wallet: ${WALLET_INTERNAL_URL:http://localhost:8084}
+    connect-timeout-ms: 3000
+    read-timeout-ms: 10000
+  # 모니터링 관련 설정 묶음.
+  #  - configs: 운영 정책 미러 (실제 wallet 정책과 동기화는 다음 스프린트, monitoring/config API에서 노출)
+  #  - embeds:  Phase 2 (Grafana/ArgoCD) 임베드 URL. base-url + path 조합으로 최종 url을 빌드
+  #             (MonitoringServiceImpl.embeds()). 환경별 yml에서 base-url을 덮어쓰고,
+  #             dashboards/argocd.path는 동일하게 유지. 응답 JSON shape(grafana=[{name,label,url}],
+  #             argocd={url})은 프론트가 그대로 쓰고 있으므로 유지.
+  monitoring:
+    configs:
+      wallet-charge-single-limit: 10000000
+      wallet-exchange-fee-rate: "0.005"
+      wallet-account-verify-rate-limit-window-seconds: 60
+      wallet-account-verify-rate-limit-limit: 10
+    embeds:
+      grafana:
+        base-url: ${GRAFANA_BASE_URL:http://localhost:3000}
+        dashboards:
+          - name: kubernetes_cluster
+            label: Kubernetes Cluster
+            path: /d/kubernetes-cluster/kubernetes-cluster?kiosk=tv&theme=dark
+          - name: jvm
+            label: JVM Micrometer
+            path: /d/jvm-micrometer/jvm-micrometer?kiosk=tv&theme=dark
+          - name: spring_boot
+            label: Spring Boot HTTP
+            path: /d/spring-boot-statistics/spring-boot-statistics?kiosk=tv&theme=dark
+          - name: rds
+            label: AWS RDS
+            path: /d/aws-rds/aws-rds?kiosk=tv&theme=dark
+          - name: redis
+            label: Redis
+            path: /d/redis/redis?kiosk=tv&theme=dark
+      argocd:
+        base-url: ${ARGOCD_BASE_URL:http://localhost:8080}
+        path: /applications?showSidebar=false

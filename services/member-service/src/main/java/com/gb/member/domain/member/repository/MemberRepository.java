@@ -1,10 +1,15 @@
 package com.gb.member.domain.member.repository;
 
 import com.gb.member.domain.member.entity.Member;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface MemberRepository extends JpaRepository<Member, Long> {
 
@@ -38,4 +43,24 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     // findByEmail과 달리 탈퇴자를 제외한다: 탈퇴 회원은 송금 수신자가 될 수 없으므로 "없음"으로
     // 응답해야 한다(재가입 차단용 findByEmail의 무필터 정책과 용도가 다름 — 위 주석 참고).
     Optional<Member> findByEmailAndDeletedAtIsNull(String email);
+
+    // ===== Admin internal API =====
+
+    /**
+     * 관리자 회원 검색 — q가 비어 있으면 전체. 탈퇴자 포함은 정책상 제외(탈퇴 회원은 admin 목록 노출 안 함).
+     * 이메일/이름/닉네임 부분일치(LIKE) — 발표용 단순 구현(인덱스 미사용 OK, 데이터 규모 작음).
+     */
+    @Query("""
+            SELECT m FROM Member m
+            WHERE m.deletedAt IS NULL
+              AND (:q IS NULL
+                   OR LOWER(m.email) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(m.name) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(m.nickname) LIKE LOWER(CONCAT('%', :q, '%')))
+            """)
+    Page<Member> searchForAdmin(@Param("q") String q, Pageable pageable);
+
+    long countByDeletedAtIsNull();
+
+    long countByDeletedAtIsNullAndCreatedAtBetween(LocalDateTime from, LocalDateTime to);
 }

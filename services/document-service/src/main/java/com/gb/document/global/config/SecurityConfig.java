@@ -39,6 +39,9 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // 문서 · 헬스체크만 공개. 그 외 document 엔드포인트는 전부 인증 필요.
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/actuator/**").permitAll()
+                        // TODO(다음 스프린트): mTLS·NetworkPolicy로 격리. 현재는 admin-service가 JWT 없이
+                        //   호출할 수 있도록 임시 permitAll. 외부 노출 금지 — Ingress에서 /internal 경로 차단.
+                        .requestMatchers("/api/v1/internal/admin/**").permitAll()
                         .anyRequest().authenticated())
                 // 검표원: issuer-uri의 JWKS로 RS256 토큰 검증. 실패(만료·위조·서명 불일치) 시 AUTH4011.
                 //   ⚠️ entry point를 oauth2ResourceServer DSL "안"에도 건다. BearerTokenAuthenticationFilter는

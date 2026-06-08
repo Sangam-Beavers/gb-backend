@@ -9,9 +9,13 @@ dependencies {
     // oauth2ResourceServer().jwt() DSL을 제공한다. starter-security만으론 미포함(wallet/member/community와 동일).
     implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    // (제거됨) spring-boot-starter-data-redis — 코드에서 사용처 0건. Spring 자동설정으로 health
+    //         indicator 만 등록되어 /actuator/health 가 DOWN 으로 떨어지는 부작용이 있어 제거.
+    //         추후 캐싱·rate-limit 등 도입 시 재추가.
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // Phase 1: /actuator/prometheus 노출용 — Phase 2(Grafana/Prometheus 인프라)에서 스크레이프할 자리.
+    implementation 'io.micrometer:micrometer-registry-prometheus'
     implementation 'org.springframework.kafka:spring-kafka'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.14'
 

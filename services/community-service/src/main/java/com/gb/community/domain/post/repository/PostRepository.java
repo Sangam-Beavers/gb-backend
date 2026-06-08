@@ -121,4 +121,22 @@ public interface PostRepository extends JpaRepository<Post, Long> {
             """)
     java.util.List<Post> findTopByCategoryOrderByCommentCountDesc(
             @Param("category") PostCategory category, Pageable pageable);
+
+    // ===== Admin internal API =====
+
+    /**
+     * 관리자용 신고 게시글 페이지 — 현재 본체에 신고 테이블이 없어 발표용 프록시로
+     * comment_count DESC 순 활성 게시글을 반환한다(향후 reports 테이블 도입 시 교체).
+     * category 필터 옵션.
+     */
+    @Query("""
+            SELECT p FROM Post p
+            WHERE p.deletedAt IS NULL
+              AND (:category IS NULL OR p.category = :category)
+            """)
+    org.springframework.data.domain.Page<Post> findReportableForAdmin(
+            @Param("category") PostCategory category,
+            Pageable pageable);
+
+    long countByDeletedAtIsNull();
 }

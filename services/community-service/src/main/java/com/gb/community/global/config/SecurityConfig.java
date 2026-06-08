@@ -42,6 +42,9 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // 문서 · 헬스체크는 항상 공개.
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/actuator/**").permitAll()
+                        // TODO(다음 스프린트): mTLS·NetworkPolicy로 격리. 현재는 admin-service가 JWT 없이
+                        //   호출할 수 있도록 임시 permitAll. 외부 노출 금지 — Ingress에서 /internal 경로 차단.
+                        .requestMatchers("/api/v1/internal/admin/**").permitAll()
                         // 주요 QnA 목록은 비로그인 사용자도 인기 질문을 둘러볼 수 있도록 공개(api-spec §8).
                         // GET만 명시 — 다른 메서드(POST/PUT/DELETE)는 향후 추가돼도 인증 필요 정책 유지.
                         .requestMatchers(HttpMethod.GET, "/api/v1/community/qna").permitAll()

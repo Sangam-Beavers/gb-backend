@@ -1,0 +1,56 @@
+# 테스트 전용 프로파일. @ActiveProfiles("test")로 활성화.
+# 인메모리 H2(MySQL 호환 모드)로 Repository 통합 테스트를 돌린다 — 개발기 DB는 절대 만지지 않는다.
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: create-drop          # 테스트마다 스키마 생성/삭제
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: true
+    show-sql: true
+  sql:
+    init:
+      mode: never
+  jackson:
+    # main과 동일한 전역 규칙(응답 JSON 검증 시 대비).
+    property-naming-strategy: SNAKE_CASE
+
+# 테스트 환경에선 외부 서비스가 떠 있지 않으므로 service-health 호출 timeout 짧게 유지.
+admin:
+  service-health:
+    urls:
+      member: http://localhost:0
+      community: http://localhost:0
+      document: http://localhost:0
+      wallet: http://localhost:0
+    timeout-ms: 100
+  internal-api:
+    urls:
+      member: http://localhost:0
+      community: http://localhost:0
+      document: http://localhost:0
+      wallet: http://localhost:0
+    connect-timeout-ms: 100
+    read-timeout-ms: 200
+  monitoring:
+    configs:
+      wallet-charge-single-limit: 10000000
+      wallet-exchange-fee-rate: "0.005"
+      wallet-account-verify-rate-limit-window-seconds: 60
+      wallet-account-verify-rate-limit-limit: 10
+    embeds:
+      grafana:
+        base-url: https://grafana.test.local
+        dashboards:
+          - name: jvm
+            label: JVM Micrometer
+            path: /d/jvm-micrometer/jvm-micrometer?kiosk=tv&theme=dark
+      argocd:
+        base-url: https://argocd.test.local
+        path: /applications?showSidebar=false
