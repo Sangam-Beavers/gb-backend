@@ -13,6 +13,8 @@ dependencies {
     implementation 'org.redisson:redisson-spring-boot-starter:3.27.2'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // Phase 1: /actuator/prometheus 노출용 — Phase 2(Grafana/Prometheus 인프라)에서 스크레이프할 자리.
+    implementation 'io.micrometer:micrometer-registry-prometheus'
     implementation 'org.springframework.kafka:spring-kafka'
     // 2.8.15~2.8.17은 /swagger-ui/**/*swagger-initializer.js 패턴 버그(#3146 회귀)로 기동 실패.
     // 2.8.14가 2.8 계열 마지막 정상 버전(ant_path_matcher 설정으로도 해결 안 됨). 패치 버전 나오면 재상향.

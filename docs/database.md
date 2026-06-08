@@ -447,6 +447,55 @@
 
 ---
 
+## 5-A. admin 도메인 (admin_db 스키마)
+
+> **별도 DB(`admin_db`)에 위치한다.** 운영 관리자 페이지(admin-service) 전용. member/wallet/document/community 스키마와는 물리적으로 분리되어 있으며, 회원/거래/게시글/문서 데이터는 본 스키마에 **중복 저장하지 않는다** — cross-service client(`MemberAdminClient` 등)로 받아 표시만 한다(CLAUDE §7).
+>
+> Phase 1은 자체 도메인 2개(`admin_users`/`audit_logs`)만 만든다. Phase 2의 RBAC/그룹 정책은 IdP(Authentik) groups claim으로 처리할 예정이라 별도 테이블 신설 없음.
+
+### `admin_users`
+> 관리자 계정 메타. IdP가 비밀번호를 관리하므로 `hashed_password`는 항상 NULL.
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| `id` | BIGINT | PK, AI | 내부 PK (외부 노출 금지) |
+| `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | IdP attribute의 `public_id`와 1:1 (JWT claim 검증 키) |
+| `email` | VARCHAR(255) | UNIQUE, NOT NULL | |
+| `nickname` | VARCHAR(100) | NOT NULL | 화면 표시명 |
+| `hashed_password` | VARCHAR(255) | NULL | 로컬 폴백용 자리(현재 미사용) |
+| `is_active` | BOOLEAN | NOT NULL, DEFAULT TRUE | |
+| `created_at` / `updated_at` | DATETIME | NOT NULL | BaseEntity Auditing |
+
+### `admin_user_roles`
+> 관리자-역할 N:N. 한 관리자가 여러 role을 동시에 가질 수 있다. **Phase 1은 RBAC 미적용** — 본 테이블의 값은 표시·다음 스프린트 권한 분기용 시드.
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| `id` | BIGINT | PK, AI | |
+| `admin_user_id` | BIGINT | FK → admin_users.id, NOT NULL | 같은 admin_db 내부 FK |
+| `role` | VARCHAR(30) | NOT NULL | enum: `SUPER`/`CS`/`COMPLIANCE`/`FINANCE` |
+|  |  | UNIQUE(admin_user_id, role) | 동일 사용자에 같은 role 중복 방지 |
+
+### `audit_logs`
+> 관리자 행위 감사 로그. **append-only** (UPDATE/DELETE 금지). KYC 승인/거절, 게시글 숨김/삭제 등 cross-service 변경 액션이 컨트롤러를 거치면 service 계층이 1건씩 INSERT한다.
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| `id` | BIGINT | PK, AI | |
+| `public_id` | VARCHAR(36) | UNIQUE, NOT NULL | |
+| `admin_public_id` | VARCHAR(36) | NOT NULL | 행위 주체 — admin_users.public_id 논리 참조 |
+| `action` | VARCHAR(50) | NOT NULL | 예: `KYC_APPROVE`/`KYC_REJECT`/`POST_HIDE`/`POST_DELETE` |
+| `target_type` | VARCHAR(50) | NOT NULL | 예: `MEMBER`/`POST`/`TRANSACTION` |
+| `target_public_id` | VARCHAR(36) | NULL | 대상 리소스 public_id (MSA 경계 — 물리 FK 없음) |
+| `ip_address` | VARCHAR(45) | NULL | IPv6 포함 |
+| `before_snapshot` | TEXT | NULL | 행위 직전 JSON raw (검색 용도가 아니라 사후 추적용) |
+| `after_snapshot` | TEXT | NULL | 행위 직후 JSON raw |
+| `created_at` / `updated_at` | DATETIME | NOT NULL | BaseEntity Auditing — append-only라 updated_at은 실질 불변 |
+
+인덱스: `(admin_public_id)`, `(action)`, `(target_type)`, `(created_at)`.
+
+---
+
 ## 6. 공통 컬럼 규약
 
 - `created_at` / `updated_at` 모든 테이블 공통 (DATETIME, NOT NULL)

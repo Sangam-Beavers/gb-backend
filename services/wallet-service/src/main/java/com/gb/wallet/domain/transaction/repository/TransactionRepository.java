@@ -177,4 +177,99 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
             @Param("senderWalletId") Long senderWalletId,
             @Param("bankAccountIds") List<Long> bankAccountIds,
             @Param("timestamps") List<LocalDateTime> timestamps);
+
+    // ===== Admin internal API 전용 =====
+
+    /**
+     * 관리자용 거래 검색. type/status는 nullable(=전체) — JPQL에서 null 토글로 무조건 통과시킨다.
+     * userPublicId가 주어지면 sender 또는 receiver 어느 쪽이든 그 사용자인 거래를 포함한다.
+     */
+    @Query("""
+            SELECT t FROM Transaction t
+            LEFT JOIN t.receiverWallet rw
+            WHERE (:type IS NULL OR t.type = :type)
+              AND (:status IS NULL OR t.status = :status)
+              AND (:userPublicId IS NULL OR t.wallet.userPublicId = :userPublicId OR rw.userPublicId = :userPublicId)
+              AND (:from IS NULL OR t.createdAt >= :from)
+              AND (:to IS NULL OR t.createdAt <= :to)
+            """)
+    Page<Transaction> searchForAdmin(
+            @Param("type") com.gb.wallet.global.common.enums.TransactionType type,
+            @Param("status") com.gb.wallet.global.common.enums.TransactionStatus status,
+            @Param("userPublicId") String userPublicId,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            Pageable pageable);
+
+    /** 거래 상태별 카운트(stats용). */
+    @Query("""
+            SELECT t.status AS status, COUNT(t) AS cnt
+            FROM Transaction t
+            WHERE (:from IS NULL OR t.createdAt >= :from)
+              AND (:to IS NULL OR t.createdAt <= :to)
+            GROUP BY t.status
+            """)
+    List<StatusCountProjection> countByStatus(
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to);
+
+    /** 거래 type별 카운트(stats용). */
+    @Query("""
+            SELECT t.type AS type, COUNT(t) AS cnt
+            FROM Transaction t
+            WHERE (:from IS NULL OR t.createdAt >= :from)
+              AND (:to IS NULL OR t.createdAt <= :to)
+            GROUP BY t.type
+            """)
+    List<TypeCountProjection> countByType(
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to);
+
+    /** 통화별 금액 합계(오늘 거래 합계 계산용 — COMPLETED만). */
+    @Query("""
+            SELECT t.currencyCode AS currencyCode, COALESCE(SUM(t.amount), 0) AS total
+            FROM Transaction t
+            WHERE t.status = com.gb.wallet.global.common.enums.TransactionStatus.COMPLETED
+              AND (:from IS NULL OR t.createdAt >= :from)
+              AND (:to IS NULL OR t.createdAt <= :to)
+            GROUP BY t.currencyCode
+            """)
+    List<CurrencyTotalProjection> sumAmountByCurrency(
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to);
+
+    /** type+status 매트릭스 카운트 — 송금/충전 성공률 계산용. */
+    @Query("""
+            SELECT t.type AS type, t.status AS status, COUNT(t) AS cnt
+            FROM Transaction t
+            WHERE t.type IN :types
+              AND (:from IS NULL OR t.createdAt >= :from)
+              AND (:to IS NULL OR t.createdAt <= :to)
+            GROUP BY t.type, t.status
+            """)
+    List<TypeStatusCountProjection> countByTypeAndStatus(
+            @Param("types") List<com.gb.wallet.global.common.enums.TransactionType> types,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to);
+
+    interface StatusCountProjection {
+        com.gb.wallet.global.common.enums.TransactionStatus getStatus();
+        long getCnt();
+    }
+
+    interface TypeCountProjection {
+        com.gb.wallet.global.common.enums.TransactionType getType();
+        long getCnt();
+    }
+
+    interface CurrencyTotalProjection {
+        com.gb.wallet.global.common.enums.CurrencyType getCurrencyCode();
+        java.math.BigDecimal getTotal();
+    }
+
+    interface TypeStatusCountProjection {
+        com.gb.wallet.global.common.enums.TransactionType getType();
+        com.gb.wallet.global.common.enums.TransactionStatus getStatus();
+        long getCnt();
+    }
 }

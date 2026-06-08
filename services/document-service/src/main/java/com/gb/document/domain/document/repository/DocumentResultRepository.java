@@ -21,4 +21,38 @@ public interface DocumentResultRepository extends JpaRepository<DocumentResult, 
 
     /** 목록 화면에서 risk_level 표시용. submission id IN (...) batch 조회. */
     List<DocumentResult> findAllBySubmission_IdIn(List<Long> submissionIds);
+
+    // ===== Admin internal API =====
+
+    /** 기간 내 risk_level 별 카운트(stats). */
+    @org.springframework.data.jpa.repository.Query("""
+            SELECT r.overallRiskLevel AS risk, COUNT(r) AS cnt
+            FROM DocumentResult r
+            WHERE r.submission.createdAt BETWEEN :from AND :to
+            GROUP BY r.overallRiskLevel
+            """)
+    List<RiskLevelCountProjection> countByRiskLevelBetween(
+            @org.springframework.data.repository.query.Param("from") java.time.LocalDateTime from,
+            @org.springframework.data.repository.query.Param("to") java.time.LocalDateTime to);
+
+    /** 기간 내 processing_status 별 카운트(stats). */
+    @org.springframework.data.jpa.repository.Query("""
+            SELECT r.processingStatus AS status, COUNT(r) AS cnt
+            FROM DocumentResult r
+            WHERE r.submission.createdAt BETWEEN :from AND :to
+            GROUP BY r.processingStatus
+            """)
+    List<ProcessingStatusCountProjection> countByProcessingStatusBetween(
+            @org.springframework.data.repository.query.Param("from") java.time.LocalDateTime from,
+            @org.springframework.data.repository.query.Param("to") java.time.LocalDateTime to);
+
+    interface RiskLevelCountProjection {
+        com.gb.document.domain.document.entity.RiskLevel getRisk();
+        long getCnt();
+    }
+
+    interface ProcessingStatusCountProjection {
+        com.gb.document.domain.document.entity.ProcessingStatus getStatus();
+        long getCnt();
+    }
 }

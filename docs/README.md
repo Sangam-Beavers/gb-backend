@@ -48,6 +48,7 @@
 | 송금 · 환전 · 충전 (주머니) | [`remittance/`](./remittance/) | `/wallets`, `/transfers`, `/exchanges`, `/accounts` |
 | AI 서류 분석 | [`document-analysis/`](./document-analysis/) | `/documents` |
 | 커뮤니티 | [`community/`](./community/) | `/community` |
+| 관리자 페이지 (Phase 1) | [`admin/`](./admin/) | `/admin` |
 
 추가로 AI 서류 분석 폴더에는 AWS 계정 B에서 도는 분석 파이프라인 상세가 별도로 있습니다: [`document-analysis/ai-pipeline.md`](./document-analysis/ai-pipeline.md)
 그리고 분석 결과를 본 사용자의 **후속 질문 챗봇 + MCP** 통합 설계: [`document-analysis/ai-chatbot-mcp.md`](./document-analysis/ai-chatbot-mcp.md)

@@ -43,4 +43,20 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
      * ({@code StaleSubmissionSweeper}). updatedAt 기준이라 retry로 ANALYZING 복귀 시 유예가 다시 시작된다.
      */
     List<Document> findAllByStatusAndUpdatedAtBefore(DocumentStatus status, LocalDateTime threshold);
+
+    // ===== Admin internal API =====
+
+    /** 관리자용 페이지 조회: 전체 또는 user_public_id 옵션 필터. */
+    @org.springframework.data.jpa.repository.Query("""
+            SELECT d FROM Document d
+            WHERE (:userPublicId IS NULL OR d.userPublicId = :userPublicId)
+            """)
+    org.springframework.data.domain.Page<Document> searchForAdmin(
+            @org.springframework.data.repository.query.Param("userPublicId") String userPublicId,
+            org.springframework.data.domain.Pageable pageable);
+
+    /** 기간 내 문서 카운트(stats용). */
+    long countByCreatedAtBetween(LocalDateTime from, LocalDateTime to);
+
+    long countByStatusAndCreatedAtBetween(DocumentStatus status, LocalDateTime from, LocalDateTime to);
 }

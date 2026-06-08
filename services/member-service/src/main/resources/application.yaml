@@ -16,4 +16,5 @@ management:
   endpoints:
     web:
       exposure:
-        include: health, info
+        # Phase 1: prometheus 엔드포인트 노출(Phase 2에서 Prometheus가 스크레이프).
+        include: health, info, prometheus
