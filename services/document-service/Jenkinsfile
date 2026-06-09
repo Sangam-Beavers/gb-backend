@@ -1,4 +1,13 @@
-// community-service-pipeline.groovy
+// ─────────────────────────────────────────────────────────────
+// document-service CI/CD 파이프라인
+//
+// Stage 1) Gradle 빌드: bootJar
+// Stage 2) SonarQube 분석: Java 정적 분석
+// Stage 3) 품질 게이트: 통과 못 하면 빌드 중단
+// Stage 4) 이미지 빌드 & push (amd64 / arm64 병렬)
+// Stage 5) 멀티아키 manifest 합치기 (regctl)
+// Stage 6) GitOps: gb-infra values.yaml image tag 갱신 → ArgoCD 감지
+// ─────────────────────────────────────────────────────────────
 pipeline {
   agent {
     kubernetes {
@@ -13,6 +22,8 @@ pipeline {
             image: sonarsource/sonar-scanner-cli:latest
             command: ["sleep"]
             args: ["infinity"]
+            securityContext:
+              runAsUser: 0
           - name: kaniko
             image: gcr.io/kaniko-project/executor:debug
             command: ["sleep"]
@@ -44,11 +55,11 @@ pipeline {
 
   environment {
     REGISTRY     = "harbor.sb.fisa"
-    IMAGE_BASE   = "${REGISTRY}/global_bridge/community"
+    IMAGE_BASE   = "${REGISTRY}/global_bridge/document-service"
     IMAGE_TAG    = "${BUILD_NUMBER}"
     CONFIG_REPO  = "github.com/Sangam-Beavers/gb-infra"
-    VALUES_PATH  = "charts/community/values.yaml"
-    SERVICE_PATH = "services/community-service"
+    VALUES_PATH  = "charts/document-service/values.yaml"
+    SERVICE_PATH = "services/document-service"
   }
 
   stages {
@@ -57,7 +68,7 @@ pipeline {
         container('jdk') {
           sh '''
             chmod +x gradlew
-            ./gradlew :services:community-service:bootJar -x test --no-daemon
+            ./gradlew :services:document-service:bootJar -x test --no-daemon
           '''
         }
       }
@@ -69,7 +80,7 @@ pipeline {
           withSonarQubeEnv('sonarqube') {
             sh '''
               sonar-scanner \
-                -Dsonar.projectKey=gb-community-service \
+                -Dsonar.projectKey=gb-document-service \
                 -Dsonar.sources=${SERVICE_PATH}/src/main/java \
                 -Dsonar.java.binaries=${SERVICE_PATH}/build/classes
             '''
@@ -149,7 +160,7 @@ pipeline {
                 exit 0
               fi
               git add ${VALUES_PATH}
-              git commit -m "ci: bump community image to ${IMAGE_TAG} (multi-arch)"
+              git commit -m "ci: bump document-service image to ${IMAGE_TAG} (multi-arch)"
               git push origin main
             '''
           }
@@ -159,7 +170,7 @@ pipeline {
   }
 
   post {
-    success { echo "✅ 멀티아키 이미지 ${IMAGE_BASE}:${IMAGE_TAG} → gb-infra 커밋 → ArgoCD 자동 배포" }
+    success { echo "✅ 멀티아키 이미지 ${IMAGE_BASE}:${IMAGE_TAG} → gb-infra 커밋 → ArgoCD 배포" }
     failure { echo "❌ 실패 — 어느 stage에서 멈췄는지 확인하세요." }
   }
 }
