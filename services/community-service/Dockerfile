@@ -1,9 +1,8 @@
 FROM eclipse-temurin:17-jre
 WORKDIR /app
 
-RUN if ! id -u spring >/dev/null 2>&1; then \
-      groupadd -r -f spring && useradd -r -g spring spring; \
-    fi
+RUN (groupadd -r spring 2>/dev/null || true) && \
+    (useradd -r -g spring spring 2>/dev/null || true)
 
 COPY --chown=spring:spring \
      services/community-service/build/libs/community-service-*.jar \
