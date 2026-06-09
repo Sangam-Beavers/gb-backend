@@ -111,9 +111,9 @@ public class PostServiceImpl implements PostService {
             // @NotBlank가 1차로 막지만, 방어적으로 한 번 더 — 카테고리는 작성 시 필수.
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
-        // language는 "ko" 고정(Post.of).
+        String language = resolveLanguage(request.getLanguage());
         return postRepository.save(
-                Post.of(requesterUserPublicId, category, request.getTitle(), request.getContent()));
+                Post.of(requesterUserPublicId, category, language, request.getTitle(), request.getContent()));
     }
 
     @Override
@@ -221,6 +221,21 @@ public class PostServiceImpl implements PostService {
             default -> throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         };
         return PageRequest.of(page, size, order);
+    }
+
+    /**
+     * 요청 언어 코드를 정규화한다. null/blank이면 "ko" 기본값. 지원 언어 외 값이면 COMMUNITY4003.
+     * 화이트리스트 로직은 PostTranslationServiceImpl과 동일하나, source lang 맥락이므로 서비스에서 재검증.
+     */
+    private String resolveLanguage(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "ko";
+        }
+        String normalized = raw.trim().toLowerCase();
+        if (!PostTranslationServiceImpl.SUPPORTED_LANGUAGES.contains(normalized)) {
+            throw new BusinessException(CommunityErrorCode.UNSUPPORTED_LANGUAGE);
+        }
+        return normalized;
     }
 
     /** 값이 null이거나 공백뿐이면 null, 아니면 원본 그대로. PATCH의 "변경 없음" 정규화에 사용. */

@@ -119,18 +119,19 @@ public class Post extends BaseSoftDeleteEntity {
     /**
      * 게시글 작성용 정적 팩토리 (CLAUDE.md §4 — Request → Entity 변환은 정적 메서드).
      *
-     * <p>{@code publicId}(UUID)는 서버가 생성하고, {@code language}는 인증/locale 연동 전이라 일단 "ko"로 고정한다.
-     * TODO: 인증/locale 연동 후 작성자 언어를 채우도록 교체. 카운터 기본값(0)은 빌더가 채운다.
+     * <p>{@code publicId}(UUID)는 서버가 생성한다. {@code language}는 요청에서 전달받은 원문 작성 언어를
+     * 그대로 저장한다. 카운터 기본값(0)은 빌더가 채운다.
      *
      * <p>요청 DTO를 직접 import하지 않고 파싱된 값만 받는다 — category(String) → enum 변환·검증은
      * 서비스 책임이고, 엔티티가 dto/검증 예외에 의존하지 않도록 분리한다.
      */
-    public static Post of(String userPublicId, PostCategory category, String title, String content) {
+    public static Post of(String userPublicId, PostCategory category, String language,
+                          String title, String content) {
         return Post.builder()
                 .publicId(UUID.randomUUID().toString())
                 .userPublicId(userPublicId)
                 .category(category)
-                .language("ko") // 빌더 필수값. 인증/locale 연동 전이라 "ko" 고정. (위 TODO 참고)
+                .language(language)
                 .title(title)
                 .content(content)
                 .build();
