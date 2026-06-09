@@ -108,6 +108,7 @@ pipeline {
                   --dockerfile ${SERVICE_PATH}/Dockerfile \
                   --destination ${IMAGE_BASE}:${IMAGE_TAG}-amd64 \
                   --custom-platform=linux/amd64 \
+                  --snapshot-mode=redo \
                   --skip-tls-verify
               '''
             }
@@ -122,6 +123,7 @@ pipeline {
                   --dockerfile ${SERVICE_PATH}/Dockerfile \
                   --destination ${IMAGE_BASE}:${IMAGE_TAG}-arm64 \
                   --custom-platform=linux/arm64 \
+                  --snapshot-mode=redo \
                   --skip-tls-verify
               '''
             }
