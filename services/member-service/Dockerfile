@@ -10,7 +10,7 @@ WORKDIR /workspace
 COPY . .
 
 RUN chmod +x gradlew && \
-    ./gradlew :services:wallet-service:bootJar -x test --no-daemon
+    ./gradlew :services:member-service:bootJar -x test --no-daemon
 
 # ─────────────────────────────────────────────────────────────
 # 2) Runtime — JRE만 (이미지 크기 ↓)
@@ -26,10 +26,10 @@ USER spring
 
 # 버전 변경에 강하게 glob 사용
 COPY --from=builder --chown=spring:spring \
-     /workspace/services/wallet-service/build/libs/wallet-service-*.jar \
+     /workspace/services/member-service/build/libs/member-service-*.jar \
      /app/app.jar
 
-EXPOSE 8084
+EXPOSE 8081
 
 # 컨테이너 메모리 한도 인식 + 75%까지 힙 할당
 ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
