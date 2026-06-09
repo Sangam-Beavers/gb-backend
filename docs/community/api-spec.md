@@ -72,6 +72,7 @@
 | `category` | string | O | LIFE_INFO/JOB/VISA/COUNTRY/RESIDENCE/QUESTION/FREE |
 | `title` | string | O | 제목 (1~255자) |
 | `content` | string | O | 본문 (1~10,000자 — 초과 시 COMMON4001. 컬럼 TEXT 한계 내 입력단 상한, 11D community-1) |
+| `language` | string | X | 작성 언어 코드. `ko`/`en`/`vi`/`fil` 중 하나. 미전송 시 `ko` 기본값. 화이트리스트 외 값은 400 COMMUNITY4003 |
 
 **Response 201** — `data`
 | 필드 | 타입 | nullable | 설명 |
@@ -80,6 +81,7 @@
 | `category` | string | N | 카테고리 |
 | `title` | string | N | 제목 |
 | `content` | string | N | 본문 |
+| `language` | string | N | 작성 언어 코드(ko/en/vi/fil). 요청 `language`를 그대로 저장·반환(미전송 시 ko). 프론트가 사용자 언어와 같으면 번역 버튼을 숨긴다 |
 | `author_nickname` | string | N | 작성자 닉네임. 미존재·탈퇴·member-service 장애 시 `"Unknown"` 폴백(표시용 fail-open) |
 | `is_author` | boolean | N | 요청자=작성자 여부. 작성 응답에선 항상 true |
 | `is_liked` | boolean | N | 요청자의 좋아요 여부(하트 상태 표시용). 작성 응답에선 항상 false(방금 생성된 글 — 좋아요 불가능) |
@@ -88,9 +90,10 @@
 | `created_at` | string | N | 작성 시각(UTC Z) |
 | `updated_at` | string | N | 수정 시각(UTC Z) |
 
-**Error**: 400 COMMON4001 / 401 AUTH4011
+**Error**: 400 COMMON4001 / 400 COMMUNITY4003(지원하지 않는 언어 — `language` 화이트리스트 외) / 401 AUTH4011
 
 > 필수값 누락·잘못된 category 등 Bean Validation 실패는 `GlobalExceptionHandler`가 **COMMON4001로 통일**한다(컨트롤러 Swagger와 일치). `COMMON4002`(MISSING_REQUIRED_FIELD)는 community 흐름에서 던지지 않는다.
+> `language`는 빈 값/미전송이면 `ko` 기본값이라 검증을 타지 않고, 화이트리스트(ko/en/vi/fil) 외 값일 때만 서비스가 COMMUNITY4003(400)으로 던진다(§3 번역과 동일 코드).
 
 ---
 

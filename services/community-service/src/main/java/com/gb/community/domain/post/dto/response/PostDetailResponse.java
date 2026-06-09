@@ -43,6 +43,10 @@ public class PostDetailResponse {
     @Schema(description = "본문(전체)", example = "베트남에서 온 외국인입니다. 같은 경험 있는 분 계시면 알려주세요.")
     private final String content;
 
+    @Schema(description = "원문 언어 코드(ko/en/vi/fil). 프론트가 사용자 언어와 같으면 번역 버튼을 숨긴다.",
+            example = "ko")
+    private final String language;
+
     @Schema(description = "작성자 닉네임", example = "Minh")
     private final String authorNickname;
 
@@ -70,13 +74,14 @@ public class PostDetailResponse {
 
     @Builder
     private PostDetailResponse(String publicId, String category, String title, String content,
-                              String authorNickname, boolean authorIsVerified, Boolean isAuthor,
-                              Boolean isLiked, Integer likeCount, Integer commentCount,
+                              String language, String authorNickname, boolean authorIsVerified,
+                              Boolean isAuthor, Boolean isLiked, Integer likeCount, Integer commentCount,
                               String createdAt, String updatedAt) {
         this.publicId = publicId;
         this.category = category;
         this.title = title;
         this.content = content;
+        this.language = language;
         this.authorNickname = authorNickname;
         this.authorIsVerified = authorIsVerified;
         this.isAuthor = isAuthor;
@@ -101,6 +106,7 @@ public class PostDetailResponse {
                 .category(post.getCategory().name())
                 .title(post.getTitle())
                 .content(post.getContent())
+                .language(post.getLanguage())
                 .authorNickname(author.nickname())
                 .authorIsVerified(author.isVerified())
                 .isAuthor(post.getUserPublicId().equals(requesterUserPublicId))

@@ -12,6 +12,9 @@ import lombok.NoArgsConstructor;
  * <p>{@code category}는 String으로 받아 서비스에서 {@code PostCategory}로 파싱한다. 엔티티/enum에
  * 직접 바인딩하면 잘못된 값이 Jackson 역직렬화 단계에서 깨져 500으로 떨어지므로, String으로 받아
  * 서비스에서 검증해 COMMON4001(400)로 변환하기 위함이다.
+ *
+ * <p>{@code language}는 작성 언어 코드(ko/en/vi/fil). null·blank이면 서비스에서 "ko"를 기본값으로
+ * 사용한다. 언어 화이트리스트 검증은 서비스에서 수행(COMMUNITY4003).
  */
 @Getter
 @NoArgsConstructor
@@ -21,6 +24,11 @@ public class PostCreateRequest {
             allowableValues = {"LIFE_INFO", "JOB", "VISA", "COUNTRY", "RESIDENCE", "QUESTION", "FREE"})
     @NotBlank
     private String category;
+
+    @Schema(description = "작성 언어 코드 (ko/en/vi/fil). 미전송 시 ko 기본값 적용",
+            example = "en",
+            allowableValues = {"ko", "en", "vi", "fil"})
+    private String language;
 
     @Schema(description = "제목", example = "시급 9,000원 받고 일했는데 최저임금 미달인가요?", maxLength = 255)
     @NotBlank

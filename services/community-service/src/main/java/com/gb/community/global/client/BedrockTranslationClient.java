@@ -12,15 +12,19 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.nio.file.Paths;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
 import software.amazon.awssdk.auth.signer.Aws4Signer;
 import software.amazon.awssdk.auth.signer.params.Aws4SignerParams;
 import software.amazon.awssdk.http.SdkHttpFullRequest;
 import software.amazon.awssdk.http.SdkHttpMethod;
+import software.amazon.awssdk.profiles.ProfileFile;
 import software.amazon.awssdk.regions.Region;
 
 /**
@@ -43,8 +47,13 @@ import software.amazon.awssdk.regions.Region;
  * GlobalExceptionHandler가 COMMON5000(500)으로 변환한다. 캐시 INSERT는 정상 응답 시에만 수행한다
  * ({@link MockTranslationClient}와 동일 시그니처).
  *
- * <p>자격 증명은 {@link DefaultCredentialsProvider} — EKS Pod의 IRSA(서비스 어카운트 역할) 자격을 자동으로
- * 사용한다. 로컬에서 stage 프로파일을 띄울 일은 없으므로 별도 시크릿 키 주입 경로를 두지 않는다.
+ * <p>자격 증명은 기본적으로 {@link DefaultCredentialsProvider} — EKS Pod의 IRSA(서비스 어카운트 역할)
+ * 자격을 자동으로 사용한다(stage/prod). 단 dev 로컬에서 실 Bedrock을 켤 때, 일부 환경은 JVM의
+ * {@code user.home}이 실제 사용자 홈이 아닌 곳(런처가 HOME을 리다이렉트)으로 잡혀 표준 위치의
+ * {@code ~/.aws/credentials}를 못 찾는다(빈 ProfileFile → SdkClientException). 이를 위해
+ * {@code translation.aws.credentials-file}(+선택 {@code translation.aws.profile})이 설정되면 해당 경로의
+ * 자격 증명 파일을 명시적으로 읽는 {@link ProfileCredentialsProvider}를 쓴다. 운영에선 이 값을 비워 두어
+ * 기존 IRSA 체인을 그대로 유지한다.
  */
 @Slf4j
 @Component
@@ -62,13 +71,15 @@ public class BedrockTranslationClient implements TranslationClient {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final Aws4Signer signer;
-    private final DefaultCredentialsProvider credentialsProvider;
+    private final AwsCredentialsProvider credentialsProvider;
 
     public BedrockTranslationClient(
             @Value("${translation.lambda.url:}") String lambdaUrl,
             @Value("${translation.aws.region:ap-northeast-2}") String awsRegion,
+            @Value("${translation.aws.credentials-file:}") String credentialsFile,
+            @Value("${translation.aws.profile:default}") String profileName,
             ObjectMapper objectMapper) {
-        // 본 클라이언트는 stage·prod에서만 등록되므로 URL은 반드시 채워져 있어야 한다 — 빈 값이면 기동 시
+        // 본 클라이언트는 bedrock 프로필에서만 등록되므로 URL은 반드시 채워져 있어야 한다 — 빈 값이면 기동 시
         // fail-fast (RealMemberClient 패턴과 동일). 누락된 채로 첫 호출에서 터지면 운영 알림이 늦어진다.
         if (lambdaUrl == null || lambdaUrl.isBlank()) {
             throw new IllegalStateException(
@@ -78,9 +89,28 @@ public class BedrockTranslationClient implements TranslationClient {
         this.awsRegion = Region.of(awsRegion);
         this.objectMapper = objectMapper;
         this.signer = Aws4Signer.create();
-        this.credentialsProvider = DefaultCredentialsProvider.create();
+        this.credentialsProvider = resolveCredentialsProvider(credentialsFile, profileName);
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
+                .build();
+    }
+
+    /**
+     * 자격 증명 공급자 선택. {@code credentials-file}이 설정되면(dev 로컬) 그 경로의 파일을 명시적으로 읽고,
+     * 비어 있으면(stage/prod) 표준 {@link DefaultCredentialsProvider} 체인(IRSA 등)을 쓴다.
+     */
+    private static AwsCredentialsProvider resolveCredentialsProvider(String credentialsFile, String profileName) {
+        if (credentialsFile == null || credentialsFile.isBlank()) {
+            return DefaultCredentialsProvider.create();
+        }
+        log.info("[BedrockTranslationClient] 명시 자격 증명 파일 사용 file={} profile={}", credentialsFile, profileName);
+        ProfileFile profileFile = ProfileFile.builder()
+                .content(Paths.get(credentialsFile))
+                .type(ProfileFile.Type.CREDENTIALS)
+                .build();
+        return ProfileCredentialsProvider.builder()
+                .profileFile(profileFile)
+                .profileName(profileName)
                 .build();
     }
 
