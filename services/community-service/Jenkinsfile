@@ -125,7 +125,7 @@ pipeline {
       steps {
         container('regctl') {
           sh '''
-            regctl index create ${IMAGE_BASE}:${IMAGE_TAG} \
+            regctl --host "reg=harbor.sb.fisa,tls=insecure" index create ${IMAGE_BASE}:${IMAGE_TAG} \
               --ref ${IMAGE_BASE}:${IMAGE_TAG}-amd64 \
               --ref ${IMAGE_BASE}:${IMAGE_TAG}-arm64
           '''
@@ -162,6 +162,4 @@ pipeline {
 
   post {
     success { echo "✅ 멀티아키 이미지 ${IMAGE_BASE}:${IMAGE_TAG} → gb-infra 커밋 → ArgoCD 자동 배포" }
-    failure { echo "❌ 실패 — 어느 stage에서 멈췄는지 확인하세요." }
-  }
-}
+    failur
