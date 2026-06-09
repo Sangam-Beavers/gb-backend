@@ -33,6 +33,7 @@ import com.gb.wallet.global.redis.IdempotencyCacheHelper;
 import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.UUID;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -70,6 +71,7 @@ public class ChargeServiceImpl implements ChargeService {
     private final ChargeProperties chargeProperties;
     private final IdempotencyCacheHelper idempotencyCacheHelper;
     private final ObjectMapper objectMapper;
+    private final MeterRegistry meterRegistry;
 
     /**
      * self-injection: {@code @Transactional}이 적용되려면 {@link #doCharge}/{@link #readPrior}를 AOP
@@ -101,11 +103,17 @@ public class ChargeServiceImpl implements ChargeService {
             return cached.get();
         }
 
-        ChargeResponse response = doChargeWithRetry(
-                userPublicId, accountPublicId, idempotencyKey, request, clientIp);
+        ChargeResponse response;
+        try {
+            response = doChargeWithRetry(userPublicId, accountPublicId, idempotencyKey, request, clientIp);
+        } catch (BusinessException e) {
+            meterRegistry.counter("charge.execute", "status", "failure").increment();
+            throw e;
+        }
 
         // 정상/race 복구 응답을 Layer 1에 채운다(다음 동일 (user, account, key) 요청은 DB·Mock 미접근).
         // 쓰기 실패는 응답에 영향 없음. 에러(BusinessException)는 위 흐름에서 전파돼 캐시에 들어가지 않는다.
+        meterRegistry.counter("charge.execute", "status", "success").increment();
         writeToCache(cacheKey, response);
         return response;
     }

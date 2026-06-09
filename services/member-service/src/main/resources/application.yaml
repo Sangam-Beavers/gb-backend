@@ -18,3 +18,14 @@ management:
       exposure:
         # Phase 1: prometheus 엔드포인트 노출(Phase 2에서 Prometheus가 스크레이프).
         include: health, info, prometheus
+  metrics:
+    tags:
+      # Prometheus 레이블: 서비스 구분. Grafana에서 application="member-service" 로 필터링.
+      application: ${spring.application.name}
+    distribution:
+      # HTTP 레이턴시 histogram 활성화 — p95/p99 계산에 필요. Prometheus 없을 때는 메모리에만 유지.
+      percentiles-histogram:
+        http.server.requests: true
+      # SLO 버킷 경계(ms). Grafana에서 "p95 < 200ms" 같은 SLO 패널을 그릴 때 사용.
+      slo:
+        http.server.requests: 50ms, 100ms, 200ms, 500ms, 1s

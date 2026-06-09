@@ -103,3 +103,5 @@ test-results/
 .claude/settings.local.json
 .claude
 **/src/main/resources/data-dev.sql
+# Alertmanager Slack 웹훅 (보안)
+.env.monitoring

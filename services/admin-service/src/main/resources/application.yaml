@@ -18,6 +18,14 @@ management:
       exposure:
         # Phase 1: prometheus 엔드포인트 노출(추후 Phase 2에서 Prometheus가 스크레이프).
         include: health, info, prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 50ms, 100ms, 200ms, 500ms, 1s
 
 # 모니터링 — 다른 서비스의 /actuator/health 호출 base URL. dev 기본값은 로컬 포트.
 # 환경별 yml에서 덮어쓴다(stage/prod는 k8s 내부 DNS 등).

@@ -71,6 +71,7 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
@@ -128,6 +129,7 @@ public class TransferServiceImpl implements TransferService {
     private final TransferRateLimitProperties transferRateLimitProperties;
     private final TransferPinGate transferPinGate;
     private final ObjectMapper objectMapper;
+    private final MeterRegistry meterRegistry;
 
     /**
      * 송금 rate-limit 카운터 키 prefix(user 단위).
@@ -453,11 +455,22 @@ public class TransferServiceImpl implements TransferService {
         }
 
         // 6) 실 처리 + 락 경합 재시도 래퍼 — race(UNIQUE 위반)와 락 경합을 도메인별 분기에 공통 처리.
-        TransferExecuteResponse response = executeWithRetry(
-                userPublicId, idempotencyKey, request, currency, transferType, scopeId,
-                receiverNameResolver);
+        TransferExecuteResponse response;
+        try {
+            response = executeWithRetry(
+                    userPublicId, idempotencyKey, request, currency, transferType, scopeId,
+                    receiverNameResolver);
+        } catch (BusinessException e) {
+            // 비즈니스 실패(잔액 부족·검증 오류 등)를 메트릭으로 기록한다.
+            // type 태그로 INTERNAL_TRANSFER / REMITTANCE를 구분해 Grafana에서 개별 추적 가능.
+            meterRegistry.counter("transfer.execute",
+                    "type", transferType.name(), "status", "failure").increment();
+            throw e;
+        }
 
         // 7) 커밋 이후 Redis 캐시 채우기 (Layer 1).
+        meterRegistry.counter("transfer.execute",
+                "type", transferType.name(), "status", "success").increment();
         writeToCache(cacheKey, response);
         return response;
     }
