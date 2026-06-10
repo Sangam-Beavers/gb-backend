@@ -138,5 +138,8 @@ public interface PostRepository extends JpaRepository<Post, Long> {
             @Param("category") PostCategory category,
             Pageable pageable);
 
+    /** 관리자용 특정 회원 게시글 조회 (최신순). */
+    Page<Post> findByUserPublicIdAndDeletedAtIsNull(String userPublicId, Pageable pageable);
+
     long countByDeletedAtIsNull();
 }

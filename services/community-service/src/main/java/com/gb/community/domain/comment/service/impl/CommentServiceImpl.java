@@ -92,6 +92,11 @@ public class CommentServiceImpl implements CommentService {
         // 호출은 커밋 "후" 응답 조립에서 한다 — 쓰기 tx + posts 행 락(incrementCommentCount)을 보유한 채
         // HTTP를 기다리지 않는다(10D community-1). NOT_SUPPORTED로 클래스 readOnly tx도 차단해 이 메서드
         // 전체가 무트랜잭션임을 명시한다(wallet TransferServiceImpl.execute와 동일 구조).
+
+        // 커뮤니티 활동 제한 회원 차단 — member-service HTTP 호출(fail-fast). DB 쓰기 전에 검증한다.
+        if (memberClient.isCommunityBanned(userPublicId)) {
+            throw new BusinessException(CommunityErrorCode.COMMUNITY_BANNED);
+        }
         Comment comment = self.createCommentTx(postPublicId, userPublicId, request);
 
         // 작성자 표시 정보(닉네임/인증배지) MemberClient로 조회 — tx 밖.

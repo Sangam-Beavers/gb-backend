@@ -8,6 +8,7 @@ import com.gb.member.domain.admin.dto.response.AdminMemberView;
 import com.gb.member.domain.admin.dto.response.MemberStatsResponse;
 import com.gb.member.domain.admin.service.MemberAdminInternalService;
 import com.gb.member.domain.member.entity.Member;
+import com.gb.member.domain.member.entity.MemberStatus;
 import com.gb.member.domain.member.repository.MemberRepository;
 import com.gb.member.domain.member.service.TrustGradeService;
 import com.gb.member.domain.verification.entity.UserVerification;
@@ -101,6 +102,31 @@ public class MemberAdminInternalServiceImpl implements MemberAdminInternalServic
         m.markVerified();
         // 이슈 #193 — 배지 부여는 신뢰등급 마일스톤이므로 같은 tx 안에서 재계산한다(단일 진입점).
         trustGradeService.recalculate(m);
+    }
+
+    @Override
+    @Transactional
+    public void setCommunityBan(String publicId, boolean banned) {
+        Member m = memberRepository.findByPublicIdAndDeletedAtIsNull(publicId)
+                .orElseThrow(() -> new BusinessException(MemberErrorCode.MEMBER_NOT_FOUND));
+        m.setCommunityBanned(banned);
+        log.info("[MemberAdminInternal] setCommunityBan — member={}, banned={}", publicId, banned);
+    }
+
+    @Override
+    public boolean isCommunityBanned(String publicId) {
+        return memberRepository.findByPublicIdAndDeletedAtIsNull(publicId)
+                .map(Member::isCommunityBanned)
+                .orElse(false); // 존재하지 않는 회원 = 차단 없음으로 처리(community-service가 별도 검증)
+    }
+
+    @Override
+    @Transactional
+    public void changeStatus(String publicId, MemberStatus status) {
+        Member m = memberRepository.findByPublicIdAndDeletedAtIsNull(publicId)
+                .orElseThrow(() -> new BusinessException(MemberErrorCode.MEMBER_NOT_FOUND));
+        m.changeStatus(status);
+        log.info("[MemberAdminInternal] changeStatus — member={}, status={}", publicId, status);
     }
 
     @Override

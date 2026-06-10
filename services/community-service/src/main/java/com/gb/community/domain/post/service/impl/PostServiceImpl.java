@@ -100,6 +100,10 @@ public class PostServiceImpl implements PostService {
     @Override
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public PostDetailResponse createPost(String requesterUserPublicId, PostCreateRequest request) {
+        // 커뮤니티 활동 제한 회원 차단 — member-service HTTP 호출(fail-fast). DB 쓰기 전에 검증한다.
+        if (memberClient.isCommunityBanned(requesterUserPublicId)) {
+            throw new BusinessException(CommunityErrorCode.COMMUNITY_BANNED);
+        }
         // DB 본문(INSERT)은 self-proxy 쓰기 트랜잭션으로, 작성자 표시 정보 조회는 커밋 후 tx 밖에서.
         Post saved = self.createPostTx(requesterUserPublicId, request);
         // is_author: 작성 응답은 요청자가 곧 작성자 — 항상 true.

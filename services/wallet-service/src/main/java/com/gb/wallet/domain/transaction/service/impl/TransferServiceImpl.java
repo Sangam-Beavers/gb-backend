@@ -6,6 +6,7 @@ import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.account.entity.BankAccount;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
+import com.gb.wallet.global.client.AppAdminClient;
 import com.gb.wallet.domain.transaction.dto.request.TransferExecuteRequest;
 import com.gb.wallet.domain.transaction.dto.request.TransferFeeRequest;
 import com.gb.wallet.domain.transaction.dto.request.ValidateScheduledRequest;
@@ -99,10 +100,6 @@ public class TransferServiceImpl implements TransferService {
      */
     private static final int RECENT_LIMIT = 10;
 
-    // 송금 수수료 정책 상수.
-    // TODO: 수수료 정책 확정 시 정책 테이블/외부 조회로 교체. 현재 0.5%는 임시 값
-    //       (docs/remittance/api-spec.md §4 참고). 정책 SSOT가 docs라 코드 상수 동기화 주의.
-    private static final BigDecimal REMITTANCE_FEE_RATE = new BigDecimal("0.005");
     private static final int FEE_SCALE = 4;
 
     /**
@@ -126,6 +123,7 @@ public class TransferServiceImpl implements TransferService {
     private final BankAccountRepository bankAccountRepository;
     private final MemberClient memberClient;
     private final BankClient bankClient;
+    private final AppAdminClient appAdminClient;
     private final DistributedLockHelper distributedLockHelper;
     private final IdempotencyCacheHelper idempotencyCacheHelper;
     private final RateLimitHelper rateLimitHelper;
@@ -340,8 +338,16 @@ public class TransferServiceImpl implements TransferService {
     private BigDecimal calculateFee(TransactionType type, BigDecimal amount) {
         return switch (type) {
             case INTERNAL_TRANSFER -> BigDecimal.ZERO.setScale(FEE_SCALE, RoundingMode.HALF_UP);
-            case REMITTANCE -> amount.multiply(REMITTANCE_FEE_RATE)
-                    .setScale(FEE_SCALE, RoundingMode.HALF_UP);
+            case REMITTANCE -> {
+                // CASHOUT(외부 은행 출금) 수수료 — app-admin-service 정책에서 실시간 조회.
+                AppAdminClient.FeePolicy policy = appAdminClient.getCashoutFeePolicy();
+                BigDecimal fee = policy.isPercent()
+                        ? amount.multiply(policy.rateAsDecimal())
+                        : policy.feeValue();
+                if (policy.minFee() != null && fee.compareTo(policy.minFee()) < 0) fee = policy.minFee();
+                if (policy.maxFee() != null && fee.compareTo(policy.maxFee()) > 0) fee = policy.maxFee();
+                yield fee.setScale(FEE_SCALE, RoundingMode.HALF_UP);
+            }
             // ALLOWED_TRANSFER_TYPES 필터로 두 값만 통과되지만 enum 전체 case를 망라하는 안전망.
             default -> throw new BusinessException(TransferErrorCode.UNSUPPORTED_TRANSFER_TYPE);
         };

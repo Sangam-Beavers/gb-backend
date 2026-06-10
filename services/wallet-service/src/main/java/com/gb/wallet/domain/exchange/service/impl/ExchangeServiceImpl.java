@@ -22,6 +22,7 @@ import com.gb.wallet.domain.wallet.entity.WalletBalance;
 import com.gb.wallet.domain.wallet.repository.WalletBalanceRepository;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.domain.wallet.service.WalletBalanceWriter;
+import com.gb.wallet.global.client.AppAdminClient;
 import com.gb.wallet.global.client.ExchangeRateClient;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.ExchangeType;
@@ -79,7 +80,8 @@ public class ExchangeServiceImpl implements ExchangeService {
     private final QuoteRedisRepository quoteRedisRepository;
     private final ExchangeRateClient exchangeRateClient;
     private final IdempotencyCacheHelper idempotencyCacheHelper;
-    private final ExchangeProperties exchangeProperties;
+    private final ExchangeProperties exchangeProperties; // yaml 기본값 fallback용 (빈 유지)
+    private final AppAdminClient appAdminClient;
     private final ObjectMapper objectMapper;
 
     /** self-injection: @Transactional 프록시 적용 위함(충전/송금 동일 패턴). */
@@ -127,8 +129,12 @@ public class ExchangeServiceImpl implements ExchangeService {
 
         // amount(from 통화) → KRW 환산 → to 통화로 환산.
         BigDecimal amountInKrw = amount.multiply(fromRate);
-        // 수수료는 KRW 기준 — 비율은 wallet.exchange.fee-rate로 외부화(기본 0.5%, ExchangeProperties).
-        BigDecimal fee = amountInKrw.multiply(exchangeProperties.feeRate()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        // 수수료는 KRW 기준 — app-admin-service EXCHANGE 수수료 정책을 실시간 조회.
+        AppAdminClient.FeePolicy exchangePolicy = appAdminClient.getExchangeFeePolicy();
+        BigDecimal feeRate = exchangePolicy.isPercent() ? exchangePolicy.rateAsDecimal() : exchangeProperties.feeRate();
+        BigDecimal fee = amountInKrw.multiply(feeRate).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (exchangePolicy.minFee() != null && fee.compareTo(exchangePolicy.minFee()) < 0) fee = exchangePolicy.minFee();
+        if (exchangePolicy.maxFee() != null && fee.compareTo(exchangePolicy.maxFee()) > 0) fee = exchangePolicy.maxFee();
         // 수수료 차감 후 KRW를 to 통화로 환산 = 수령액.
         BigDecimal receiveAmount = amountInKrw.subtract(fee)
                 .divide(toRate, MONEY_SCALE, RoundingMode.HALF_UP);

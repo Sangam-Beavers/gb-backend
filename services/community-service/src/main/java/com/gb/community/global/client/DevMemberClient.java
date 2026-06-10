@@ -84,4 +84,13 @@ public class DevMemberClient implements MemberClient {
         }
         return result;
     }
+
+    @Override
+    public boolean isCommunityBanned(String userPublicId) {
+        // fixture 회원(시드 UUID)은 항상 차단되지 않은 것으로 처리. 실회원은 Real에 위임(member-service HTTP).
+        if (FIXTURES.containsKey(userPublicId)) {
+            return false;
+        }
+        return delegate.isCommunityBanned(userPublicId);
+    }
 }

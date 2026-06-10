@@ -2,6 +2,7 @@ package com.gb.member.domain.admin.dto.response;
 
 import com.gb.member.domain.admin.util.DocumentNumberMasker;
 import com.gb.member.domain.member.entity.Member;
+import com.gb.member.domain.member.entity.MemberStatus;
 import com.gb.member.domain.verification.entity.IdentityDocumentType;
 import com.gb.member.domain.verification.entity.UserVerification;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -17,6 +18,8 @@ public record AdminMemberView(
         String name,
         String nickname,
         String nationality,
+        @Schema(description = "계정 상태(ACTIVE/SUSPENDED).")
+        String status,
         @Schema(description = "KYC 상태(PENDING/APPROVED/REJECTED/NOT_SUBMITTED).")
         String kycStatus,
         @Schema(nullable = true)
@@ -24,6 +27,8 @@ public record AdminMemberView(
         @Schema(description = "신분증 번호 마스킹본. 평문 절대 노출 금지(conventions §15 PII).",
                 example = "990101-5******", nullable = true)
         String identityDocumentNumberMasked,
+        @Schema(description = "커뮤니티 활동 제한 여부. true면 글/댓글 작성 불가.")
+        boolean communityBanned,
         @Schema(description = "가입 시각(UTC).")
         LocalDateTime joinedAt
 ) {
@@ -38,15 +43,18 @@ public record AdminMemberView(
             docType = type != null ? type.name() : null;
             docMasked = DocumentNumberMasker.mask(type, verification.getDocumentNumber());
         }
+        MemberStatus memberStatus = m.getStatus() != null ? m.getStatus() : MemberStatus.ACTIVE;
         return new AdminMemberView(
                 m.getPublicId(),
                 m.getEmail(),
                 m.getName(),
                 m.getNickname(),
                 m.getNationality(),
+                memberStatus.name(),
                 kyc,
                 docType,
                 docMasked,
+                m.isCommunityBanned(),
                 m.getCreatedAt()
         );
     }
