@@ -21,6 +21,8 @@ import com.gb.document.domain.document.entity.WageSummary;
 import com.gb.document.domain.document.repository.DocumentRepository;
 import com.gb.document.domain.document.repository.DocumentResultRepository;
 import com.gb.document.global.client.sqs.dto.AnalysisResultMessage;
+import com.gb.document.global.event.MilestoneAchieved;
+import com.gb.document.global.event.MilestoneType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -32,6 +34,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 /**
  * Consumer 영속화 서비스 단위 테스트.
@@ -46,6 +49,9 @@ class AnalysisResultIngestServiceImplTest {
 
     @Mock DocumentRepository documentRepository;
     @Mock DocumentResultRepository documentResultRepository;
+    // Phase 3(BE-7): 저장 성공 시 마일스톤 내부 이벤트(MilestoneAchieved)를 발행한다 — @Mock이 없으면
+    // @InjectMocks 생성자 주입 시 null로 들어가 publishEvent에서 NPE.
+    @Mock ApplicationEventPublisher eventPublisher;
 
     @InjectMocks AnalysisResultIngestServiceImpl service;
 
@@ -61,6 +67,10 @@ class AnalysisResultIngestServiceImplTest {
         verify(documentResultRepository).save(any(DocumentResult.class));
         verify(submission).markCompleted();
         verify(submission, never()).markFailed();
+        // Phase 3(BE-7): 저장 성공 tx 안에서 DOCUMENT_ANALYZED 내부 이벤트가 발행된다
+        // (Kafka 전송은 커밋 후 MilestoneEventPublisher 책임 — 여기선 도메인 발행만 검증).
+        verify(eventPublisher).publishEvent(
+                new MilestoneAchieved("user-A", MilestoneType.DOCUMENT_ANALYZED));
     }
 
     @Test
@@ -75,6 +85,7 @@ class AnalysisResultIngestServiceImplTest {
         verify(documentResultRepository).save(any(DocumentResult.class));
         verify(submission).markFailed();
         verify(submission, never()).markCompleted();
+        verifyNoInteractions(eventPublisher); // Phase 3(BE-7): 분석 실패 건은 마일스톤 이벤트 미발행
     }
 
     @Test
@@ -88,6 +99,9 @@ class AnalysisResultIngestServiceImplTest {
 
         verify(submission).markCompleted();
         verify(submission, never()).markFailed();
+        // Phase 3(BE-7): PARTIAL은 사용자 관점 COMPLETED — 마일스톤도 발행된다.
+        verify(eventPublisher).publishEvent(
+                new MilestoneAchieved("user-A", MilestoneType.DOCUMENT_ANALYZED));
     }
 
     @Test

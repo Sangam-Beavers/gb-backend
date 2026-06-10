@@ -9,12 +9,15 @@ import com.gb.document.domain.document.repository.DocumentRepository;
 import com.gb.document.domain.document.repository.DocumentResultRepository;
 import com.gb.document.domain.document.service.AnalysisResultIngestService;
 import com.gb.document.global.client.sqs.dto.AnalysisResultMessage;
+import com.gb.document.global.event.MilestoneAchieved;
+import com.gb.document.global.event.MilestoneType;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,6 +35,8 @@ public class AnalysisResultIngestServiceImpl implements AnalysisResultIngestServ
 
     private final DocumentRepository documentRepository;
     private final DocumentResultRepository documentResultRepository;
+    // Phase 3(BE-7) — 분석 결과 저장 성공 시 마일스톤 내부 이벤트 발행용(Kafka 전송은 AFTER_COMMIT 리스너).
+    private final ApplicationEventPublisher eventPublisher;
 
     @Override
     @Transactional
@@ -94,6 +99,13 @@ public class AnalysisResultIngestServiceImpl implements AnalysisResultIngestServ
             submission.markFailed();
         } else { // COMPLETED, PARTIAL
             submission.markCompleted();
+            // Phase 3(BE-7) — 서류 분석 완료 마일스톤(DOCUMENT_ANALYZED). 분석 실패(FAILED) 건은 발행하지
+            // 않는다. PARTIAL은 사용자 관점 COMPLETED(§5 매핑)이므로 발행 대상. 내부 이벤트만 발행하고,
+            // Kafka 전송은 본 tx "커밋 후" MilestoneEventPublisher(AFTER_COMMIT)가 수행한다(롤백 시 미발행).
+            // 같은 유저의 N번째 분석이어도 매번 발행 — 수신측(member)이 (user, milestone) UNIQUE로
+            // 자연 멱등 스킵(스파이크 결정 3).
+            eventPublisher.publishEvent(
+                    new MilestoneAchieved(submission.getUserPublicId(), MilestoneType.DOCUMENT_ANALYZED));
         }
 
         log.info("[sqs-consumer] 분석 결과 적용 documentPublicId={} processingStatus={}",

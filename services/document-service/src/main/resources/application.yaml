@@ -7,6 +7,10 @@ spring:
   # CLAUDE.md §5: JSON 필드는 snake_case. DTO 필드는 camelCase로 두고 전역 변환에 의존.
   jackson:
     property-naming-strategy: SNAKE_CASE
+  kafka:
+    # Kafka 브로커 주소 — 환경변수 주입(Phase 2 스파이크 결정 6, env 분리 패턴 동일).
+    # 브로커 미기동 환경(dev 로컬 등)에서도 앱은 정상 기동하고, 발행 실패만 ERROR 로그로 남는다(BE-7).
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
   # spring-cloud-aws (3.4.2) 기본 리전 정적 지정 — 환경 무관하게 부팅 시 RegionProviderChain이
   # 예외 던지지 않게 한다. 자격증명은 DefaultCredentialsProvider 체인을 그대로 사용(IRSA/EC2/env).
   # AwsClientConfig가 같은 값으로 AwsRegionProvider 빈을 만들면 spring-cloud-aws가 그 빈을 우선 사용.
@@ -60,6 +64,12 @@ chatbot:
 # - stale-timeout-minutes / stale-sweep-cron: ANALYZING으로 timeout 넘게 머문 건(미업로드·결과 유실)을
 #   FAILED 처리하는 정리 스케줄러(StaleSubmissionSweeper). timeout은 URL TTL(10분)+분석 소요보다 넉넉하게.
 gb:
+  # Phase 3(BE-7) — 마일스톤 이벤트 발행(Kafka Producer). KafkaProducerConfig 참조.
+  kafka:
+    producer:
+      # 브로커 미가용 시 send() 블로킹 상한(ms, Kafka 기본 60s). AFTER_COMMIT 발행이 SQS Consumer
+      # 스레드에서 동기 실행되므로 짧게 캡해 Kafka 장애가 결과 수신 처리 지연으로 번지지 않게 한다.
+      max-block-ms: 3000
   analysis:
     source: ${GB_ANALYSIS_SOURCE:development}
     result-queue-arn: ${GB_ANALYSIS_RESULT_QUEUE_ARN:}
