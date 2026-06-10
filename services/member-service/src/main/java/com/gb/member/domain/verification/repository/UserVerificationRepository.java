@@ -15,6 +15,12 @@ public interface UserVerificationRepository extends JpaRepository<UserVerificati
     /** 회원의 가장 최근 인증 요청 1건(상태 조회용). 없으면 empty. */
     Optional<UserVerification> findTopByMemberOrderByIdDesc(Member member);
 
+    /**
+     * 회원의 가장 최근 "해당 상태" 인증 1건 — 마일스톤 현황 API(BE-6)가 ID_VERIFIED의
+     * achieved_at(=APPROVED reviewed_at)을 합성할 때 사용. 없으면 empty(응답 achieved_at=null).
+     */
+    Optional<UserVerification> findTopByMemberAndStatusOrderByIdDesc(Member member, VerificationStatus status);
+
     /** 회원에게 주어진 상태들 중 하나인 인증이 존재하는지 — 중복 제출(진행중/승인) 방지용. */
     boolean existsByMemberAndStatusIn(Member member, Collection<VerificationStatus> statuses);
 

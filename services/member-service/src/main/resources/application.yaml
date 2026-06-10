@@ -8,6 +8,19 @@ spring:
     active: ${SPRING_PROFILES_ACTIVE:dev}
   jackson:
     property-naming-strategy: SNAKE_CASE
+  kafka:
+    # Kafka 브로커 주소 — 환경변수 주입(Phase 2 스파이크 결정 6, env 분리 패턴 동일).
+    # Consumer 상세(역직렬화·재시도·DLT)는 KafkaConsumerConfig 참조. 브로커 미기동 시 앱은 정상
+    # 기동하고 리스너가 백그라운드에서 재연결을 시도한다(이벤트는 토픽에 7일 보관 — 늦게 떠도 따라잡음).
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+# Phase 2 — 마일스톤 이벤트 수신(Kafka Consumer, BE-4).
+gb:
+  kafka:
+    milestone-consumer:
+      # 리스너 자동 시작 여부. 운영 계열은 true(기본), test 프로파일만 false(application-test.yml —
+      # 브로커 없는 테스트 컨텍스트에서 무의미한 재연결 시도 차단. EmbeddedKafka 테스트는 인라인으로 켬).
+      auto-startup: true
 
 # 운영/스테이징 IdP(AWS Cognito) 설정 — prod/stage 프로필에서만 사용(CognitoClientConfig·CognitoIdpUserClient).
 # dev/test는 Authentik(RealIdpUserClient)이라 아래 값이 필요 없다. 실제 값은 환경변수로만 주입한다
