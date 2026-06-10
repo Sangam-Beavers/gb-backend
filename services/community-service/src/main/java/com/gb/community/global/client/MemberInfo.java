@@ -11,18 +11,31 @@ package com.gb.community.global.client;
  *   <li>{@code profileImageUrl} — 작성자 프로필 사진 URL(author_profile_image_url). 미설정 시 null.
  *       member-service가 이미지 도메인 미구현이라 현재는 항상 null이지만, 구현되면 별도 코드 변경 없이
  *       게시글/댓글 응답까지 자동 전달된다(마이페이지와 동일 소스로 연동).</li>
+ *   <li>{@code trustGrade} — 마일스톤 기반 신뢰등급(author_trust_grade, 이슈 #194). member-service
+ *       display-info의 {@code trust_grade}를 모사한다. Phase 1은 NEWCOMER/VERIFIED 2단계. 표시용
+ *       보조 데이터라 응답 누락(null)·폴백 시 {@link #DEFAULT_TRUST_GRADE}(NEWCOMER)로 fail-open.</li>
  * </ul>
  */
 public record MemberInfo(
         String nickname,
         boolean isVerified,
-        String profileImageUrl) {
+        String profileImageUrl,
+        String trustGrade) {
+
+    /** Phase 1 기본 신뢰등급. trust_grade 미지정·응답 누락·폴백("Unknown") 시 표시용 기본값(fail-open). */
+    public static final String DEFAULT_TRUST_GRADE = "NEWCOMER";
 
     /**
-     * 프로필 사진 미지정(2-arg) 편의 생성자 — {@code profileImageUrl}을 null로 채운다.
-     * 폴백("Unknown")·dev fixture·기존 테스트 등 사진이 무의미한 호출부의 호환을 위해 남겨둔다.
+     * 프로필 사진·신뢰등급 미지정(2-arg) 편의 생성자 — {@code profileImageUrl}을 null,
+     * {@code trustGrade}를 기본값(NEWCOMER)으로 채운다.
+     * 폴백("Unknown")·기존 테스트 등 해당 값이 무의미한 호출부의 호환을 위해 남겨둔다.
      */
     public MemberInfo(String nickname, boolean isVerified) {
-        this(nickname, isVerified, null);
+        this(nickname, isVerified, null, DEFAULT_TRUST_GRADE);
+    }
+
+    /** 신뢰등급 미지정(3-arg) 편의 생성자 — {@code trustGrade}를 기본값(NEWCOMER)으로 채운다(종전 시그니처 호환). */
+    public MemberInfo(String nickname, boolean isVerified, String profileImageUrl) {
+        this(nickname, isVerified, profileImageUrl, DEFAULT_TRUST_GRADE);
     }
 }

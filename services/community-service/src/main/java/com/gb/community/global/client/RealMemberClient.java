@@ -42,7 +42,8 @@ import org.springframework.web.client.RestClient;
 @Profile("!dev & !test")
 public class RealMemberClient implements MemberClient {
 
-    /** 미존재·탈퇴·조회 실패 시 안전 표시용 기본값(기존 MockMemberClient FALLBACK과 동일 형태). */
+    /** 미존재·탈퇴·조회 실패 시 안전 표시용 기본값(기존 MockMemberClient FALLBACK과 동일 형태).
+     *  trust_grade도 기본 NEWCOMER로 채워진다(2-arg 편의 생성자 — 이슈 #194 fail-open). */
     static final MemberInfo FALLBACK = new MemberInfo("Unknown", false);
 
     /** display-info 배치 API의 public_ids 개수 상한(명세 auth §13-1). 초과 요청은 chunk로 나눠 호출한다. */
@@ -113,8 +114,13 @@ public class RealMemberClient implements MemberClient {
             for (DisplayInfoMember member : envelope.data().members()) {
                 // 요청하지 않은 id가 섞여 와도 계약(요청 id만 키)을 지키도록 기존 키만 덮어쓴다.
                 if (member.publicId() != null && result.containsKey(member.publicId())) {
+                    // trust_grade 누락(null — 구버전 member-service 응답 등)은 NEWCOMER로 fail-open
+                    // (이슈 #194 — 표시용 보조 데이터라 호출 실패 폴백과 동일 정책·동일 위치에서 처리).
+                    String trustGrade = member.trustGrade() != null
+                            ? member.trustGrade() : MemberInfo.DEFAULT_TRUST_GRADE;
                     result.put(member.publicId(),
-                            new MemberInfo(member.nickname(), member.isVerified(), member.profileImageUrl()));
+                            new MemberInfo(member.nickname(), member.isVerified(),
+                                    member.profileImageUrl(), trustGrade));
                 }
             }
         } catch (RuntimeException e) {
@@ -160,6 +166,7 @@ public class RealMemberClient implements MemberClient {
             @JsonProperty("public_id") String publicId,
             @JsonProperty("nickname") String nickname,
             @JsonProperty("is_verified") boolean isVerified,
-            @JsonProperty("profile_image_url") String profileImageUrl) {
+            @JsonProperty("profile_image_url") String profileImageUrl,
+            @JsonProperty("trust_grade") String trustGrade) {
     }
 }

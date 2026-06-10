@@ -41,6 +41,7 @@ class DevMemberClientTest {
 
         assertThat(result.nickname()).isEqualTo("Minh");
         assertThat(result.isVerified()).isTrue();
+        assertThat(result.trustGrade()).isEqualTo("VERIFIED");   // 이슈 #194 — fixture에 등급 포함
         verifyNoInteractions(delegate);
     }
 

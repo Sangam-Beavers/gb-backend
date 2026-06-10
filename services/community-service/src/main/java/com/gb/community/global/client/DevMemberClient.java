@@ -33,14 +33,16 @@ import org.springframework.web.client.RestClient;
 @Profile("dev")
 public class DevMemberClient implements MemberClient {
 
-    /** 개발용 고정 회원 데이터. 키는 (삭제된) DevDataInitializer가 dev DB에 남긴 시드 글 작성자 UUID 3개와 1:1. */
+    /** 개발용 고정 회원 데이터. 키는 (삭제된) DevDataInitializer가 dev DB에 남긴 시드 글 작성자 UUID 3개와 1:1.
+     *  trust_grade는 인증 배지와 동일 규칙(이슈 #193 Phase 1: 인증=VERIFIED, 미인증=NEWCOMER)로 섞어 둬
+     *  dev 화면에서 등급별 표시(테두리)를 바로 확인할 수 있게 한다. */
     static final Map<String, MemberInfo> FIXTURES = Map.of(
             "00000000-0000-0000-0000-000000000001",
-                    new MemberInfo("Minh", true),
+                    new MemberInfo("Minh", true, null, "VERIFIED"),
             "00000000-0000-0000-0000-000000000002",
-                    new MemberInfo("Sokha", false),
+                    new MemberInfo("Sokha", false, null, "NEWCOMER"),
             "00000000-0000-0000-0000-000000000003",
-                    new MemberInfo("Aung", true));
+                    new MemberInfo("Aung", true, null, "VERIFIED"));
 
     private final MemberClient delegate;
 
