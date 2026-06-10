@@ -89,7 +89,7 @@ class RealMemberClientTest {
                 { "success": true,
                   "data": { "members": [
                     { "public_id": "pub-1", "name": "Nguyen Thi Linh", "nickname": "Linh",
-                      "nationality": "VN", "is_verified": true } ] },
+                      "nationality": "VN", "is_verified": true, "trust_grade": "VERIFIED" } ] },
                   "message": "요청이 성공적으로 처리되었습니다." }
                 """;
         f.server().expect(requestTo(BASE_URL + "/api/v1/members/display-info?public_ids=pub-1%2Cpub-gone"))
@@ -100,16 +100,19 @@ class RealMemberClientTest {
         Map<String, MemberInfo> result = f.client().getMembers(List.of("pub-1", "pub-gone"));
 
         assertThat(result).containsOnlyKeys("pub-1", "pub-gone");
-        assertThat(result.get("pub-1")).isEqualTo(new MemberInfo("Linh", true));
+        assertThat(result.get("pub-1")).isEqualTo(new MemberInfo("Linh", true, null, "VERIFIED"));
+        // FALLBACK은 trust_grade도 기본 NEWCOMER(이슈 #194 fail-open).
         assertThat(result.get("pub-gone")).isEqualTo(RealMemberClient.FALLBACK);
+        assertThat(result.get("pub-gone").trustGrade()).isEqualTo(MemberInfo.DEFAULT_TRUST_GRADE);
         f.server().verify();
     }
 
     @Test
-    @DisplayName("getMember: 단건도 display-info 배치 API 1회 호출로 처리한다")
+    @DisplayName("getMember: 단건도 display-info 배치 API 1회 호출로 처리한다 + trust_grade 누락 응답은 NEWCOMER 폴백")
     void getMember_단건_배치API_경유() {
         authenticateWithJwt();
         Fixture f = fixture();
+        // trust_grade 없는 응답(구버전 member-service) — NEWCOMER 폴백 매핑까지 함께 검증한다(이슈 #194).
         String body = """
                 { "success": true,
                   "data": { "members": [
@@ -122,6 +125,7 @@ class RealMemberClientTest {
         MemberInfo result = f.client().getMember("pub-1");
 
         assertThat(result).isEqualTo(new MemberInfo("Linh", false));
+        assertThat(result.trustGrade()).isEqualTo(MemberInfo.DEFAULT_TRUST_GRADE);
         f.server().verify();
     }
 

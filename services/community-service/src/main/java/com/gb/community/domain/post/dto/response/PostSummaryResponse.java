@@ -59,6 +59,10 @@ public class PostSummaryResponse {
             example = "null", nullable = true)
     private final String authorProfileImageUrl;
 
+    @Schema(description = "작성자 신뢰등급(마일스톤 기반 — 이슈 #194). 표시정보 조회 실패·누락 시 NEWCOMER 폴백",
+            allowableValues = {"NEWCOMER", "VERIFIED"}, example = "VERIFIED")
+    private final String authorTrustGrade;
+
     @Schema(description = "요청자가 작성자 본인인지 여부(수정·삭제 버튼 노출 판단용)", example = "false")
     private final Boolean isAuthor;
 
@@ -74,8 +78,8 @@ public class PostSummaryResponse {
     @Builder
     private PostSummaryResponse(String publicId, String category, String title, String contentPreview,
                                String language, String authorPublicId, String authorNickname,
-                               String authorProfileImageUrl, Boolean isAuthor, Integer likeCount,
-                               Integer commentCount, String createdAt) {
+                               String authorProfileImageUrl, String authorTrustGrade, Boolean isAuthor,
+                               Integer likeCount, Integer commentCount, String createdAt) {
         this.publicId = publicId;
         this.category = category;
         this.title = title;
@@ -84,6 +88,7 @@ public class PostSummaryResponse {
         this.authorPublicId = authorPublicId;
         this.authorNickname = authorNickname;
         this.authorProfileImageUrl = authorProfileImageUrl;
+        this.authorTrustGrade = authorTrustGrade;
         this.isAuthor = isAuthor;
         this.likeCount = likeCount;
         this.commentCount = commentCount;
@@ -104,6 +109,7 @@ public class PostSummaryResponse {
                 .authorPublicId(post.getUserPublicId())
                 .authorNickname(author.nickname())
                 .authorProfileImageUrl(author.profileImageUrl())
+                .authorTrustGrade(author.trustGrade())
                 .isAuthor(post.getUserPublicId().equals(requesterUserPublicId))
                 .likeCount(post.getLikeCount())
                 .commentCount(post.getCommentCount())

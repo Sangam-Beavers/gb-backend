@@ -59,6 +59,10 @@ public class CommentResponse {
     @Schema(description = "작성자 인증 배지 여부", example = "true")
     private final boolean authorIsVerified;
 
+    @Schema(description = "작성자 신뢰등급(마일스톤 기반 — 이슈 #194). 표시정보 조회 실패·누락 시 NEWCOMER 폴백",
+            allowableValues = {"NEWCOMER", "VERIFIED"}, example = "VERIFIED")
+    private final String authorTrustGrade;
+
     @Schema(description = "요청자가 작성자 본인인지 여부(수정·삭제 버튼 노출 판단용)", example = "false")
     private final Boolean isAuthor;
 
@@ -68,7 +72,8 @@ public class CommentResponse {
     @Builder
     private CommentResponse(String publicId, String postPublicId, String parentCommentPublicId,
                             String content, String authorPublicId, String authorNickname,
-                            String authorProfileImageUrl, boolean authorIsVerified, Boolean isAuthor,
+                            String authorProfileImageUrl, boolean authorIsVerified,
+                            String authorTrustGrade, Boolean isAuthor,
                             String createdAt) {
         this.publicId = publicId;
         this.postPublicId = postPublicId;
@@ -78,6 +83,7 @@ public class CommentResponse {
         this.authorNickname = authorNickname;
         this.authorProfileImageUrl = authorProfileImageUrl;
         this.authorIsVerified = authorIsVerified;
+        this.authorTrustGrade = authorTrustGrade;
         this.isAuthor = isAuthor;
         this.createdAt = createdAt;
     }
@@ -103,6 +109,7 @@ public class CommentResponse {
                 .authorNickname(author.nickname())
                 .authorProfileImageUrl(author.profileImageUrl())
                 .authorIsVerified(author.isVerified())
+                .authorTrustGrade(author.trustGrade())
                 .isAuthor(comment.getUserPublicId().equals(requesterUserPublicId))
                 .createdAt(UtcTime.toUtcZ(comment.getCreatedAt()))
                 .build();
