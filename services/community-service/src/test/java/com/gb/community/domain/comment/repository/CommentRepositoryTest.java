@@ -170,7 +170,7 @@ class CommentRepositoryTest {
     // ----- helpers -----
 
     private Post persistPost(String userPublicId, PostCategory category, String title, String content) {
-        Post p = Post.of(userPublicId, category, title, content);
+        Post p = Post.of(userPublicId, category, "ko", title, content);
         em.persist(p);
         return p;
     }

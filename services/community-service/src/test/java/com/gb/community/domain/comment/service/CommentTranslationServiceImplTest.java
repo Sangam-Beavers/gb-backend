@@ -50,7 +50,11 @@ class CommentTranslationServiceImplTest {
     private static final String C_PID = "comment-uuid-1";
 
     private Post post(Long id) {
-        Post p = Post.of(USER, PostCategory.JOB, "title", "post content");
+        return postLang(id, "ko");
+    }
+
+    private Post postLang(Long id, String language) {
+        Post p = Post.of(USER, PostCategory.JOB, language, "title", "post content");
         // post.id는 ManyToOne 비교에 쓰여서 명시 세팅. (PostTranslationServiceImplTest는 Mock의 id 자동 null이라
         // 이 테스트만 명시 — equals 비교가 들어가서)
         ReflectionTestUtils.setField(p, "id", id);
@@ -114,6 +118,45 @@ class CommentTranslationServiceImplTest {
 
         assertThat(res.getTranslatedContent()).isEqualTo("[VI] 댓글 본문");
         verify(commentTranslationRepository).save(any(CommentTranslation.class));
+    }
+
+    @Test
+    @DisplayName("부모 게시글 language=en, target=vi(캐시 miss): source_lang은 부모 언어 en — ko 고정 아님")
+    void 부모_en_댓글_vi_번역() {
+        Post p = postLang(1L, "en");
+        Comment c = commentOf(p, "comment body");
+        ReflectionTestUtils.setField(c, "id", 10L);
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(P_PID)).willReturn(Optional.of(p));
+        given(commentRepository.findByPublicIdAndDeletedAtIsNull(C_PID)).willReturn(Optional.of(c));
+        given(commentTranslationRepository.findByCommentIdAndLanguage(10L, "vi"))
+                .willReturn(Optional.empty());
+        // source_lang 위치에 eq("en") — 임플이 부모 post.getLanguage()(=en)가 아닌 "ko"를 넘기면 stub 불일치로 실패.
+        given(translationClient.translate(
+                eq("comment"), eq(c.getPublicId()), isNull(), eq("comment body"), eq("en"), eq("vi")))
+                .willReturn(new TranslationResult(null, "[VI] comment body", "vi", "mock", 0, 0));
+        given(commentTranslationRepository.save(any(CommentTranslation.class)))
+                .willAnswer(inv -> inv.getArgument(0));
+
+        CommentTranslationResponse res = service.getOrTranslate(P_PID, C_PID, "vi");
+
+        assertThat(res.getTranslatedContent()).isEqualTo("[VI] comment body");
+        verify(translationClient).translate(
+                eq("comment"), eq(c.getPublicId()), isNull(), eq("comment body"), eq("en"), eq("vi"));
+    }
+
+    @Test
+    @DisplayName("부모 게시글 language=en, target=en: 부모 언어로 같은-언어 판정 → 원문 그대로, 호출 없음")
+    void 부모_en_같은_언어() {
+        Post p = postLang(1L, "en");
+        Comment c = commentOf(p, "comment body");
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(P_PID)).willReturn(Optional.of(p));
+        given(commentRepository.findByPublicIdAndDeletedAtIsNull(C_PID)).willReturn(Optional.of(c));
+
+        CommentTranslationResponse res = service.getOrTranslate(P_PID, C_PID, "en");
+
+        assertThat(res.getTranslatedContent()).isEqualTo("comment body");
+        assertThat(res.getTranslatedLanguage()).isEqualTo("en");
+        verifyNoInteractions(commentTranslationRepository, translationClient);
     }
 
     @Test

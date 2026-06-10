@@ -147,7 +147,8 @@ public class PostController {
     /** 게시글 작성. 🔒 JWT 필요. */
     @Operation(
             summary = "게시글 작성",
-            description = "category·title·content(필수)로 게시글을 작성한다. 작성 언어는 현재 \"ko\"로 고정된다(인증/locale 연동 전).")
+            description = "category·title·content(필수)로 게시글을 작성한다. language(선택)는 작성 언어 코드(ko/en/vi/fil)이며, "
+                    + "null·blank이면 \"ko\"를 기본값으로 사용한다. 지원하지 않는 코드는 COMMUNITY4003.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",

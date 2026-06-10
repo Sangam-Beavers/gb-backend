@@ -37,7 +37,7 @@ class CommentTranslationRepositoryTest {
 
     @BeforeEach
     void setUp() {
-        Post post = Post.of(U1, PostCategory.JOB, "title", "content");
+        Post post = Post.of(U1, PostCategory.JOB, "ko", "title", "content");
         em.persist(post);
         comment = Comment.builder().post(post).userPublicId(U1).parentId(null).content("댓글 본문").build();
         em.persist(comment);

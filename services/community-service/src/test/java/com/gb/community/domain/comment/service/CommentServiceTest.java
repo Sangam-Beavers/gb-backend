@@ -368,7 +368,7 @@ class CommentServiceTest {
 
     /** public_id·id를 지정한 Post 생성(영속화 없이 단위 테스트용). */
     private Post post(String publicId) {
-        Post post = Post.of(USER, PostCategory.JOB, "글", "내용");
+        Post post = Post.of(USER, PostCategory.JOB, "ko", "글", "내용");
         ReflectionTestUtils.setField(post, "publicId", publicId);
         ReflectionTestUtils.setField(post, "id", 1L);
         return post;

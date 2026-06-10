@@ -262,7 +262,7 @@ class LikeServiceTest {
 
     /** id·like_count를 지정한 Post 생성(영속화 없이 단위 테스트용). */
     private Post post(String userPublicId, int likeCount) {
-        Post post = Post.of(userPublicId, PostCategory.JOB, "제목", "본문");
+        Post post = Post.of(userPublicId, PostCategory.JOB, "ko", "제목", "본문");
         org.springframework.test.util.ReflectionTestUtils.setField(post, "id", POST_ID);
         org.springframework.test.util.ReflectionTestUtils.setField(post, "likeCount", likeCount);
         return post;

@@ -123,7 +123,7 @@ class QnaServiceTest {
 
     /** publicId·title·commentCount·createdAt을 지정한 Post 생성(영속화 없이 단위 테스트용). */
     private Post post(String publicId, String title, int commentCount, LocalDateTime createdAt) {
-        Post post = Post.of(USER, PostCategory.QUESTION, title, "본문");
+        Post post = Post.of(USER, PostCategory.QUESTION, "ko", title, "본문");
         ReflectionTestUtils.setField(post, "publicId", publicId);
         ReflectionTestUtils.setField(post, "commentCount", commentCount);
         ReflectionTestUtils.setField(post, "createdAt", createdAt);
