@@ -14,6 +14,7 @@ import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
+import com.gb.member.domain.member.service.TrustGradeService;
 import com.gb.member.domain.verification.dto.request.VerificationRequest;
 import com.gb.member.domain.verification.dto.response.VerificationStatusResponse;
 import com.gb.member.domain.verification.dto.response.VerificationSubmitResponse;
@@ -52,6 +53,8 @@ class VerificationServiceImplTest {
     @Mock private UserVerificationRepository verificationRepository;
     /** 이슈 #152 — APPROVED 시 자동 지갑 개설 위임. fail-open 동작 검증을 위해 mock 주입. */
     @Mock private WalletClient walletClient;
+    /** 이슈 #193 — APPROVED 시 같은 tx 안에서 신뢰등급 재계산 호출. 호출 여부 검증을 위해 mock 주입. */
+    @Mock private TrustGradeService trustGradeService;
 
     @InjectMocks private VerificationServiceImpl verificationService;
 
@@ -161,6 +164,8 @@ class VerificationServiceImplTest {
 
         // 이슈 #152 — APPROVED 시 wallet-service에 지갑 자동 개설 위임 (멱등 호출).
         verify(walletClient).createWalletFor(PUBLIC_ID);
+        // 이슈 #193 — 배지 부여와 같은 tx 안에서 신뢰등급 재계산(단일 진입점) 호출.
+        verify(trustGradeService).recalculate(member);
     }
 
     @Test
@@ -240,6 +245,7 @@ class VerificationServiceImplTest {
         verify(verificationRepository, never()).saveAndFlush(any());
         assertThat(member.isVerified()).isFalse();
         verifyNoInteractions(walletClient);   // APPROVED 실패 → 지갑 생성 시도 없음(#152)
+        verifyNoInteractions(trustGradeService);   // 승인 실패 → 등급 재계산도 없음(#193)
     }
 
     @Test
@@ -355,6 +361,7 @@ class VerificationServiceImplTest {
                 .isEqualTo(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
 
         assertThat(member.isVerified()).as("race 패자는 배지를 받지 않는다").isFalse();
+        verifyNoInteractions(trustGradeService);   // markVerified 미도달 → 등급 재계산도 없음(#193)
     }
 
     @Test

@@ -73,6 +73,8 @@ class MemberQueryControllerTest {
                 .nickname(nickname)
                 .nationality(nationality)
                 .isVerified(isVerified)
+                // 이슈 #193 Phase 1 산정 규칙과 동일하게 채운다(인증=VERIFIED, 미인증=NEWCOMER).
+                .trustGrade(isVerified ? "VERIFIED" : "NEWCOMER")
                 .build();
     }
 
@@ -98,7 +100,10 @@ class MemberQueryControllerTest {
                 .andExpect(jsonPath("$.data.members[0].nationality").value("VN"))
                 // Boolean boxed 직렬화 검증 — primitive면 'verified'로 떨어지는 함정(ProfileResponse 주석 참고).
                 .andExpect(jsonPath("$.data.members[0].is_verified").value(true))
-                .andExpect(jsonPath("$.data.members[1].is_verified").value(false));
+                .andExpect(jsonPath("$.data.members[1].is_verified").value(false))
+                // 이슈 #193 — 신뢰등급 snake_case(trust_grade) 직렬화 검증.
+                .andExpect(jsonPath("$.data.members[0].trust_grade").value("VERIFIED"))
+                .andExpect(jsonPath("$.data.members[1].trust_grade").value("NEWCOMER"));
 
         verify(memberService).getDisplayInfos(List.of("pub-1", "pub-2"));
     }

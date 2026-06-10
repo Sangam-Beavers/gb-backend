@@ -106,8 +106,9 @@ public class MemberProfileController {
     @GetMapping
     @Operation(
             summary = "내 프로필 조회",
-            description = "마이페이지 내 프로필을 조회한다. is_verified/temperature_grade/profile_image_url은 "
-                    + "각각 인증·커뮤니티·이미지 도메인 소관이라 현재 기본값으로 내려간다.")
+            description = "마이페이지 내 프로필을 조회한다. is_verified·trust_grade(마일스톤 기반 신뢰등급 — "
+                    + "NEWCOMER/VERIFIED, 이슈 #193)는 members 저장값을 내려보낸다. profile_image_url은 "
+                    + "이미지 도메인 소관이라 현재 기본값(null)으로 내려간다.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200", description = "조회 성공. data에 ProfileResponse."),

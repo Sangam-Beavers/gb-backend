@@ -94,7 +94,7 @@ public class MemberQueryController {
     @GetMapping("/display-info")
     @Operation(
             summary = "회원 표시정보 배치 조회 (서비스 간)",
-            description = "public_id 목록(콤마 구분, 최대 100개)으로 표시정보(이름/닉네임/국적/인증배지)를 "
+            description = "public_id 목록(콤마 구분, 최대 100개)으로 표시정보(이름/닉네임/국적/인증배지/신뢰등급)를 "
                     + "한 번에 조회한다. community/wallet의 MemberClient가 작성자·수신자 표시를 채울 때 "
                     + "호출한다(N+1 회피 배치). 존재하는 활성(미탈퇴) 회원만 배열에 담기며, 미존재·탈퇴 id는 "
                     + "항목에서 제외된다(호출 측이 \"Unknown\" 폴백 처리 — 에러 아님).")

@@ -16,6 +16,8 @@ import lombok.Getter;
  *   <li>{@code nickname} — 게시글/댓글 작성자·최근 송금 수신자 표시(community/wallet)</li>
  *   <li>{@code nationality} — 최근 송금 수신자 국적 표시(wallet)</li>
  *   <li>{@code isVerified} — 신분증 인증 배지(community/wallet)</li>
+ *   <li>{@code trustGrade} — 마일스톤 기반 신뢰등급(community 작성자 등급 표시 — 이슈 #193).
+ *       Phase 1은 NEWCOMER/VERIFIED 2단계.</li>
  *   <li>{@code profileImageUrl} — 프로필 사진 URL(community 게시글/댓글 작성자 아바타).
  *       이미지 업로드 도메인 미구현이라 현재 항상 null(ProfileResponse와 동일) — 구현 시 실제 값으로 교체.</li>
  * </ul>
@@ -42,18 +44,24 @@ public class MemberDisplayResponse {
     @Schema(description = "신분증 인증 배지 여부", example = "true")
     private final Boolean isVerified;
 
+    @Schema(description = "마일스톤 기반 신뢰등급. NEWCOMER=가입 기본, VERIFIED=신분증 인증 승인(이슈 #193)",
+            allowableValues = {"NEWCOMER", "VERIFIED"}, example = "VERIFIED")
+    private final String trustGrade;
+
     @Schema(description = "프로필 사진 URL. 이미지 도메인 미구현으로 현재 항상 null", example = "null",
             nullable = true)
     private final String profileImageUrl;
 
     @Builder
     private MemberDisplayResponse(String publicId, String name, String nickname,
-                                  String nationality, Boolean isVerified, String profileImageUrl) {
+                                  String nationality, Boolean isVerified, String trustGrade,
+                                  String profileImageUrl) {
         this.publicId = publicId;
         this.name = name;
         this.nickname = nickname;
         this.nationality = nationality;
         this.isVerified = isVerified;
+        this.trustGrade = trustGrade;
         this.profileImageUrl = profileImageUrl;
     }
 
@@ -64,6 +72,7 @@ public class MemberDisplayResponse {
                 .nickname(member.getNickname())
                 .nationality(member.getNationality())
                 .isVerified(member.isVerified())
+                .trustGrade(member.getTrustGrade().name())
                 // 이미지 도메인 미구현 — 항상 null. 컬럼/업로드 구현 시 member.getProfileImageUrl()로 교체.
                 .profileImageUrl(null)
                 .build();

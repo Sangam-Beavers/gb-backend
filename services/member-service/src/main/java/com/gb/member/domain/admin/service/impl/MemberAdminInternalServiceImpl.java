@@ -9,6 +9,7 @@ import com.gb.member.domain.admin.dto.response.MemberStatsResponse;
 import com.gb.member.domain.admin.service.MemberAdminInternalService;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
+import com.gb.member.domain.member.service.TrustGradeService;
 import com.gb.member.domain.verification.entity.UserVerification;
 import com.gb.member.domain.verification.entity.VerificationStatus;
 import com.gb.member.domain.verification.repository.UserVerificationRepository;
@@ -40,6 +41,7 @@ public class MemberAdminInternalServiceImpl implements MemberAdminInternalServic
 
     private final MemberRepository memberRepository;
     private final UserVerificationRepository userVerificationRepository;
+    private final TrustGradeService trustGradeService;
 
     @Override
     public AdminMemberPageResponse search(String q, String kycStatus, int page, int size) {
@@ -97,16 +99,22 @@ public class MemberAdminInternalServiceImpl implements MemberAdminInternalServic
                     publicId, v.getId());
         }
         m.markVerified();
+        // 이슈 #193 — 배지 부여는 신뢰등급 마일스톤이므로 같은 tx 안에서 재계산한다(단일 진입점).
+        trustGradeService.recalculate(m);
     }
 
     @Override
     @Transactional
     public void rejectKyc(String publicId, String reason) {
-        memberRepository.findByPublicIdAndDeletedAtIsNull(publicId)
+        Member m = memberRepository.findByPublicIdAndDeletedAtIsNull(publicId)
                 .orElseThrow(() -> new BusinessException(MemberErrorCode.MEMBER_NOT_FOUND));
         // 발표용: 거절은 audit_log(admin-service)에만 남기고, member 본체 상태는 변경하지 않는다
         // (도메인 메서드 신규 도입은 다음 스프린트).
         log.info("[MemberAdminInternal] rejectKyc — 본체 상태 변경은 다음 스프린트(member={}, reason={})", publicId, reason);
+        // 이슈 #193 — 등급 재계산 훅(승인 취소 지점). 현 스프린트의 reject는 배지(is_verified)를 내리지 않아
+        // 등급도 그대로다(no-op). 다음 스프린트에서 승인 취소가 배지를 회수하면 같은 호출이 NEWCOMER 복귀를
+        // 수행한다 — 산정 규칙은 TrustGradeService 단일 진입점에만 둔다.
+        trustGradeService.recalculate(m);
     }
 
     @Override
