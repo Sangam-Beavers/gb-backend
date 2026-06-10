@@ -113,7 +113,8 @@ public class RealMemberClient implements MemberClient {
             for (DisplayInfoMember member : envelope.data().members()) {
                 // 요청하지 않은 id가 섞여 와도 계약(요청 id만 키)을 지키도록 기존 키만 덮어쓴다.
                 if (member.publicId() != null && result.containsKey(member.publicId())) {
-                    result.put(member.publicId(), new MemberInfo(member.nickname(), member.isVerified()));
+                    result.put(member.publicId(),
+                            new MemberInfo(member.nickname(), member.isVerified(), member.profileImageUrl()));
                 }
             }
         } catch (RuntimeException e) {
@@ -158,6 +159,7 @@ public class RealMemberClient implements MemberClient {
     record DisplayInfoMember(
             @JsonProperty("public_id") String publicId,
             @JsonProperty("nickname") String nickname,
-            @JsonProperty("is_verified") boolean isVerified) {
+            @JsonProperty("is_verified") boolean isVerified,
+            @JsonProperty("profile_image_url") String profileImageUrl) {
     }
 }

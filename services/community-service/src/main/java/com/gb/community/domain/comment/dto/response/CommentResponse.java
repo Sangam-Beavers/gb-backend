@@ -45,8 +45,16 @@ public class CommentResponse {
     @Schema(description = "댓글 내용", example = "저도 작년에 똑같은 일 겪었어요. 노동부 1350에 신고해 차액 다 받았어요.")
     private final String content;
 
+    @Schema(description = "작성자 식별자(UUID). 사진 미설정 시 기본 아바타 시드로 사용",
+            example = "11111111-1111-1111-1111-111111111111")
+    private final String authorPublicId;
+
     @Schema(description = "작성자 닉네임", example = "Minh")
     private final String authorNickname;
+
+    @Schema(description = "작성자 프로필 사진 URL. 미설정 시 null(프론트는 기본 아바타로 대체)",
+            example = "null", nullable = true)
+    private final String authorProfileImageUrl;
 
     @Schema(description = "작성자 인증 배지 여부", example = "true")
     private final boolean authorIsVerified;
@@ -59,13 +67,16 @@ public class CommentResponse {
 
     @Builder
     private CommentResponse(String publicId, String postPublicId, String parentCommentPublicId,
-                            String content, String authorNickname, boolean authorIsVerified,
-                            Boolean isAuthor, String createdAt) {
+                            String content, String authorPublicId, String authorNickname,
+                            String authorProfileImageUrl, boolean authorIsVerified, Boolean isAuthor,
+                            String createdAt) {
         this.publicId = publicId;
         this.postPublicId = postPublicId;
         this.parentCommentPublicId = parentCommentPublicId;
         this.content = content;
+        this.authorPublicId = authorPublicId;
         this.authorNickname = authorNickname;
+        this.authorProfileImageUrl = authorProfileImageUrl;
         this.authorIsVerified = authorIsVerified;
         this.isAuthor = isAuthor;
         this.createdAt = createdAt;
@@ -88,7 +99,9 @@ public class CommentResponse {
                 .postPublicId(postPublicId)
                 .parentCommentPublicId(null) // 대댓글 미구현(범위 밖) — 위 필드 주석 참고
                 .content(comment.getContent())
+                .authorPublicId(comment.getUserPublicId())
                 .authorNickname(author.nickname())
+                .authorProfileImageUrl(author.profileImageUrl())
                 .authorIsVerified(author.isVerified())
                 .isAuthor(comment.getUserPublicId().equals(requesterUserPublicId))
                 .createdAt(UtcTime.toUtcZ(comment.getCreatedAt()))
