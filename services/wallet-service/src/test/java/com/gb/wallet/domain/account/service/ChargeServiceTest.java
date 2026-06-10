@@ -41,6 +41,7 @@ import com.gb.wallet.global.config.ChargeProperties;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import com.gb.wallet.global.redis.IdempotencyCacheHelper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -102,6 +103,10 @@ class ChargeServiceTest {
         // NPE. mock이 아닌 실제 객체로 기본 한도(1천만원)를 박아 기존 동작을 유지한다(동작 불변 검증 목적).
         ReflectionTestUtils.setField(service, "chargeProperties",
                 new ChargeProperties(new BigDecimal("10000000")));
+        // meterRegistry도 대응 @Mock이 없어 생성자 주입 시 null → charge() 성공/실패 경로의
+        // counter(...).increment()에서 NPE. @Mock으로 두면 counter()가 null을 반환해 같은 문제이므로,
+        // 실제 인메모리 구현(SimpleMeterRegistry)을 박는다(chargeProperties와 동일 패턴).
+        ReflectionTestUtils.setField(service, "meterRegistry", new SimpleMeterRegistry());
     }
 
     // ===== doCharge — 정상 =====

@@ -17,9 +17,9 @@ import com.gb.wallet.domain.account.repository.BankRepository;
 import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.dto.AccountHolder;
-import com.gb.wallet.global.client.dto.AccountToken;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.redis.DistributedLockHelper;
+import com.gb.wallet.global.redis.VerifySessionStore;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,6 +59,9 @@ class BankAccountRegisterIntegrationTest {
     @MockitoBean private RedissonClient redissonClient;
     // 분산락은 스텁으로 항상 획득 성공시켜 register 본문이 정상 진입·커밋되도록 한다.
     @MockitoBean private DistributedLockHelper distributedLockHelper;
+    // 1원 인증 세션 저장소도 Redis 기반 — 스텁으로 confirm이 저장해 둔 token 소비를 모사한다.
+    // (GETDEL 원자 소비의 실 Redis 동작은 여기서 검증 대상이 아니다 — 단위/실환경 몫.)
+    @MockitoBean private VerifySessionStore verifySessionStore;
 
     @Autowired private BankAccountService bankAccountService;
     @Autowired private BankRepository bankRepository;
@@ -82,9 +85,10 @@ class BankAccountRegisterIntegrationTest {
         // WACC-05: register는 예금주명을 은행 inquiry 권위 값으로 채운다. Mock 은행은 "홍길동"을 돌려준다.
         given(bankClient.inquiry(anyString(), anyString())).willReturn(new AccountHolder("홍길동"));
 
-        // charge-3: register는 클라 토큰을 신뢰하지 않고 은행 verify를 재호출해 서버 발급 토큰을 저장한다.
-        given(bankClient.verify(anyString(), anyString(), anyString()))
-                .willReturn(new AccountToken("tok-server"));
+        // charge-3 등가: register는 클라 토큰을 신뢰하지 않고, confirm(2단계)이 Redis 세션에 저장해 둔
+        // 서버 발급 토큰을 GETDEL로 소비해 저장한다(1원 인증 흐름 — register 중 은행 verify 재호출 없음).
+        given(verifySessionStore.consume(anyString(), anyString(), anyString()))
+                .willReturn("tok-server");
     }
 
     @AfterEach
@@ -116,7 +120,7 @@ class BankAccountRegisterIntegrationTest {
         assertThat(saved.getUserPublicId()).isEqualTo(USER);
         assertThat(saved.getAccountNumber()).isEqualTo("1234567890");
         assertThat(saved.getMockAccountToken())
-                .as("charge-3: 클라 토큰(tok-001)이 아니라 서버가 verify 재호출로 발급받은 토큰이 DB에 저장")
+                .as("charge-3 등가: 클라 토큰(tok-001)이 아니라 confirm 세션에서 소비한 서버 토큰이 DB에 저장")
                 .isEqualTo("tok-server");
         assertThat(saved.getHolderName()).as("예금주명이 DB에 저장").isEqualTo("홍길동");
         assertThat(saved.isPrimary()).as("첫 계좌 자동 주계좌").isTrue();
@@ -163,6 +167,23 @@ class BankAccountRegisterIntegrationTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
+
+        assertThat(bankAccountRepository.findAll()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("인증 세션 없음/만료: consume이 ACCOUNT4009를 던지면 등록이 차단되고 아무것도 저장되지 않는다(charge-3 등가)")
+    void register_세션없음_ACCOUNT4009_미저장() {
+        // 클라가 request에 token을 실어 보내도(vestigial 필드) confirm 세션 없이는 등록 불가 —
+        // 구 흐름의 "verify 재발급" 가드를 대체하는 새 방어선이다.
+        given(verifySessionStore.consume(anyString(), anyString(), anyString()))
+                .willThrow(new BusinessException(AccountErrorCode.VERIFY_SESSION_NOT_FOUND));
+
+        assertThatThrownBy(() -> bankAccountService.registerAccount(
+                USER, registerRequest("004", "1234567890", "forged-token", "홍길동")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.VERIFY_SESSION_NOT_FOUND);
 
         assertThat(bankAccountRepository.findAll()).isEmpty();
     }
