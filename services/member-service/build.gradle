@@ -18,6 +18,11 @@ dependencies {
     implementation 'org.springframework.kafka:spring-kafka'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.14'
 
+    // 운영/스테이징 IdP(Cognito) 관리 API 호출용 AWS SDK v2 (가입 시 사용자 생성/비번설정 등).
+    // BOM으로 버전 관리 → 모듈 버전을 개별 명시하지 않는다. dev/test는 Authentik이라 런타임 미사용.
+    implementation platform('software.amazon.awssdk:bom:2.28.16')
+    implementation 'software.amazon.awssdk:cognitoidentityprovider'
+
     runtimeOnly 'com.mysql:mysql-connector-j'
 
     // 테스트는 인메모리 H2(MySQL 호환 모드)로 돈다 — 개발기 DB는 만지지 않는다(CLAUDE §10).

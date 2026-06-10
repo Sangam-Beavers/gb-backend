@@ -9,6 +9,18 @@ spring:
   jackson:
     property-naming-strategy: SNAKE_CASE
 
+# 운영/스테이징 IdP(AWS Cognito) 설정 — prod/stage 프로필에서만 사용(CognitoClientConfig·CognitoIdpUserClient).
+# dev/test는 Authentik(RealIdpUserClient)이라 아래 값이 필요 없다. 실제 값은 환경변수로만 주입한다
+# (커밋되는 이 파일엔 placeholder만 — 운영 yml/시크릿에서 COGNITO_* 주입). 가입 시 Cognito 관리 API 호출에 사용.
+#   - COGNITO_REGION        예: ap-northeast-2
+#   - COGNITO_USER_POOL_ID  예: ap-northeast-2_KP2h2Oq2z
+# 또한 SecurityConfig issuer-uri(AUTH_ISSUER_URI)를 Cognito issuer로 두어야 검표원이 Cognito 토큰을 신뢰한다:
+#   https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}
+auth:
+  cognito:
+    region: ${COGNITO_REGION:}
+    user-pool-id: ${COGNITO_USER_POOL_ID:}
+
 server:
   port: 8081
 
