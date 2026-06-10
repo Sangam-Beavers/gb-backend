@@ -13,8 +13,9 @@ import lombok.Getter;
  * 마이페이지 내 프로필 응답. 조회(GET)·수정(PATCH) 응답 공통.
  *
  * <p>{@code isVerified}는 신분증 인증 도메인 구현으로 실제 값(members.is_verified)을 내려보낸다.
- * {@code temperatureGrade}/{@code profileImageUrl}은 각각 커뮤니티 매너온도·이미지 업로드 도메인 소관이라
- * 아직 members에 저장하지 않고 임시 기본값을 내려보낸다(해당 도메인 구현 시 교체).
+ * {@code trustGrade}는 마일스톤 기반 신뢰등급 저장값(members.trust_grade — 이슈 #193, 레거시
+ * "생활온도(temperature_grade)" 폐기·대체)을 내려보낸다. {@code profileImageUrl}은 이미지 업로드 도메인
+ * 소관이라 아직 members에 저장하지 않고 임시 기본값(null)을 내려보낸다(해당 도메인 구현 시 교체).
  *
  * <p>JSON은 전역 SNAKE_CASE 설정으로 변환된다(public_id/is_verified/...). {@code Boolean isVerified}로 둔 건
  * getter가 {@code getIsVerified()}가 되어 snake_case가 {@code is_verified}로 떨어지게 하기 위함(primitive면 verified로 떨어짐).
@@ -43,8 +44,9 @@ public class ProfileResponse {
     @Schema(description = "신분증 인증 배지 여부. user_verifications APPROVED 시 true")
     private final Boolean isVerified;
 
-    @Schema(description = "커뮤니티 매너온도 등급(RED/YELLOW/GREEN/PURPLE/BLUE). (현재 기본값 — 커뮤니티 도메인 구현 시 실제 값)")
-    private final String temperatureGrade;
+    @Schema(description = "마일스톤 기반 신뢰등급. NEWCOMER=가입 기본, VERIFIED=신분증 인증 승인(이슈 #193)",
+            allowableValues = {"NEWCOMER", "VERIFIED"}, example = "VERIFIED")
+    private final String trustGrade;
 
     @Schema(description = "프로필 사진 URL. 미설정 시 null", nullable = true)
     private final String profileImageUrl;
@@ -54,7 +56,7 @@ public class ProfileResponse {
 
     @Builder
     private ProfileResponse(String publicId, String email, String nickname, String nationality,
-                            String language, String bio, Boolean isVerified, String temperatureGrade,
+                            String language, String bio, Boolean isVerified, String trustGrade,
                             String profileImageUrl, String createdAt) {
         this.publicId = publicId;
         this.email = email;
@@ -63,7 +65,7 @@ public class ProfileResponse {
         this.language = language;
         this.bio = bio;
         this.isVerified = isVerified;
-        this.temperatureGrade = temperatureGrade;
+        this.trustGrade = trustGrade;
         this.profileImageUrl = profileImageUrl;
         this.createdAt = createdAt;
     }
@@ -76,10 +78,10 @@ public class ProfileResponse {
                 .nationality(member.getNationality())
                 .language(member.getLanguage())
                 .bio(member.getBio())
-                // is_verified는 신분증 인증 도메인 구현 완료로 실제 값(members.is_verified)을 내려보낸다.
-                // temperature_grade/profile_image_url은 각각 커뮤니티 매너온도/이미지 업로드 도메인 구현 시 교체.
+                // is_verified·trust_grade는 members 저장값 그대로(이슈 #193 — 하드코딩 "GREEN" 제거).
+                // profile_image_url은 이미지 업로드 도메인 구현 시 교체.
                 .isVerified(member.isVerified())
-                .temperatureGrade("GREEN")
+                .trustGrade(member.getTrustGrade().name())
                 .profileImageUrl(null)
                 .createdAt(toUtcZ(member.getCreatedAt()))
                 .build();

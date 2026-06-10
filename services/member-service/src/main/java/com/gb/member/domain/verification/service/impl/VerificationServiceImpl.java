@@ -4,6 +4,7 @@ import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
+import com.gb.member.domain.member.service.TrustGradeService;
 import com.gb.member.domain.verification.dto.request.VerificationRequest;
 import com.gb.member.domain.verification.dto.response.VerificationStatusResponse;
 import com.gb.member.domain.verification.dto.response.VerificationSubmitResponse;
@@ -48,6 +49,7 @@ public class VerificationServiceImpl implements VerificationService {
     private final MemberRepository memberRepository;
     private final UserVerificationRepository verificationRepository;
     private final WalletClient walletClient;
+    private final TrustGradeService trustGradeService;
 
     /** self-injection: submitVerificationTx의 @Transactional 프록시 적용 위함(community/wallet 동일 패턴). */
     @Autowired
@@ -119,6 +121,9 @@ public class VerificationServiceImpl implements VerificationService {
             throw new BusinessException(CommonErrorCode.RESOURCE_ALREADY_EXISTS);
         }
         member.markVerified();
+        // 이슈 #193 — 인증 배지 변경은 신뢰등급 마일스톤이므로 같은 tx 안에서 재계산한다(단일 진입점.
+        // Phase 2 Kafka Consumer도 동일 메서드 호출). is_verified=true → VERIFIED 반영(dirty checking).
+        trustGradeService.recalculate(member);
 
         return verification;
     }

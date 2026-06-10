@@ -730,7 +730,7 @@ class MemberServiceImplTest {
     // ───────────────────────── 내 프로필 조회/수정 ─────────────────────────
 
     @Test
-    @DisplayName("getMyProfile: 활성 회원 프로필 반환. 미구현 도메인 필드는 기본값(미인증/GREEN/null)")
+    @DisplayName("getMyProfile: 활성 회원 프로필 반환. 신규 가입 기본값(미인증/NEWCOMER) + 미구현 이미지 필드는 null")
     void getMyProfile_성공() {
         Member member = memberWith("global_neighbor", "ko");
         when(memberRepository.findByPublicIdAndDeletedAtIsNull("pub-1")).thenReturn(Optional.of(member));
@@ -740,9 +740,10 @@ class MemberServiceImplTest {
         assertThat(response.getNickname()).isEqualTo("global_neighbor");
         assertThat(response.getNationality()).isEqualTo("VN");
         assertThat(response.getLanguage()).isEqualTo("ko");
-        // 아직 안 만든 도메인 필드는 기본값으로 내려간다.
+        // 신규 가입 기본값: 미인증 + 신뢰등급 NEWCOMER(이슈 #193 — 하드코딩 "GREEN" 제거, 저장값 반환).
         assertThat(response.getIsVerified()).isFalse();
-        assertThat(response.getTemperatureGrade()).isEqualTo("GREEN");
+        assertThat(response.getTrustGrade()).isEqualTo("NEWCOMER");
+        // 이미지 도메인은 아직 미구현 — 기본값(null)으로 내려간다.
         assertThat(response.getProfileImageUrl()).isNull();
         verifyNoInteractions(idpUserClient);
     }

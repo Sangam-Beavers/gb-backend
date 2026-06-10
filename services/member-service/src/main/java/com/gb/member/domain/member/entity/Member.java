@@ -78,6 +78,18 @@ public class Member extends BaseEntity {
     @Column(name = "is_verified", nullable = false)
     private boolean isVerified = false;
 
+    // 마일스톤 기반 신뢰등급(이슈 #193 — 레거시 "생활온도" 대체). Phase 1은 NEWCOMER/VERIFIED 2단계.
+    // 기본 NEWCOMER(가입 직후). @Builder에는 포함하지 않아 inline 기본값이 유지된다(isVerified와 동일 패턴).
+    // 산정 규칙은 TrustGradeService.recalculate 단일 진입점(Phase 2 Kafka Consumer도 같은 메서드 호출).
+    // @ColumnDefault: ddl-auto:update가 기존 행이 있는 members에 NOT NULL 컬럼을 ADD할 때 기존 행을
+    //   'NEWCOMER'로 백필한다(termsAgreed와 동일 사유). 단, 기존 is_verified=true 회원의 VERIFIED 승격은
+    //   DDL 기본값으로 불가 — 별도 백필 SQL(UPDATE members SET trust_grade='VERIFIED' WHERE is_verified=1)을
+    //   사람이 확인 후 1회 수행한다.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "trust_grade", nullable = false, length = 20)
+    @ColumnDefault("'NEWCOMER'")
+    private TrustGrade trustGrade = TrustGrade.NEWCOMER;
+
     // 자기소개(한 줄 소개). 마이페이지 프로필 수정 화면에서 입력. 선택값(미입력 시 null).
     @Column(name = "bio", length = 200)
     private String bio;
@@ -135,6 +147,14 @@ public class Member extends BaseEntity {
     /** 신분증 인증 승인 시 인증 배지를 부여한다. (verification 도메인 서비스에서 호출) */
     public void markVerified() {
         this.isVerified = true;
+    }
+
+    /**
+     * 신뢰등급 반영 (이슈 #193). 산정 규칙은 {@code TrustGradeService.recalculate}(단일 진입점)에만 두고,
+     * 엔티티는 의도가 드러나는 변경 메서드만 노출한다(@Setter 금지 원칙). updatedAt은 Auditing이 갱신.
+     */
+    public void applyTrustGrade(TrustGrade trustGrade) {
+        this.trustGrade = trustGrade;
     }
 
     /** 탈퇴(soft delete): deleted_at만 세팅하고 실제 row는 보존한다. (community softDelete 패턴) */
