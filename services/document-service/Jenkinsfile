@@ -55,10 +55,10 @@ pipeline {
 
   environment {
     REGISTRY     = "harbor.sb.fisa"
-    IMAGE_BASE   = "${REGISTRY}/global_bridge/document-service"
+    IMAGE_BASE   = "${REGISTRY}/global_bridge/document"
     IMAGE_TAG    = "${BUILD_NUMBER}"
     CONFIG_REPO  = "github.com/Sangam-Beavers/gb-infra"
-    VALUES_PATH  = "charts/document-service/values.yaml"
+    VALUES_PATH  = "charts/document/values.yaml"
     SERVICE_PATH = "services/document-service"
   }
 
@@ -97,42 +97,39 @@ pipeline {
       }
     }
 
-    stage('4) 이미지 빌드 & push (멀티아키 병렬)') {
-      parallel {
-        stage('amd64') {
-          steps {
-            container('kaniko') {
-              sh '''
-                /kaniko/executor \
-                  --context `pwd` \
-                  --dockerfile ${SERVICE_PATH}/Dockerfile \
-                  --destination ${IMAGE_BASE}:${IMAGE_TAG}-amd64 \
-                  --custom-platform=linux/amd64 \
-                  --snapshot-mode=redo \
-                  --skip-tls-verify
-              '''
-            }
-          }
-        }
-        stage('arm64') {
-          steps {
-            container('kaniko') {
-              sh '''
-                /kaniko/executor \
-                  --context `pwd` \
-                  --dockerfile ${SERVICE_PATH}/Dockerfile \
-                  --destination ${IMAGE_BASE}:${IMAGE_TAG}-arm64 \
-                  --custom-platform=linux/arm64 \
-                  --snapshot-mode=redo \
-                  --skip-tls-verify
-              '''
-            }
-          }
+    stage('4) amd64 이미지 빌드 & push') {
+      steps {
+        container('kaniko') {
+          sh '''
+            /kaniko/executor \
+              --context `pwd` \
+              --dockerfile ${SERVICE_PATH}/Dockerfile \
+              --destination ${IMAGE_BASE}:${IMAGE_TAG}-amd64 \
+              --custom-platform=linux/amd64 \
+              --snapshot-mode=redo \
+              --skip-tls-verify
+          '''
         }
       }
     }
 
-    stage('5) 멀티아키 manifest 합치기') {
+    stage('5) arm64 이미지 빌드 & push') {
+      steps {
+        container('kaniko') {
+          sh '''
+            /kaniko/executor \
+              --context `pwd` \
+              --dockerfile ${SERVICE_PATH}/Dockerfile \
+              --destination ${IMAGE_BASE}:${IMAGE_TAG}-arm64 \
+              --custom-platform=linux/arm64 \
+              --snapshot-mode=redo \
+              --skip-tls-verify
+          '''
+        }
+      }
+    }
+
+    stage('6) 멀티아키 manifest 합치기') {
       steps {
         container('regctl') {
           sh '''
@@ -144,7 +141,7 @@ pipeline {
       }
     }
 
-    stage('6) Config repo 업데이트 (GitOps)') {
+    stage('7) Config repo 업데이트 (GitOps)') {
       steps {
         container('git') {
           withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
