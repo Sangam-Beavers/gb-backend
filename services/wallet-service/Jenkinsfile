@@ -24,7 +24,14 @@ pipeline {
             args: ["infinity"]
             securityContext:
               runAsUser: 0
-          - name: kaniko
+          - name: kaniko-amd64
+            image: gcr.io/kaniko-project/executor:debug
+            command: ["sleep"]
+            args: ["infinity"]
+            volumeMounts:
+            - name: harbor-dockercfg
+              mountPath: /kaniko/.docker
+          - name: kaniko-arm64
             image: gcr.io/kaniko-project/executor:debug
             command: ["sleep"]
             args: ["infinity"]
@@ -99,7 +106,7 @@ pipeline {
 
     stage('4) amd64 이미지 빌드 & push') {
       steps {
-        container('kaniko') {
+        container('kaniko-amd64') {
           sh '''
             /kaniko/executor \
               --context `pwd` \
@@ -115,7 +122,7 @@ pipeline {
 
     stage('5) arm64 이미지 빌드 & push') {
       steps {
-        container('kaniko') {
+        container('kaniko-arm64') {
           sh '''
             /kaniko/executor \
               --context `pwd` \
