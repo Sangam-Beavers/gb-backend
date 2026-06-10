@@ -3,12 +3,14 @@ package com.gb.wallet.domain.account.controller;
 import com.gb.common.response.ApiResponse;
 import com.gb.common.response.ErrorResponse;
 import com.gb.wallet.domain.account.dto.request.ChargeRequest;
+import com.gb.wallet.domain.account.dto.request.ConfirmAccountRequest;
 import com.gb.wallet.domain.account.dto.request.RegisterAccountRequest;
 import com.gb.wallet.domain.account.dto.request.VerifyAccountRequest;
 import com.gb.wallet.domain.account.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.account.dto.response.AccountListResponse;
 import com.gb.wallet.domain.account.dto.response.AccountResponse;
 import com.gb.wallet.domain.account.dto.response.ChargeResponse;
+import com.gb.wallet.domain.account.dto.response.ConfirmAccountResponse;
 import com.gb.wallet.domain.account.dto.response.SupportedBankListResponse;
 import com.gb.wallet.domain.account.dto.response.VerifyAccountResponse;
 import com.gb.wallet.domain.account.service.BankAccountService;
@@ -148,20 +150,21 @@ public class AccountController {
         return ApiResponse.success(holderService.getAccountHolder(bankCode, accountNumber, userPublicId));
     }
 
-    /** 계좌 인증 요청(외부 Mock 은행 호출 → account_token 발급). 🔒 JWT 필요. 본체 DB 미사용. */
+    /** 계좌 인증 1단계 — 1원 소액이체 요청. 🔒 JWT 필요. 본체 DB 미사용. */
     @Operation(
-            summary = "계좌 연결 + 자동이체 인증 요청",
-            description = "은행 코드/계좌번호/예금주명으로 외부 Mock 은행에 자동이체 인증을 요청해 "
-                    + "account_token을 발급받는다. 본체 DB에는 아무것도 쓰지 않으며, "
-                    + "이어지는 POST /accounts 호출 시 클라이언트가 이 토큰을 함께 보내야 한다. "
-                    + "자동이체 인증은 Mock 은행 시뮬레이션으로 처리된다(실 은행 연동 전).")
+            summary = "계좌 인증 1단계 — 1원 소액이체 요청",
+            description = "은행 코드/계좌번호/예금주명으로 외부 Mock 은행에 1원을 입금한다. "
+                    + "입금 적요에 4자리 인증번호가 기재되며 유효 시간은 10분이다. "
+                    + "account_token은 발급되지 않으며, 사용자가 적요의 인증번호를 확인한 뒤 "
+                    + "POST /accounts/confirm으로 제출해야 한다. 본체 DB에는 아무것도 쓰지 않는다. "
+                    + "사용자 단위 rate-limit 적용(WACC-02).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "인증 성공. data.account_token 반환."),
+                    description = "1원 입금 성공. data.pending=true, data.expires_at 반환."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "COMMON4001 - 요청 값이 올바르지 않습니다. / ACCOUNT4002 - 계좌 인증에 실패했습니다.",
+                    description = "COMMON4001 - 요청 값이 올바르지 않습니다. / ACCOUNT4002 - 예금주 불일치.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "401",
@@ -173,23 +176,61 @@ public class AccountController {
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "429",
-                    description = "ACCOUNT4005 - 계좌 인증 요청 횟수를 초과했습니다(사용자 단위 rate-limit).",
+                    description = "ACCOUNT4005 - 계좌 인증 요청 횟수를 초과했습니다.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
-                    description = "COMMON5000 - 서버 오류(예상치 못한 예외).",
+                    description = "COMMON5000 - 서버 오류.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "503",
-                    description = "COMMON5031 - 일시적으로 처리할 수 없습니다(Mock 은행 통신 장애).",
+                    description = "COMMON5031 - Mock 은행 통신 장애.",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping("/verify")
     public ApiResponse<VerifyAccountResponse> verifyAccount(
             @Valid @RequestBody VerifyAccountRequest request,
             @CurrentUserPublicId String userPublicId) {
-        // rate-limit은 위조 가능한 IP가 아니라 위조불가 userPublicId로 키잉한다(WACC-02).
         return ApiResponse.success(bankAccountService.verifyAccount(request, userPublicId));
+    }
+
+    /** 계좌 인증 2단계 — 인증번호 확인. 🔒 JWT 필요. */
+    @Operation(
+            summary = "계좌 인증 2단계 — 인증번호 확인",
+            description = "POST /accounts/verify로 입금된 적요의 4자리 인증번호를 제출해 "
+                    + "account_token을 발급받는다. token은 서버 세션(Redis, 10분)에 저장되며 "
+                    + "클라이언트에게는 노출되지 않는다. 이후 POST /accounts(계좌 등록) 시 서버가 "
+                    + "세션을 원자 소비해 등록을 완료한다.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "인증 성공. data.verified=true 반환."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "ACCOUNT4008 - 인증번호가 올바르지 않습니다. / ACCOUNT4009 - 인증 세션 없음/만료.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "AUTH4011 - 인증이 필요합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "ACCOUNT4001 - 존재하지 않는 계좌입니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500",
+                    description = "COMMON5000 - 서버 오류(세션 저장 실패 등).",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "503",
+                    description = "COMMON5031 - Mock 은행 통신 장애.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @PostMapping("/confirm")
+    public ApiResponse<ConfirmAccountResponse> confirmAccount(
+            @Valid @RequestBody ConfirmAccountRequest request,
+            @CurrentUserPublicId String userPublicId) {
+        return ApiResponse.success(bankAccountService.confirmAccount(request, userPublicId));
     }
 
     /** 계좌 등록 최종 완료. 🔒 JWT 필요. */

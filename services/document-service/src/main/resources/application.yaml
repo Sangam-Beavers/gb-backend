@@ -64,7 +64,7 @@ gb:
     source: ${GB_ANALYSIS_SOURCE:development}
     result-queue-arn: ${GB_ANALYSIS_RESULT_QUEUE_ARN:}
     request-queue-url: ${GB_ANALYSIS_REQUEST_QUEUE_URL:}
-    upload-bucket: ${GB_ANALYSIS_UPLOAD_BUCKET:gb-document-uploads-dev}
+    upload-bucket: ${GB_ANALYSIS_UPLOAD_BUCKET:gb-document-bucket}
     upload-url-expires-seconds: ${GB_ANALYSIS_UPLOAD_URL_EXPIRES_SECONDS:600}
     aws-region: ${GB_ANALYSIS_AWS_REGION:ap-northeast-2}
     consumer-enabled: ${GB_ANALYSIS_CONSUMER_ENABLED:false}
