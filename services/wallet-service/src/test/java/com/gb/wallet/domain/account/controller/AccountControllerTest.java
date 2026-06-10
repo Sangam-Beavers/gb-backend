@@ -24,6 +24,7 @@ import com.gb.wallet.domain.account.dto.response.AccountHolderResponse;
 import com.gb.wallet.domain.account.dto.response.AccountListResponse;
 import com.gb.wallet.domain.account.dto.response.AccountResponse;
 import com.gb.wallet.domain.account.dto.response.ChargeResponse;
+import com.gb.wallet.domain.account.dto.response.ConfirmAccountResponse;
 import com.gb.wallet.domain.account.dto.response.SupportedBankListResponse;
 import com.gb.wallet.domain.account.dto.response.VerifyAccountResponse;
 import com.gb.wallet.domain.account.entity.Bank;
@@ -32,7 +33,7 @@ import com.gb.wallet.domain.account.service.BankAccountService;
 import com.gb.wallet.domain.account.service.ChargeService;
 import com.gb.wallet.domain.account.service.HolderService;
 import com.gb.wallet.domain.account.service.SupportedBankService;
-import com.gb.wallet.global.client.dto.AccountToken;
+import com.gb.wallet.global.client.dto.VerifyInitResult;
 import com.gb.wallet.global.config.WebConfig;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.security.CurrentUserPublicIdArgumentResolver;
@@ -102,13 +103,13 @@ class AccountControllerTest {
         return jwt().jwt(j -> j.claim("sub", "no-mapping"));
     }
 
-    // --- POST /verify ---
+    // --- POST /verify (1단계: 1원 소액이체 요청) ---
 
     @Test
-    @DisplayName("POST /verify 200: 정상 호출 시 ApiResponse(success=true)로 account_token 반환")
+    @DisplayName("POST /verify 200: 정상 호출 시 ApiResponse(success=true)로 pending/expires_at 반환, account_token 미노출")
     void verify_정상() throws Exception {
         given(bankAccountService.verifyAccount(any(), anyString()))
-                .willReturn(VerifyAccountResponse.from(new AccountToken("tok-abcdef")));
+                .willReturn(VerifyAccountResponse.from(new VerifyInitResult(true, "2026-06-09T12:44:56Z")));
 
         mockMvc.perform(post("/api/v1/accounts/verify")
                         .with(authedJwt())
@@ -119,7 +120,10 @@ class AccountControllerTest {
                                 "holder_name", "홍길동"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.account_token").value("tok-abcdef"));
+                .andExpect(jsonPath("$.data.pending").value(true))
+                .andExpect(jsonPath("$.data.expires_at").value("2026-06-09T12:44:56Z"))
+                // 1원 인증 방식: token은 confirm 후 서버 세션에만 보관 — 클라이언트 응답에 절대 노출 금지.
+                .andExpect(jsonPath("$.data.account_token").doesNotExist());
     }
 
     @Test
@@ -232,7 +236,7 @@ class AccountControllerTest {
     @DisplayName("POST /verify - 인증 사용자(public_id)를 rate-limit 키로 service에 전달(WACC-02, 위조불가 키잉)")
     void verify_forwardsUserPublicId() throws Exception {
         given(bankAccountService.verifyAccount(any(), anyString()))
-                .willReturn(VerifyAccountResponse.from(new AccountToken("tok")));
+                .willReturn(VerifyAccountResponse.from(new VerifyInitResult(true, "2026-06-09T12:44:56Z")));
 
         // X-Forwarded-For가 있어도 더 이상 키잉에 쓰이지 않는다 — 토큰의 public_id가 키다.
         mockMvc.perform(post("/api/v1/accounts/verify")
@@ -250,11 +254,113 @@ class AccountControllerTest {
         assertThat(userCaptor.getValue()).isEqualTo(USER_ID);
     }
 
+    // --- POST /confirm (2단계: 인증번호 확인) ---
+
+    @Test
+    @DisplayName("POST /confirm 200: 정상 호출 시 verified=true 반환, account_token 미노출(서버 세션에만 보관)")
+    void confirm_정상() throws Exception {
+        given(bankAccountService.confirmAccount(any(), anyString()))
+                .willReturn(ConfirmAccountResponse.success());
+
+        mockMvc.perform(post("/api/v1/accounts/confirm")
+                        .with(authedJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "bank_code", "004",
+                                "account_number", "1234567890",
+                                "code", "2814"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.verified").value(true))
+                // charge-3 등가 가드(API 경계): token은 confirm 응답에도 절대 노출되지 않는다.
+                .andExpect(jsonPath("$.data.account_token").doesNotExist());
+
+        verify(bankAccountService).confirmAccount(any(), eq(USER_ID));
+    }
+
+    @Test
+    @DisplayName("POST /confirm 400: code가 숫자 4자리가 아니면(@Pattern 위반) COMMON4001, service 미호출")
+    void confirm_code_형식_위반() throws Exception {
+        for (String bad : List.of("281", "28145", "28a4")) {
+            mockMvc.perform(post("/api/v1/accounts/confirm")
+                            .with(authedJwt())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(Map.of(
+                                    "bank_code", "004",
+                                    "account_number", "1234567890",
+                                    "code", bad))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("COMMON4001"));
+        }
+        // code 필드 누락
+        mockMvc.perform(post("/api/v1/accounts/confirm")
+                        .with(authedJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "bank_code", "004",
+                                "account_number", "1234567890"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON4001"));
+
+        verifyNoInteractions(bankAccountService);
+    }
+
+    @Test
+    @DisplayName("POST /confirm 400: 인증번호 불일치(ACCOUNT4008) → 400 + code")
+    void confirm_코드불일치_ACCOUNT4008() throws Exception {
+        willThrow(new BusinessException(AccountErrorCode.VERIFY_CODE_INVALID))
+                .given(bankAccountService).confirmAccount(any(), anyString());
+
+        mockMvc.perform(post("/api/v1/accounts/confirm")
+                        .with(authedJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "bank_code", "004",
+                                "account_number", "1234567890",
+                                "code", "0000"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("ACCOUNT4008"));
+    }
+
+    @Test
+    @DisplayName("POST /confirm 400: 인증 세션 없음/만료(ACCOUNT4009) → 400 + code")
+    void confirm_세션만료_ACCOUNT4009() throws Exception {
+        willThrow(new BusinessException(AccountErrorCode.VERIFY_SESSION_NOT_FOUND))
+                .given(bankAccountService).confirmAccount(any(), anyString());
+
+        mockMvc.perform(post("/api/v1/accounts/confirm")
+                        .with(authedJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "bank_code", "004",
+                                "account_number", "1234567890",
+                                "code", "2814"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("ACCOUNT4009"));
+    }
+
+    @Test
+    @DisplayName("POST /confirm 401: 토큰 없음 → AUTH4011 (보호 엔드포인트), service 미호출")
+    void confirm_토큰_없음_401() throws Exception {
+        mockMvc.perform(post("/api/v1/accounts/confirm")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "bank_code", "004",
+                                "account_number", "1234567890",
+                                "code", "2814"))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH4011"));
+
+        verifyNoInteractions(bankAccountService);
+    }
+
     // --- POST /accounts ---
 
     @Test
-    @DisplayName("POST /accounts 201: 정상 등록 → 201 Created + AccountResponse 반환 + service 호출")
+    @DisplayName("POST /accounts 201: account_token(vestigial) 없이도 정상 등록 → 201 Created + AccountResponse 반환 + service 호출")
     void register_정상_201() throws Exception {
+        // 1원 인증 흐름: token은 서버가 Redis 세션에서 소비하므로 클라이언트는 account_token을 보내지 않는다.
         given(bankAccountService.registerAccount(eq(USER_ID), any()))
                 .willReturn(stubAccountResponse());
 
@@ -264,7 +370,6 @@ class AccountControllerTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "bank_code", "004",
                                 "account_number", "1234567890",
-                                "account_token", "tok-abcdef",
                                 "holder_name", "홍길동"))))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
@@ -294,7 +399,7 @@ class AccountControllerTest {
     }
 
     @Test
-    @DisplayName("POST /accounts 400: 필수값 누락(account_token) → COMMON4001")
+    @DisplayName("POST /accounts 400: 필수값 누락(holder_name) → COMMON4001 (account_token은 vestigial이라 필수 아님)")
     void register_필수값_누락() throws Exception {
         mockMvc.perform(post("/api/v1/accounts")
                         .with(authedJwt())

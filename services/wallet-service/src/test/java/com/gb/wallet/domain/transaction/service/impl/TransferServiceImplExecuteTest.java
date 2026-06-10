@@ -48,6 +48,7 @@ import com.gb.wallet.global.config.TransferRateLimitProperties;
 import com.gb.wallet.global.redis.DistributedLockHelper;
 import com.gb.wallet.global.redis.IdempotencyCacheHelper;
 import com.gb.wallet.global.redis.RateLimitHelper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -113,6 +114,11 @@ class TransferServiceImplExecuteTest {
         // self.executeInTransaction / self.readPriorTransaction이 진짜 메서드를 타도록 자기 자신을 주입한다.
         // (Mock TransferService를 self로 박으면 위임 검증만 가능 — 송금은 catch 안 분기까지 봐야 함)
         ReflectionTestUtils.setField(service, "self", service);
+
+        // meterRegistry는 대응 @Mock이 없어 생성자 주입 시 null → execute()의 성공/실패(BusinessException)
+        // 경로 모두 counter(...).increment()에서 NPE. @Mock으로 두면 counter()가 null을 반환해 같은 문제이므로,
+        // 실제 인메모리 구현(SimpleMeterRegistry)을 박는다(ChargeServiceTest의 chargeProperties와 동일 패턴).
+        ReflectionTestUtils.setField(service, "meterRegistry", new SimpleMeterRegistry());
 
         // Rate-limit은 기본 통과(true) — execute() 최상단에서 차단되지 않도록. 초과 시나리오는 개별 테스트에서 willReturn(false)로 덮어쓴다.
         // lenient=false(기본)는 stubbed 호출이 한 번도 안 일어나면 strict 모드라 깨지므로, lenient()로 만든다.

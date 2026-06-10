@@ -14,6 +14,7 @@ import com.gb.common.exception.BusinessException;
 import com.gb.wallet.global.client.dto.AccountHolder;
 import com.gb.wallet.global.client.dto.AccountToken;
 import com.gb.wallet.global.client.dto.PayoutResult;
+import com.gb.wallet.global.client.dto.VerifyInitResult;
 import com.gb.wallet.global.client.dto.WithdrawalResult;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import java.math.BigDecimal;
@@ -34,6 +35,8 @@ import org.springframework.web.client.RestClient;
 class MockBankClientTest {
 
     private static final String BASE_URL = "http://mock-bank.test";
+    private static final String VERIFY_PATH = "/api/v1/bank/accounts/verify";
+    private static final String CONFIRM_PATH = "/api/v1/bank/accounts/confirm";
     private static final String WITHDRAW_PATH = "/api/v1/bank/transfers/withdrawal";
     private static final String PAYOUT_PATH = "/api/v1/bank/transfers/payout";
 
@@ -329,75 +332,184 @@ class MockBankClientTest {
                 .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
     }
 
+    // --- initVerify (계좌 인증 1단계: 1원 입금 + 인증번호 생성) ---
+
     @Test
-    @DisplayName("verify 200: data.account_token 매핑 + 요청 본문(bank_code/account_number/holder_name) 검증")
-    void verify_success() {
-        server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/verify"))
+    @DisplayName("initVerify 200: data.pending/expires_at 매핑 + 요청 본문(bank_code/account_number/holder_name) 검증")
+    void initVerify_success() {
+        server.expect(requestTo(BASE_URL + VERIFY_PATH))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(content().json(
                         "{\"bank_code\":\"004\",\"account_number\":\"1234567890\",\"holder_name\":\"홍길동\"}"))
                 .andRespond(withStatus(HttpStatus.OK)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .body("{\"success\":true,\"data\":{\"account_token\":\"tok-abcdef\"},\"message\":\"ok\"}"));
+                        .body("{\"success\":true,\"data\":{\"pending\":true,"
+                                + "\"expires_at\":\"2026-06-09T12:44:56Z\"},\"message\":\"ok\"}"));
 
-        AccountToken token = client.verify("004", "1234567890", "홍길동");
+        VerifyInitResult result = client.initVerify("004", "1234567890", "홍길동");
 
-        assertThat(token.accountToken()).isEqualTo("tok-abcdef");
+        assertThat(result.pending()).isTrue();
+        assertThat(result.expiresAt()).isEqualTo("2026-06-09T12:44:56Z");
         server.verify();
     }
 
     @Test
-    @DisplayName("verify 400 BANK4003 → BusinessException(ACCOUNT4002 인증 실패)")
-    void verify_holderMismatch_mappedToAccount4002() {
-        server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/verify"))
+    @DisplayName("initVerify 400 BANK4003 → BusinessException(ACCOUNT4002 인증 실패)")
+    void initVerify_holderMismatch_mappedToAccount4002() {
+        server.expect(requestTo(BASE_URL + VERIFY_PATH))
                 .andRespond(withStatus(HttpStatus.BAD_REQUEST)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body("{\"code\":\"BANK4003\",\"message\":\"예금주 불일치\"}"));
 
-        assertThatThrownBy(() -> client.verify("004", "1234567890", "임꺽정"))
+        assertThatThrownBy(() -> client.initVerify("004", "1234567890", "임꺽정"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(AccountErrorCode.ACCOUNT_VERIFICATION_FAILED);
     }
 
     @Test
-    @DisplayName("verify 404 BANK4040 → BusinessException(ACCOUNT4001 없는 계좌)")
-    void verify_accountNotFound_mappedToAccount4001() {
-        server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/verify"))
+    @DisplayName("initVerify 404 BANK4040 → BusinessException(ACCOUNT4001 없는 계좌)")
+    void initVerify_accountNotFound_mappedToAccount4001() {
+        server.expect(requestTo(BASE_URL + VERIFY_PATH))
                 .andRespond(withStatus(HttpStatus.NOT_FOUND)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body("{\"code\":\"BANK4040\",\"message\":\"존재하지 않는 계좌\"}"));
 
-        assertThatThrownBy(() -> client.verify("004", "0000000000", "홍길동"))
+        assertThatThrownBy(() -> client.initVerify("004", "0000000000", "홍길동"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(AccountErrorCode.ACCOUNT_NOT_FOUND);
     }
 
     @Test
-    @DisplayName("verify 200 + data.account_token 누락 → BusinessException(COMMON5031)")
-    void verify_missingToken_mappedToCommon5031() {
+    @DisplayName("initVerify 200 + 빈 본문(data null) → BusinessException(COMMON5031)")
+    void initVerify_emptyBody_mappedToCommon5031() {
         // 본문이 빈 객체 → envelope.data() 가 null로 떨어져 BANK5000 합성 후 매핑.
-        server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/verify"))
+        server.expect(requestTo(BASE_URL + VERIFY_PATH))
                 .andRespond(withStatus(HttpStatus.OK)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body("{}"));
 
-        assertThatThrownBy(() -> client.verify("004", "1234567890", "홍길동"))
+        assertThatThrownBy(() -> client.initVerify("004", "1234567890", "홍길동"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
     }
 
     @Test
-    @DisplayName("verify 5xx → BusinessException(COMMON5031)")
-    void verify_serverError_mappedToCommon5031() {
-        server.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/verify"))
+    @DisplayName("initVerify 200 + pending=false → BusinessException(COMMON5031) — 가드 세 번째 조건(!pending) 경계")
+    void initVerify_pendingFalse_mappedToCommon5031() {
+        // 200인데 pending=false는 계약 위반(입금이 시작되지 않음) — null 가드와 동일하게 BANK5000 합성.
+        server.expect(requestTo(BASE_URL + VERIFY_PATH))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"success\":true,\"data\":{\"pending\":false},\"message\":\"ok\"}"));
+
+        assertThatThrownBy(() -> client.initVerify("004", "1234567890", "홍길동"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("initVerify 5xx → BusinessException(COMMON5031)")
+    void initVerify_serverError_mappedToCommon5031() {
+        server.expect(requestTo(BASE_URL + VERIFY_PATH))
                 .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body("{\"code\":\"BANK5000\",\"message\":\"Mock 내부 오류\"}"));
 
-        assertThatThrownBy(() -> client.verify("004", "1234567890", "홍길동"))
+        assertThatThrownBy(() -> client.initVerify("004", "1234567890", "홍길동"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
+    }
+
+    // --- confirmVerify (계좌 인증 2단계: 인증번호 검증 → account_token 발급) ---
+
+    @Test
+    @DisplayName("confirmVerify 200: data.account_token 매핑 + 요청 본문(bank_code/account_number/code) 검증")
+    void confirmVerify_success() {
+        server.expect(requestTo(BASE_URL + CONFIRM_PATH))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().json(
+                        "{\"bank_code\":\"004\",\"account_number\":\"1234567890\",\"code\":\"2814\"}"))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"success\":true,\"data\":{\"account_token\":\"tok-abcdef\"},\"message\":\"ok\"}"));
+
+        AccountToken token = client.confirmVerify("004", "1234567890", "2814");
+
+        assertThat(token.accountToken()).isEqualTo("tok-abcdef");
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("confirmVerify 400 BANK4005(인증번호 불일치) → BusinessException(ACCOUNT4008)")
+    void confirmVerify_bank4005_mappedToAccount4008() {
+        server.expect(requestTo(BASE_URL + CONFIRM_PATH))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK4005\",\"message\":\"인증번호 불일치\"}"));
+
+        assertThatThrownBy(() -> client.confirmVerify("004", "1234567890", "0000"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.VERIFY_CODE_INVALID);
+    }
+
+    @Test
+    @DisplayName("confirmVerify 400 BANK4006(세션 없음/만료) → BusinessException(ACCOUNT4009)")
+    void confirmVerify_bank4006_mappedToAccount4009() {
+        server.expect(requestTo(BASE_URL + CONFIRM_PATH))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK4006\",\"message\":\"인증 세션 없음/만료\"}"));
+
+        assertThatThrownBy(() -> client.confirmVerify("004", "1234567890", "2814"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.VERIFY_SESSION_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("confirmVerify 400 BANK4007(이미 사용된 코드) → BusinessException(ACCOUNT4008 — 코드 무효와 동일 처리)")
+    void confirmVerify_bank4007_mappedToAccount4008() {
+        server.expect(requestTo(BASE_URL + CONFIRM_PATH))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK4007\",\"message\":\"이미 사용된 코드\"}"));
+
+        assertThatThrownBy(() -> client.confirmVerify("004", "1234567890", "2814"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(AccountErrorCode.VERIFY_CODE_INVALID);
+    }
+
+    @Test
+    @DisplayName("confirmVerify 200 + data.account_token 누락 → BusinessException(COMMON5031)")
+    void confirmVerify_missingToken_mappedToCommon5031() {
+        // 본문이 빈 객체 → envelope.data() 가 null로 떨어져 BANK5000 합성 후 매핑.
+        server.expect(requestTo(BASE_URL + CONFIRM_PATH))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{}"));
+
+        assertThatThrownBy(() -> client.confirmVerify("004", "1234567890", "2814"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("confirmVerify 5xx → BusinessException(COMMON5031)")
+    void confirmVerify_serverError_mappedToCommon5031() {
+        server.expect(requestTo(BASE_URL + CONFIRM_PATH))
+                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"BANK5000\",\"message\":\"Mock 내부 오류\"}"));
+
+        assertThatThrownBy(() -> client.confirmVerify("004", "1234567890", "2814"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode())
                 .isEqualTo(com.gb.common.exception.CommonErrorCode.SERVICE_UNAVAILABLE);
@@ -432,10 +544,11 @@ class MockBankClientTest {
     }
 
     @Test
-    @DisplayName("verify: 전역 SNAKE_CASE 설정 없이도 @JsonProperty로 envelope 매핑된다")
-    void verify_doesNotDependOnGlobalSnakeCaseStrategy() {
-        // inquiry와 같은 보장. verify도 envelope({data:{account_token}})이라 어댑터가 전역 Jackson 설정에
-        // 의존하지 않음을 별도 검증한다. inquiry 한 곳만 검증하면 verify가 깨지는 회귀를 못 잡는다.
+    @DisplayName("initVerify·confirmVerify: 전역 SNAKE_CASE 설정 없이도 @JsonProperty로 envelope 매핑된다")
+    void verifyFlow_doesNotDependOnGlobalSnakeCaseStrategy() {
+        // inquiry와 같은 보장. initVerify(expires_at)·confirmVerify(account_token) 모두 snake_case 필드라
+        // 어댑터가 전역 Jackson 설정에 의존하지 않음을 별도 검증한다. inquiry 한 곳만 검증하면
+        // 인증 경로가 깨지는 회귀를 못 잡는다.
         ObjectMapper defaultMapper = new ObjectMapper(); // SNAKE_CASE 미설정
         MappingJackson2HttpMessageConverter converter =
                 new MappingJackson2HttpMessageConverter(defaultMapper);
@@ -448,13 +561,20 @@ class MockBankClientTest {
         MockRestServiceServer localServer = MockRestServiceServer.bindTo(builder).build();
         MockBankClient localClient = new MockBankClient(builder.build(), defaultMapper);
 
-        localServer.expect(requestTo(BASE_URL + "/api/v1/bank/accounts/verify"))
+        localServer.expect(requestTo(BASE_URL + VERIFY_PATH))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"success\":true,\"data\":{\"pending\":true,"
+                                + "\"expires_at\":\"2026-06-09T12:44:56Z\"},\"message\":\"ok\"}"));
+        localServer.expect(requestTo(BASE_URL + CONFIRM_PATH))
                 .andRespond(withStatus(HttpStatus.OK)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body("{\"success\":true,\"data\":{\"account_token\":\"tok-xyz\"},\"message\":\"ok\"}"));
 
-        AccountToken token = localClient.verify("004", "1234567890", "홍길동");
+        VerifyInitResult init = localClient.initVerify("004", "1234567890", "홍길동");
+        AccountToken token = localClient.confirmVerify("004", "1234567890", "2814");
 
+        assertThat(init.expiresAt()).isEqualTo("2026-06-09T12:44:56Z");
         assertThat(token.accountToken()).isEqualTo("tok-xyz");
     }
 }
