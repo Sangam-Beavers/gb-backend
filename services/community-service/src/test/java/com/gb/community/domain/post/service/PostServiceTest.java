@@ -23,6 +23,8 @@ import com.gb.community.domain.post.repository.PostTranslationRepository;
 import com.gb.community.domain.post.service.impl.PostServiceImpl;
 import com.gb.community.global.client.MemberClient;
 import com.gb.community.global.client.MemberInfo;
+import com.gb.community.global.event.MilestoneAchieved;
+import com.gb.community.global.event.MilestoneType;
 import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +37,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -55,6 +58,9 @@ class PostServiceTest {
     @Mock private MemberClient memberClient;
     // #161 — 본문/제목 수정 시 번역 캐시 무효화 의존성. updatePost 외 경로는 호출되지 않음.
     @Mock private PostTranslationRepository postTranslationRepository;
+    // Phase 3(BE-8): 작성 본문이 마일스톤 내부 이벤트(MilestoneAchieved)를 발행한다 — @Mock이 없으면
+    // @InjectMocks 생성자 주입 시 null로 들어가 publishEvent에서 NPE.
+    @Mock private ApplicationEventPublisher eventPublisher;
     @InjectMocks private PostServiceImpl service;
 
     @BeforeEach
@@ -92,6 +98,10 @@ class PostServiceTest {
         assertThat(res.getIsLiked()).isFalse();
         verifyNoInteractions(likeRepository);
         verify(postRepository).save(any(Post.class));
+        // Phase 3(BE-8): 작성 성공 tx 안에서 COMMUNITY_DEBUT 내부 이벤트가 발행된다
+        // (Kafka 전송은 커밋 후 MilestoneEventPublisher 책임 — 여기선 도메인 발행만 검증).
+        verify(eventPublisher).publishEvent(
+                new MilestoneAchieved(USER, MilestoneType.COMMUNITY_DEBUT));
     }
 
     @Test
@@ -102,7 +112,8 @@ class PostServiceTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
 
-        verifyNoInteractions(postRepository, memberClient);
+        // Phase 3(BE-8): 작성 실패 시 마일스톤 이벤트도 미발행
+        verifyNoInteractions(postRepository, memberClient, eventPublisher);
     }
 
     @Test
@@ -152,7 +163,8 @@ class PostServiceTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommunityErrorCode.UNSUPPORTED_LANGUAGE);
 
-        verifyNoInteractions(postRepository, memberClient);
+        // Phase 3(BE-8): 작성 실패 시 마일스톤 이벤트도 미발행
+        verifyNoInteractions(postRepository, memberClient, eventPublisher);
     }
 
     // ----- get -----

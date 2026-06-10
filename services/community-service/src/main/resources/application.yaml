@@ -7,6 +7,18 @@ spring:
   # CLAUDE.md §5: JSON 필드는 snake_case. DTO 필드는 camelCase로 두고 전역 변환에 의존.
   jackson:
     property-naming-strategy: SNAKE_CASE
+  kafka:
+    # Kafka 브로커 주소 — 환경변수 주입(Phase 2 스파이크 결정 6, env 분리 패턴 동일).
+    # 브로커 미기동 환경(dev 로컬 등)에서도 앱은 정상 기동하고, 발행 실패만 ERROR 로그로 남는다(BE-8).
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+# Phase 3(BE-8) — 마일스톤 이벤트 발행(Kafka Producer). KafkaProducerConfig 참조.
+gb:
+  kafka:
+    producer:
+      # 브로커 미가용 시 send() 블로킹 상한(ms, Kafka 기본 60s). AFTER_COMMIT 발행이 API 응답
+      # 스레드에서 동기 실행되므로 짧게 캡해 Kafka 장애가 글/댓글 작성 응답 지연으로 번지지 않게 한다.
+      max-block-ms: 3000
 
 server:
   port: 8082

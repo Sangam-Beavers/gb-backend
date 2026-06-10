@@ -18,6 +18,8 @@ import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.dto.AccountToken;
 import com.gb.wallet.global.client.dto.VerifyInitResult;
 import com.gb.wallet.global.config.VerifyRateLimitProperties;
+import com.gb.wallet.global.event.MilestoneAchieved;
+import com.gb.wallet.global.event.MilestoneType;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.redis.DistributedLockHelper;
 import com.gb.wallet.global.redis.RateLimitHelper;
@@ -28,6 +30,7 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RLock;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -49,6 +52,7 @@ public class BankAccountServiceImpl implements BankAccountService {
     private final VerifyRateLimitProperties verifyRateLimitProperties;
     private final DistributedLockHelper distributedLockHelper;
     private final VerifySessionStore verifySessionStore;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * self-injection: *Locked 워커를 AOP 프록시를 통해 호출해 @Transactional이 적용되도록 한다.
@@ -185,6 +189,11 @@ public class BankAccountServiceImpl implements BankAccountService {
 
         try {
             BankAccount saved = bankAccountRepository.saveAndFlush(account);
+            // Phase 2(BE-3) — 계좌 인증·등록 완료 마일스톤. 내부 이벤트만 발행하고, Kafka 전송은 본 tx
+            // "커밋 후" MilestoneEventPublisher(AFTER_COMMIT)가 수행한다(롤백 시 미발행). 유저당 두 번째
+            // 계좌여도 매번 발행 — 수신측(member)이 (user, milestone) UNIQUE로 자연 멱등 스킵(스파이크 결정 3).
+            eventPublisher.publishEvent(
+                    new MilestoneAchieved(userPublicId, MilestoneType.BANK_ACCOUNT_CONNECTED));
             return AccountResponse.from(saved);
         } catch (DataIntegrityViolationException duplicate) {
             throw new BusinessException(AccountErrorCode.ACCOUNT_ALREADY_REGISTERED);

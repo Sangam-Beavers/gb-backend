@@ -29,4 +29,7 @@ dependencies {
     testRuntimeOnly 'com.h2database:h2'
     // 컨트롤러 슬라이스 테스트에서 jwt() 요청 후처리기로 인증 주체를 주입하기 위해 필요(spring-boot-starter-test 미포함).
     testImplementation 'org.springframework.security:spring-security-test'
+    // Phase 2(BE-4): EmbeddedKafka 통합 테스트(발행→수신→milestone 저장→등급 재계산) — 실브로커 불필요.
+    // 버전은 Boot BOM이 관리(spring-kafka와 동일 계열).
+    testImplementation 'org.springframework.kafka:spring-kafka-test'
 }

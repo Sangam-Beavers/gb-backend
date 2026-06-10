@@ -27,6 +27,10 @@ spring:
     port: 25
     username: test@localhost
     password: test
+  # Kafka: 컨텍스트 로딩용 더미 브로커 주소(@Value 해석용 — KafkaConsumerConfig).
+  # EmbeddedKafka 통합 테스트는 @EmbeddedKafka(bootstrapServersProperty)로 이 값을 덮어쓴다.
+  kafka:
+    bootstrap-servers: localhost:9092
 
 # 방식 B(검표원) 보안 설정은 issuer-uri로 외부 IdP의 JWKS를 부팅 시 받아온다.
 # 테스트에선 실제 IdP가 없으므로 issuer-uri를 두지 않고, 컨텍스트 테스트가 JwtDecoder를
@@ -47,9 +51,15 @@ app:
   password-reset:
     base-url: http://localhost/reset-password
 
-# 컬럼 암호화(AES-256-GCM) 마스터 키 — 테스트 전용 고정값.
-# Base64(32B all-zero). 비밀이 아니며 테스트 컨텍스트에서만 사용한다(실 데이터 없음).
-# 운영/개발기는 환경변수 GB_CRYPTO_KEY로만 주입한다(평문 yml 금지).
+# gb.* 커스텀 프로퍼티 (최상위 키는 파일당 1회만 — snakeyaml DuplicateKeyException 주의)
 gb:
+  # 컬럼 암호화(AES-256-GCM) 마스터 키 — 테스트 전용 고정값.
+  # Base64(32B all-zero). 비밀이 아니며 테스트 컨텍스트에서만 사용한다(실 데이터 없음).
+  # 운영/개발기는 환경변수 GB_CRYPTO_KEY로만 주입한다(평문 yml 금지).
   crypto:
     key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  # 일반 테스트 컨텍스트에선 브로커가 없으므로 마일스톤 리스너를 시작하지 않는다(무의미한 재연결 로그 차단).
+  # EmbeddedKafka 통합 테스트(MilestoneEventConsumerIntegrationTest)만 인라인 프로퍼티로 true로 켠다.
+  kafka:
+    milestone-consumer:
+      auto-startup: false
