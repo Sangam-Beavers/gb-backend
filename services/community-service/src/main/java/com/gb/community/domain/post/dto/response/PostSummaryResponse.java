@@ -59,8 +59,8 @@ public class PostSummaryResponse {
             example = "null", nullable = true)
     private final String authorProfileImageUrl;
 
-    @Schema(description = "작성자 신뢰등급(마일스톤 기반 — 이슈 #194). 표시정보 조회 실패·누락 시 NEWCOMER 폴백",
-            allowableValues = {"NEWCOMER", "VERIFIED"}, example = "VERIFIED")
+    @Schema(description = "작성자 신뢰등급(마일스톤 기반 — 이슈 #194, Phase 2 확장). 표시정보 조회 실패·누락 시 NEWCOMER 폴백",
+            allowableValues = {"NEWCOMER", "VERIFIED", "CONNECTED", "TRUSTED"}, example = "VERIFIED")
     private final String authorTrustGrade;
 
     @Schema(description = "요청자가 작성자 본인인지 여부(수정·삭제 버튼 노출 판단용)", example = "false")

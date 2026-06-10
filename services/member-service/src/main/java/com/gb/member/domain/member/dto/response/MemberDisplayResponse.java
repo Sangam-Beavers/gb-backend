@@ -44,8 +44,9 @@ public class MemberDisplayResponse {
     @Schema(description = "신분증 인증 배지 여부", example = "true")
     private final Boolean isVerified;
 
-    @Schema(description = "마일스톤 기반 신뢰등급. NEWCOMER=가입 기본, VERIFIED=신분증 인증 승인(이슈 #193)",
-            allowableValues = {"NEWCOMER", "VERIFIED"}, example = "VERIFIED")
+    @Schema(description = "마일스톤 기반 신뢰등급(이슈 #193, Phase 2 확장). NEWCOMER=가입 기본, "
+            + "VERIFIED=신분증 인증 승인, CONNECTED=+계좌 연결, TRUSTED=+첫 거래 완료(GOLD는 Phase 3)",
+            allowableValues = {"NEWCOMER", "VERIFIED", "CONNECTED", "TRUSTED"}, example = "VERIFIED")
     private final String trustGrade;
 
     @Schema(description = "프로필 사진 URL. 이미지 도메인 미구현으로 현재 항상 null", example = "null",
