@@ -2,6 +2,8 @@ package com.gb.community.global.client;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.gb.common.exception.BusinessException;
+import com.gb.common.exception.CommonErrorCode;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -14,6 +16,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 /**
@@ -145,10 +148,38 @@ public class RealMemberClient implements MemberClient {
         return null;
     }
 
+    @Override
+    public boolean isCommunityBanned(String userPublicId) {
+        // 검증 용도 — fail-fast. 장애·5xx는 COMMON5000, 404(회원 없음)는 차단 없음(false)으로 처리.
+        try {
+            CommunitySatusEnvelope env = restClient.get()
+                    .uri(memberApiBaseUrl
+                            + "/api/v1/internal/admin/members/{publicId}/community-status",
+                            userPublicId)
+                    .retrieve()
+                    .body(CommunitySatusEnvelope.class);
+            return env != null && env.data() != null && env.data().communityBanned();
+        } catch (HttpClientErrorException.NotFound e) {
+            // member-service가 회원을 찾지 못함 → 제한 없음으로 처리(작성 허용).
+            return false;
+        } catch (RuntimeException e) {
+            log.error("[RealMemberClient] isCommunityBanned 호출 실패 — member={}, msg={}", userPublicId, e.getMessage());
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
+    }
+
     // ----- member-service 응답 wire-format DTO -----
     // 외부(타 서비스) 응답 매핑은 전역 SNAKE_CASE 설정에 기대지 않고 @JsonProperty로 명시 고정한다
     // (MockBankClient 어댑터 규칙). 커뮤니티가 소비하지 않는 필드(name/nationality 등)는 선언하지 않고
     // @JsonIgnoreProperties로 무시한다(불필요 PII는 파싱조차 하지 않음).
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record CommunitySatusEnvelope(
+            @JsonProperty("data") CommunitySatusData data) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record CommunitySatusData(
+            @JsonProperty("community_banned") boolean communityBanned) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record DisplayInfoEnvelope(

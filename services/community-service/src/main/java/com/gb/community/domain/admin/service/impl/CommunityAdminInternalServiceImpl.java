@@ -4,11 +4,16 @@ import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.community.domain.admin.dto.response.AdminReportPageResponse;
 import com.gb.community.domain.admin.dto.response.AdminReportView;
+import com.gb.community.domain.admin.dto.response.AdminUserActivityResponse;
+import com.gb.community.domain.admin.dto.response.AdminUserCommentView;
+import com.gb.community.domain.admin.dto.response.AdminUserPostView;
 import com.gb.community.domain.admin.dto.response.ReportStatsResponse;
 import com.gb.community.domain.admin.service.CommunityAdminInternalService;
+import com.gb.community.domain.comment.repository.CommentRepository;
 import com.gb.community.domain.post.entity.Post;
 import com.gb.community.domain.post.entity.PostCategory;
 import com.gb.community.domain.post.repository.PostRepository;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -25,6 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class CommunityAdminInternalServiceImpl implements CommunityAdminInternalService {
 
     private final PostRepository postRepository;
+    private final CommentRepository commentRepository;
 
     @Override
     public AdminReportPageResponse reports(String category, int page, int size) {
@@ -59,6 +65,27 @@ public class CommunityAdminInternalServiceImpl implements CommunityAdminInternal
         // 발표용 프록시: 활성 게시글의 ~10% 가 신고 대기로 가정(상한 99).
         long pending = Math.min(99, active / 10);
         return new ReportStatsResponse(pending);
+    }
+
+    @Override
+    public AdminUserActivityResponse getUserActivity(String userPublicId, int postPage, int commentPage, int size) {
+        int normalSize = normalizeSize(size);
+        Pageable postPageable = PageRequest.of(Math.max(postPage, 0), normalSize,
+                Sort.by(Sort.Direction.DESC, "createdAt"));
+        Pageable commentPageable = PageRequest.of(Math.max(commentPage, 0), normalSize,
+                Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        Page<Post> posts = postRepository.findByUserPublicIdAndDeletedAtIsNull(userPublicId, postPageable);
+        Page<com.gb.community.domain.comment.entity.Comment> comments =
+                commentRepository.findByUserPublicIdAndDeletedAtIsNull(userPublicId, commentPageable);
+
+        List<AdminUserPostView> postViews = posts.getContent().stream().map(AdminUserPostView::from).toList();
+        List<AdminUserCommentView> commentViews = comments.getContent().stream().map(AdminUserCommentView::from).toList();
+
+        return new AdminUserActivityResponse(
+                postViews, posts.getNumber(), posts.getSize(), posts.getTotalElements(),
+                commentViews, comments.getNumber(), comments.getSize(), comments.getTotalElements()
+        );
     }
 
     private static PostCategory parseCategory(String category) {

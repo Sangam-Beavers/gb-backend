@@ -53,6 +53,7 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     @Query("""
             SELECT m FROM Member m
             WHERE m.deletedAt IS NULL
+              AND m.isAdmin = false
               AND (:q IS NULL
                    OR LOWER(m.email) LIKE LOWER(CONCAT('%', :q, '%'))
                    OR LOWER(m.name) LIKE LOWER(CONCAT('%', :q, '%'))

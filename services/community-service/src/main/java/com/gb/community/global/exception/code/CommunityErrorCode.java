@@ -29,7 +29,9 @@ public enum CommunityErrorCode implements ErrorCode {
     UNSUPPORTED_LANGUAGE(HttpStatus.BAD_REQUEST, "COMMUNITY4003", "지원하지 않는 언어입니다."),
     // #161 동적 번역 — 본문 5000자 초과 거절(Bedrock 단발 호출 비용·지연 캡). 작성 상한(게시글 10000자/
     // 댓글 2000자)과는 별도 — 번역은 더 짧은 캡으로 비용 보호.
-    CONTENT_TOO_LONG(HttpStatus.BAD_REQUEST, "COMMUNITY4004", "본문이 너무 깁니다.");
+    CONTENT_TOO_LONG(HttpStatus.BAD_REQUEST, "COMMUNITY4004", "본문이 너무 깁니다."),
+    // 커뮤니티 활동 제한된 회원이 글/댓글 작성 시도 시.
+    COMMUNITY_BANNED(HttpStatus.FORBIDDEN, "COMMUNITY4005", "커뮤니티 활동이 제한된 계정입니다.");
 
     private final HttpStatus httpStatus; // @Getter가 getHttpStatus/getCode/getMessage 생성 → ErrorCode 충족
     private final String code;

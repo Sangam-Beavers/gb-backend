@@ -36,4 +36,13 @@ public interface MemberClient {
      * auth §13-1) 1회 호출로 구현하며, API가 일부만 응답해도(미존재·탈퇴 제외) 이 계약을 지킨다.
      */
     Map<String, MemberInfo> getMembers(Collection<String> userPublicIds);
+
+    /**
+     * 커뮤니티 활동 제한 여부 조회. <b>fail-fast</b> — 검증 용도라 HTTP 장애 시 예외를 올린다.
+     * member-service {@code GET /api/v1/internal/admin/members/{publicId}/community-status} 호출.
+     *
+     * <p>member-service 5xx·연결 실패 → {@code COMMON5000}. 회원 없음(404) → 제한 없음(false) 처리
+     * (community-service가 게시글 작성 흐름에서 이미 사용자 존재를 전제함).
+     */
+    boolean isCommunityBanned(String userPublicId);
 }

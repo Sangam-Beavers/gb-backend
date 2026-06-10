@@ -50,3 +50,8 @@ wallet:
     verify-rate-limit:
       window-seconds: 60     # 카운터 윈도(초)
       limit: 10              # 윈도 내 허용 호출 수. 초과 시 ACCOUNT4005(429). Redis 장애 시 fail-open
+
+# app-admin-service 연동 (수수료 정책 조회)
+app-admin:
+  api:
+    base-url: ${APP_ADMIN_API_BASE_URL:http://localhost:8086}

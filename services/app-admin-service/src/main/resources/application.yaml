@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: app-admin-service
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+
+server:
+  port: 8086
+
+app-admin:
+  member-service:
+    base-url: ${MEMBER_INTERNAL_URL:http://localhost:8081}
+  community-service:
+    base-url: ${COMMUNITY_INTERNAL_URL:http://localhost:8082}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}

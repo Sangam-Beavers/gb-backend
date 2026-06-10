@@ -18,7 +18,16 @@ import org.springframework.http.HttpStatus;
 @RequiredArgsConstructor
 public enum AdminErrorCode implements ErrorCode {
 
-    ADMIN_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMIN4001", "존재하지 않는 관리자입니다.");
+    ADMIN_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMIN4001", "존재하지 않는 관리자입니다."),
+
+    // TODO: 아래 4002~4006은 app-admin-service(AppAdminErrorCode)로 이동 완료.
+    // admin-service/domain/ 하위의 notice·faq·feePolicy·exchangeRatePolicy·serviceSetting 패키지를
+    // 삭제하면 아래 코드들도 함께 제거할 것.
+    @Deprecated NOTICE_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMIN4002", "존재하지 않는 공지사항입니다."),
+    @Deprecated FAQ_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMIN4003", "존재하지 않는 FAQ입니다."),
+    @Deprecated FEE_POLICY_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMIN4004", "존재하지 않는 수수료 정책입니다."),
+    @Deprecated EXCHANGE_RATE_POLICY_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMIN4005", "존재하지 않는 환율 정책입니다."),
+    @Deprecated SERVICE_SETTING_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMIN4006", "존재하지 않는 서비스 설정입니다.");
 
     private final HttpStatus httpStatus;
     private final String code;

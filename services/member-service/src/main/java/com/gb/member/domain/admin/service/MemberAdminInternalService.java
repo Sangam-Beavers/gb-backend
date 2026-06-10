@@ -4,6 +4,7 @@ import com.gb.member.domain.admin.dto.response.AdminMemberLookupResponse;
 import com.gb.member.domain.admin.dto.response.AdminMemberPageResponse;
 import com.gb.member.domain.admin.dto.response.AdminMemberView;
 import com.gb.member.domain.admin.dto.response.MemberStatsResponse;
+import com.gb.member.domain.member.entity.MemberStatus;
 import java.util.Collection;
 
 public interface MemberAdminInternalService {
@@ -15,6 +16,12 @@ public interface MemberAdminInternalService {
     void approveKyc(String publicId);
 
     void rejectKyc(String publicId, String reason);
+
+    void changeStatus(String publicId, MemberStatus status);
+
+    void setCommunityBan(String publicId, boolean banned);
+
+    boolean isCommunityBanned(String publicId);
 
     AdminMemberLookupResponse lookup(Collection<String> userPublicIds);
 

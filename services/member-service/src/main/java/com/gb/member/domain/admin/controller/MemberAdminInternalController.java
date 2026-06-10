@@ -7,6 +7,7 @@ import com.gb.member.domain.admin.dto.response.AdminMemberPageResponse;
 import com.gb.member.domain.admin.dto.response.AdminMemberView;
 import com.gb.member.domain.admin.dto.response.MemberStatsResponse;
 import com.gb.member.domain.admin.service.MemberAdminInternalService;
+import com.gb.member.domain.member.entity.MemberStatus;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -14,6 +15,7 @@ import java.util.Arrays;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -50,6 +52,35 @@ public class MemberAdminInternalController {
     public ApiResponse<AdminMemberView> get(@PathVariable String publicId) {
         return ApiResponse.success(memberAdminInternalService.get(publicId));
     }
+
+    @Operation(summary = "[Internal] 회원 계정 상태 변경(ACTIVE/SUSPENDED)")
+    @PatchMapping("/members/{publicId}/status")
+    public ApiResponse<Void> changeStatus(
+            @PathVariable String publicId,
+            @RequestParam String status) {
+        MemberStatus memberStatus = MemberStatus.valueOf(status.toUpperCase());
+        memberAdminInternalService.changeStatus(publicId, memberStatus);
+        return ApiResponse.success(null);
+    }
+
+    @Operation(summary = "[Internal] 커뮤니티 활동 제한/해제")
+    @PatchMapping("/members/{publicId}/community-ban")
+    public ApiResponse<Void> setCommunityBan(
+            @PathVariable String publicId,
+            @RequestParam boolean banned) {
+        memberAdminInternalService.setCommunityBan(publicId, banned);
+        return ApiResponse.success(null);
+    }
+
+    @Operation(summary = "[Internal] 커뮤니티 제한 여부 조회 (service-to-service)")
+    @GetMapping("/members/{publicId}/community-status")
+    public ApiResponse<CommunitySatusResponse> getCommunityStatus(@PathVariable String publicId) {
+        boolean banned = memberAdminInternalService.isCommunityBanned(publicId);
+        return ApiResponse.success(new CommunitySatusResponse(banned));
+    }
+
+    /** 커뮤니티 제한 상태 응답 DTO. */
+    record CommunitySatusResponse(@com.fasterxml.jackson.annotation.JsonProperty("community_banned") boolean communityBanned) {}
 
     @Operation(summary = "[Internal] KYC 승인")
     @PostMapping("/members/{publicId}/kyc/approve")

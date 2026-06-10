@@ -94,6 +94,19 @@ public class Member extends BaseEntity {
     @Column(name = "bio", length = 200)
     private String bio;
 
+    // 관리자가 설정하는 계정 상태. 기본값 ACTIVE. ddl-auto:update가 신규 컬럼을 ADD하므로
+    // 기존 행은 DEFAULT 값('ACTIVE')으로 채워진다.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", length = 20, nullable = false)
+    @ColumnDefault("'ACTIVE'")
+    private MemberStatus status = MemberStatus.ACTIVE;
+
+    // 어드민 계정 여부. true면 관리자 회원 목록에서 제외된다.
+    // ddl-auto:update가 신규 컬럼을 ADD하므로 기존 행은 DEFAULT(false)로 채워진다.
+    @Column(name = "is_admin", nullable = false)
+    @ColumnDefault("false")
+    private boolean isAdmin = false;
+
     // 탈퇴(soft delete) 시각. null=활성, 값이 있으면 탈퇴한 회원.
     // createdAt/updatedAt은 BaseEntity(JPA Auditing)가 채운다(가입 시각 = createdAt).
     @Column(name = "deleted_at")
@@ -160,5 +173,21 @@ public class Member extends BaseEntity {
     /** 탈퇴(soft delete): deleted_at만 세팅하고 실제 row는 보존한다. (community softDelete 패턴) */
     public void softDelete() {
         this.deletedAt = LocalDateTime.now(ZoneOffset.UTC);
+    }
+
+    /** 관리자 계정 상태 변경 (ACTIVE ↔ SUSPENDED). */
+    public void changeStatus(MemberStatus status) {
+        this.status = status;
+    }
+
+    // 커뮤니티 활동 제한 여부. false=정상, true=글/댓글 작성 차단.
+    // ddl-auto:update가 신규 컬럼을 ADD하므로 기존 행은 DEFAULT(false)로 채워진다.
+    @Column(name = "community_banned", nullable = false)
+    @ColumnDefault("false")
+    private boolean communityBanned = false;
+
+    /** 관리자 커뮤니티 활동 제한/해제. */
+    public void setCommunityBanned(boolean communityBanned) {
+        this.communityBanned = communityBanned;
     }
 }

@@ -2,6 +2,7 @@ package com.gb.community.domain.admin.controller;
 
 import com.gb.common.response.ApiResponse;
 import com.gb.community.domain.admin.dto.response.AdminReportPageResponse;
+import com.gb.community.domain.admin.dto.response.AdminUserActivityResponse;
 import com.gb.community.domain.admin.dto.response.ReportStatsResponse;
 import com.gb.community.domain.admin.service.CommunityAdminInternalService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -50,5 +51,16 @@ public class CommunityAdminInternalController {
     @GetMapping("/stats/reports")
     public ApiResponse<ReportStatsResponse> stats() {
         return ApiResponse.success(communityAdminInternalService.stats());
+    }
+
+    @Operation(summary = "[Internal] 회원 커뮤니티 활동 조회(글+댓글)")
+    @GetMapping("/members/{userPublicId}/activity")
+    public ApiResponse<AdminUserActivityResponse> userActivity(
+            @PathVariable String userPublicId,
+            @RequestParam(defaultValue = "0") int post_page,
+            @RequestParam(defaultValue = "0") int comment_page,
+            @RequestParam(defaultValue = "10") int size) {
+        return ApiResponse.success(
+                communityAdminInternalService.getUserActivity(userPublicId, post_page, comment_page, size));
     }
 }

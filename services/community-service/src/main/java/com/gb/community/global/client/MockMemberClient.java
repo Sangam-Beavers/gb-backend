@@ -43,4 +43,10 @@ public class MockMemberClient implements MemberClient {
                 .distinct()
                 .collect(Collectors.toMap(Function.identity(), this::getMember));
     }
+
+    @Override
+    public boolean isCommunityBanned(String userPublicId) {
+        // 삭제 후보 Mock — 항상 차단 없음으로 처리.
+        return false;
+    }
 }
