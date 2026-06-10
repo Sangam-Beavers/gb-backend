@@ -38,6 +38,8 @@ import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.config.ChargeProperties;
+import com.gb.wallet.global.event.MilestoneAchieved;
+import com.gb.wallet.global.event.MilestoneType;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import com.gb.wallet.global.redis.IdempotencyCacheHelper;
@@ -54,6 +56,7 @@ import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -78,6 +81,9 @@ class ChargeServiceTest {
     @Mock private ChargeAttemptWriter chargeAttemptWriter;
     @Mock private IdempotencyCacheHelper idempotencyCacheHelper;
     @Mock private ObjectMapper objectMapper;
+    // Phase 2(BE-3): doCharge가 마일스톤 내부 이벤트(MilestoneAchieved)를 발행한다 — @Mock이 없으면
+    // @InjectMocks 생성자 주입 시 null로 들어가 publishEvent에서 NPE.
+    @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private ChargeService self;
     @InjectMocks private ChargeServiceImpl service;
 
@@ -182,6 +188,11 @@ class ChargeServiceTest {
         InOrder order = inOrder(chargeAttemptWriter, bankClient);
         order.verify(chargeAttemptWriter).record(KEY, USER, 1L, amount, CurrencyType.KRW);
         order.verify(bankClient).withdraw(TOKEN, amount, "KRW", KEY);
+
+        // Phase 2(BE-3): 충전 COMPLETED tx 안에서 FIRST_TRANSACTION_COMPLETED 내부 이벤트가 발행된다
+        // (Kafka 전송은 커밋 후 MilestoneEventPublisher 책임 — 여기선 도메인 발행만 검증).
+        verify(eventPublisher).publishEvent(
+                new MilestoneAchieved(USER, MilestoneType.FIRST_TRANSACTION_COMPLETED));
     }
 
     @Test
@@ -513,6 +524,8 @@ class ChargeServiceTest {
         verifyNoInteractions(bankClient, walletRepository, walletBalanceRepository);
         verify(transactionRepository, never()).save(any());
         verify(auditLogRepository, never()).save(any());
+        // Phase 2(BE-3): 멱등 재반환은 새 거래 완료가 아니므로 마일스톤 이벤트도 미발행.
+        verifyNoInteractions(eventPublisher);
     }
 
     @Test

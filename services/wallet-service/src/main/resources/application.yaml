@@ -8,6 +8,18 @@ spring:
   jackson:
     # 전역 설정: 모든 응답 JSON 필드명을 camelCase → snake_case로 직렬화 (명세 규칙).
     property-naming-strategy: SNAKE_CASE
+  kafka:
+    # Kafka 브로커 주소 — 환경변수 주입(Phase 2 스파이크 결정 6, env 분리 패턴 동일).
+    # 브로커 미기동 환경(dev 로컬 등)에서도 앱은 정상 기동하고, 발행 실패만 ERROR 로그로 남는다(BE-3).
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+# Phase 2 — 마일스톤 이벤트 발행(Kafka Producer). KafkaProducerConfig 참조.
+gb:
+  kafka:
+    producer:
+      # 브로커 미가용 시 send() 블로킹 상한(ms, Kafka 기본 60s). AFTER_COMMIT 발행이 API 응답
+      # 스레드에서 동기 실행되므로 짧게 캡해 Kafka 장애가 충전/송금 응답 지연으로 번지지 않게 한다.
+      max-block-ms: 3000
 
 server:
   port: 8084

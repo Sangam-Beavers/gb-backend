@@ -17,6 +17,11 @@ spring:
   sql:
     init:
       mode: never
+  # Kafka: 테스트엔 브로커가 없다. 통합 테스트(@SpringBootTest)가 실제 커밋을 하면 AFTER_COMMIT 발행
+  # (MilestoneEventPublisher)이 send()를 시도하는데, 블로킹 상한을 바짝 줄여(기본 60s → 100ms) 즉시
+  # 실패(ERROR 로그)하고 지나가게 한다 — 발행 실패는 비즈니스 흐름에 영향 없음(BE-3 설계 그대로).
+  kafka:
+    bootstrap-servers: localhost:9092
   jackson:
     # main과 동일한 전역 규칙(응답 JSON 검증 시 대비).
     property-naming-strategy: SNAKE_CASE
@@ -44,3 +49,9 @@ management:
 bank:
   api:
     base-url: http://localhost:0
+
+# Kafka send() 블로킹 상한(위 spring.kafka 주석 참고) — 브로커 없는 테스트에서 100ms로 즉시 실패시킨다.
+gb:
+  kafka:
+    producer:
+      max-block-ms: 100

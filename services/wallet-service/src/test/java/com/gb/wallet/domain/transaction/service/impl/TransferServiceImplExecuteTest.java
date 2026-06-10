@@ -41,6 +41,8 @@ import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.common.enums.WalletStatus;
+import com.gb.wallet.global.event.MilestoneAchieved;
+import com.gb.wallet.global.event.MilestoneType;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
@@ -67,6 +69,7 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.redisson.api.RLock;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -99,6 +102,9 @@ class TransferServiceImplExecuteTest {
     @Mock private TransferRateLimitProperties transferRateLimitProperties;
     @Mock private TransferPinGate transferPinGate;
     @Mock private ObjectMapper objectMapper;
+    // Phase 2(BE-3): executeInTransaction이 마일스톤 내부 이벤트(MilestoneAchieved)를 발행한다 — @Mock이
+    // 없으면 @InjectMocks 생성자 주입 시 null로 들어가 publishEvent에서 NPE.
+    @Mock private ApplicationEventPublisher eventPublisher;
     @InjectMocks private TransferServiceImpl service;
 
     private static final String SENDER_USER = "sender-user-uuid";
@@ -188,6 +194,11 @@ class TransferServiceImplExecuteTest {
 
         // TX-PIN: 사용자 직접 호출은 자금 이동 전에 PIN 게이트를 통과해야 한다(마커 원자 소비).
         verify(transferPinGate).requireVerified(SENDER_USER);
+
+        // Phase 2(BE-3): 송금 COMPLETED tx 안에서 송신자 기준 FIRST_TRANSACTION_COMPLETED 내부 이벤트 발행
+        // (Kafka 전송은 커밋 후 MilestoneEventPublisher 책임 — 여기선 도메인 발행만 검증).
+        verify(eventPublisher).publishEvent(
+                new MilestoneAchieved(SENDER_USER, MilestoneType.FIRST_TRANSACTION_COMPLETED));
     }
 
     @Test
@@ -872,6 +883,10 @@ class TransferServiceImplExecuteTest {
 
         // TX-PIN: REMITTANCE(외부 출금)도 자금 이동 전 PIN 게이트를 통과해야 한다(게이트는 유형 분기 이전 공용 코드).
         verify(transferPinGate).requireVerified(SENDER_USER);
+
+        // Phase 2(BE-3): 현금화(REMITTANCE) COMPLETED tx 안에서도 FIRST_TRANSACTION_COMPLETED 내부 이벤트 발행.
+        verify(eventPublisher).publishEvent(
+                new MilestoneAchieved(SENDER_USER, MilestoneType.FIRST_TRANSACTION_COMPLETED));
     }
 
     @Test

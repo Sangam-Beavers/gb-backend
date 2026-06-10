@@ -50,6 +50,8 @@ import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.MemberErrorCode;
 import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.config.TransferRateLimitProperties;
+import com.gb.wallet.global.event.MilestoneAchieved;
+import com.gb.wallet.global.event.MilestoneType;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import com.gb.wallet.global.redis.DistributedLockHelper;
 import com.gb.wallet.global.redis.IdempotencyCacheHelper;
@@ -76,6 +78,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -130,6 +133,7 @@ public class TransferServiceImpl implements TransferService {
     private final TransferPinGate transferPinGate;
     private final ObjectMapper objectMapper;
     private final MeterRegistry meterRegistry;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * 송금 rate-limit 카운터 키 prefix(user 단위).
@@ -916,6 +920,12 @@ public class TransferServiceImpl implements TransferService {
                     .status(TransactionStatus.COMPLETED)
                     .build());
 
+            // (8) Phase 2(BE-3) — 송금 COMPLETED 마일스톤(송신자 기준 — "거래를 수행"한 쪽만. 수취는
+            //     거래 실적이 아니라 발행하지 않는다). Kafka 전송은 본 tx "커밋 후" MilestoneEventPublisher
+            //     (AFTER_COMMIT)가 수행(롤백/race 시 미발행). 첫 건 판단 없이 매번 발행 — 수신측 자연 멱등.
+            eventPublisher.publishEvent(new MilestoneAchieved(
+                    senderWallet.getUserPublicId(), MilestoneType.FIRST_TRANSACTION_COMPLETED));
+
             return TransferExecuteResponse.from(transaction);
         }
     }
@@ -1118,6 +1128,11 @@ public class TransferServiceImpl implements TransferService {
                 .afterBalance(senderAfter)
                 .status(TransactionStatus.COMPLETED)
                 .build());
+
+        // (11) Phase 2(BE-3) — 현금화(REMITTANCE) COMPLETED 마일스톤. INTERNAL_TRANSFER 경로와 동일하게
+        //      커밋 후(AFTER_COMMIT) 전송되며, 멱등 재반환·롤백 경로에서는 발행되지 않는다.
+        eventPublisher.publishEvent(new MilestoneAchieved(
+                senderWallet.getUserPublicId(), MilestoneType.FIRST_TRANSACTION_COMPLETED));
 
         return TransferExecuteResponse.from(transaction);
     }

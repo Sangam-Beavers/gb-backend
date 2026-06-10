@@ -31,6 +31,8 @@ import com.gb.wallet.global.client.dto.AccountHolder;
 import com.gb.wallet.global.client.dto.AccountToken;
 import com.gb.wallet.global.client.dto.VerifyInitResult;
 import com.gb.wallet.global.config.VerifyRateLimitProperties;
+import com.gb.wallet.global.event.MilestoneAchieved;
+import com.gb.wallet.global.event.MilestoneType;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.redis.DistributedLockHelper;
 import com.gb.wallet.global.redis.RateLimitHelper;
@@ -73,9 +75,8 @@ class BankAccountServiceTest {
     @Mock private DistributedLockHelper distributedLockHelper;
     @Mock private VerifySessionStore verifySessionStore;
     @Mock private BankAccountService self;
-    // BE-3 임시 — Fix PR 시점엔 HEAD에 publishEvent 없음, 충돌 시 이 줄만 조정.
-    // 워킹트리의 registerAccountLocked 성공 경로가 eventPublisher.publishEvent를 호출하므로 null NPE 방지용.
-    // 이벤트 발행 검증(verify)은 BE-3에서 별도 추가한다 — 여기서는 금지.
+    // Phase 2(#199): registerAccountLocked 성공 경로가 마일스톤 내부 이벤트(MilestoneAchieved)를 발행한다 —
+    // @Mock이 없으면 @InjectMocks 생성자 주입 시 null로 들어가 publishEvent에서 NPE.
     @Mock private ApplicationEventPublisher eventPublisher;
     @InjectMocks private BankAccountServiceImpl service;
 
@@ -415,6 +416,11 @@ class BankAccountServiceTest {
         // F1(ACC1 회귀 가드): 등록 본문 critical section엔 외부호출(inquiry)·은행조회(findByCode)·
         // 세션 소비(GETDEL)가 없어야 한다 — 모두 락 밖 registerAccount에서 끝난다.
         verifyNoInteractions(bankClient, bankRepository, verifySessionStore);
+
+        // Phase 2(#199): 등록 성공 tx 안에서 BANK_ACCOUNT_CONNECTED 내부 이벤트가 발행된다
+        // (Kafka 전송은 커밋 후 MilestoneEventPublisher 책임 — 여기선 도메인 발행만 검증).
+        verify(eventPublisher).publishEvent(
+                new MilestoneAchieved(USER_PUBLIC_ID, MilestoneType.BANK_ACCOUNT_CONNECTED));
     }
 
     @Test
@@ -455,7 +461,8 @@ class BankAccountServiceTest {
 
         verify(bankAccountRepository, never()).saveAndFlush(any());
         // 등록 본문엔 외부호출·세션 소비가 없다(inquiry·consume은 락 밖 registerAccount에서 끝남).
-        verifyNoInteractions(bankClient, verifySessionStore);
+        // Phase 2(#199): 등록 실패 시 마일스톤 이벤트도 미발행.
+        verifyNoInteractions(bankClient, verifySessionStore, eventPublisher);
     }
 
     @Test

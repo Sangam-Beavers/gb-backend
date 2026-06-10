@@ -27,6 +27,8 @@ import com.gb.wallet.global.common.enums.TransactionType;
 import com.gb.wallet.global.common.enums.WalletStatus;
 import com.gb.wallet.global.common.util.BestEffortRequiresNew;
 import com.gb.wallet.global.config.ChargeProperties;
+import com.gb.wallet.global.event.MilestoneAchieved;
+import com.gb.wallet.global.event.MilestoneType;
 import com.gb.wallet.global.exception.code.AccountErrorCode;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import com.gb.wallet.global.redis.IdempotencyCacheHelper;
@@ -37,6 +39,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -72,6 +75,7 @@ public class ChargeServiceImpl implements ChargeService {
     private final IdempotencyCacheHelper idempotencyCacheHelper;
     private final ObjectMapper objectMapper;
     private final MeterRegistry meterRegistry;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * self-injection: {@code @Transactional}이 적용되려면 {@link #doCharge}/{@link #readPrior}를 AOP
@@ -284,6 +288,13 @@ public class ChargeServiceImpl implements ChargeService {
                 .status(TransactionStatus.COMPLETED)
                 .ipAddress(clientIp)
                 .build());
+
+        // (10) Phase 2(BE-3) — 충전 COMPLETED 마일스톤. 내부 이벤트만 발행하고, Kafka 전송은 본 tx
+        //      "커밋 후" MilestoneEventPublisher(AFTER_COMMIT)가 수행한다(롤백/race 시 미발행). "첫 거래인지"
+        //      판단하지 않고 매번 발행 — 수신측(member) 자연 멱등 스킵(스파이크 발행 시점 정의). 멱등 재반환
+        //      경로((1) prior hit / readPrior)는 새 완료가 아니므로 여기 도달하지 않아 발행되지 않는다.
+        eventPublisher.publishEvent(
+                new MilestoneAchieved(userPublicId, MilestoneType.FIRST_TRANSACTION_COMPLETED));
 
         return ChargeResponse.of(tx, accountPublicId, afterBalance);
     }
