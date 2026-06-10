@@ -9,14 +9,32 @@ pipeline {
             image: eclipse-temurin:17-jdk
             command: ["sleep"]
             args: ["infinity"]
+            resources:
+              requests:
+                memory: "1Gi"
+                cpu: "500m"
+              limits:
+                memory: "2Gi"
           - name: scanner
             image: sonarsource/sonar-scanner-cli:latest
             command: ["sleep"]
             args: ["infinity"]
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "200m"
+              limits:
+                memory: "1Gi"
           - name: kaniko-amd64
             image: gcr.io/kaniko-project/executor:debug
             command: ["sleep"]
             args: ["infinity"]
+            resources:
+              requests:
+                memory: "1Gi"
+                cpu: "500m"
+              limits:
+                memory: "2Gi"
             volumeMounts:
             - name: harbor-dockercfg
               mountPath: /kaniko/.docker
@@ -24,6 +42,12 @@ pipeline {
             image: gcr.io/kaniko-project/executor:debug
             command: ["sleep"]
             args: ["infinity"]
+            resources:
+              requests:
+                memory: "1Gi"
+                cpu: "500m"
+              limits:
+                memory: "2Gi"
             volumeMounts:
             - name: harbor-dockercfg
               mountPath: /kaniko/.docker
