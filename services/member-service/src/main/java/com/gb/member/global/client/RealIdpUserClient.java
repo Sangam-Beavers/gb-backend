@@ -11,6 +11,7 @@ import java.util.Locale;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -46,6 +47,9 @@ import org.springframework.web.client.RestClientResponseException;
  */
 @Slf4j
 @Component
+// dev/test/기본 환경 전용(개발기 IdP=Authentik). 운영/스테이징은 CognitoIdpUserClient가 대신 뜬다.
+// 두 구현이 같은 인터페이스라, 프로필로 정확히 1개만 등록되게 분리한다(빈 충돌 방지).
+@Profile("!prod & !stage")
 public class RealIdpUserClient implements IdpUserClient {
 
     private final RestClient restClient;
