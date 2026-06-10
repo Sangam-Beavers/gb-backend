@@ -18,16 +18,21 @@ public class SupportedBankResponse {
     @Schema(description = "은행명", example = "KB국민은행")
     private final String bankName;
 
+    @Schema(description = "국가 코드 (ISO 3166-1 alpha-2)", example = "KR")
+    private final String country;
+
     @Builder
-    private SupportedBankResponse(String bankCode, String bankName) {
+    private SupportedBankResponse(String bankCode, String bankName, String country) {
         this.bankCode = bankCode;
         this.bankName = bankName;
+        this.country = country;
     }
 
     public static SupportedBankResponse from(Bank bank) {
         return SupportedBankResponse.builder()
                 .bankCode(bank.getCode())
                 .bankName(bank.getName())
+                .country(bank.getCountry())
                 .build();
     }
 }

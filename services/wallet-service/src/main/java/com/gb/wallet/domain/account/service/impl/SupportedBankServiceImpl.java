@@ -18,7 +18,7 @@ public class SupportedBankServiceImpl implements SupportedBankService {
 
     @Override
     public SupportedBankListResponse getSupportedBanks() {
-        List<Bank> banks = bankRepository.findAllByIsDomesticTrueAndIsActiveTrueOrderByNameAsc();
+        List<Bank> banks = bankRepository.findAllByIsActiveTrueOrderByCountryAscNameAsc();
         return SupportedBankListResponse.from(banks);
     }
 }
