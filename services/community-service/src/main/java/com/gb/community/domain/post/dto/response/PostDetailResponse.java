@@ -47,8 +47,16 @@ public class PostDetailResponse {
             example = "ko")
     private final String language;
 
+    @Schema(description = "작성자 식별자(UUID). 사진 미설정 시 기본 아바타 시드로 사용",
+            example = "11111111-1111-1111-1111-111111111111")
+    private final String authorPublicId;
+
     @Schema(description = "작성자 닉네임", example = "Minh")
     private final String authorNickname;
+
+    @Schema(description = "작성자 프로필 사진 URL. 미설정 시 null(프론트는 기본 아바타로 대체)",
+            example = "null", nullable = true)
+    private final String authorProfileImageUrl;
 
     @Schema(description = "작성자 인증 배지 여부", example = "true")
     private final boolean authorIsVerified;
@@ -74,15 +82,18 @@ public class PostDetailResponse {
 
     @Builder
     private PostDetailResponse(String publicId, String category, String title, String content,
-                              String language, String authorNickname, boolean authorIsVerified,
-                              Boolean isAuthor, Boolean isLiked, Integer likeCount, Integer commentCount,
-                              String createdAt, String updatedAt) {
+                              String language, String authorPublicId, String authorNickname,
+                              String authorProfileImageUrl, boolean authorIsVerified, Boolean isAuthor,
+                              Boolean isLiked, Integer likeCount, Integer commentCount, String createdAt,
+                              String updatedAt) {
         this.publicId = publicId;
         this.category = category;
         this.title = title;
         this.content = content;
         this.language = language;
+        this.authorPublicId = authorPublicId;
         this.authorNickname = authorNickname;
+        this.authorProfileImageUrl = authorProfileImageUrl;
         this.authorIsVerified = authorIsVerified;
         this.isAuthor = isAuthor;
         this.isLiked = isLiked;
@@ -107,7 +118,9 @@ public class PostDetailResponse {
                 .title(post.getTitle())
                 .content(post.getContent())
                 .language(post.getLanguage())
+                .authorPublicId(post.getUserPublicId())
                 .authorNickname(author.nickname())
+                .authorProfileImageUrl(author.profileImageUrl())
                 .authorIsVerified(author.isVerified())
                 .isAuthor(post.getUserPublicId().equals(requesterUserPublicId))
                 .isLiked(isLiked)

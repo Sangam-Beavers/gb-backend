@@ -39,7 +39,7 @@ class PostTranslationRepositoryTest {
 
     @BeforeEach
     void setUp() {
-        post = Post.of(U1, PostCategory.JOB, "최저임금 질문", "시급이 낮아요");
+        post = Post.of(U1, PostCategory.JOB, "ko", "최저임금 질문", "시급이 낮아요");
         em.persist(post);
         em.flush();
     }
@@ -120,7 +120,7 @@ class PostTranslationRepositoryTest {
     @Test
     @DisplayName("deleteByPostId: 다른 글의 캐시는 영향 없음")
     void deleteByPostId_다른_글_무영향() {
-        Post other = Post.of(U1, PostCategory.JOB, "다른 글", "다른 내용");
+        Post other = Post.of(U1, PostCategory.JOB, "ko", "다른 글", "다른 내용");
         em.persist(other);
         em.persist(PostTranslation.of(post, "vi", "[VI] t", "[VI] c"));
         em.persist(PostTranslation.of(other, "vi", "[VI] other", "[VI] other c"));

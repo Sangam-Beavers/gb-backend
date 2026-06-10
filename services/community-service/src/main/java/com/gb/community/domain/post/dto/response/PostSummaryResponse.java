@@ -16,8 +16,11 @@ import lombok.Getter;
  * <p>작성자 표시 정보(닉네임)는 {@link MemberInfo}(MemberClient 조회 결과)에서 가져온다 —
  * MSA 경계 회원 참조라 DB 직접 SELECT 없이 client로 받는다(CLAUDE.md §7).
  *
+ * <p>{@code author_public_id}는 작성자 식별자(UUID) — 프론트가 사진 미설정 시 기본 아바타(identicon)를
+ * 작성자별로 결정적 생성하는 시드로 쓴다(마이페이지 프로필과 동일 시드 → 같은 사용자는 어디서든 같은 그림).
+ *
  * <p>{@code is_author}는 "요청자 == 작성자" 여부 — 프론트가 수정·삭제 버튼 노출을 판단한다.
- * 작성자 public_id를 응답에 노출하지 않고 서버가 비교 결과만 내린다. 필드 타입을 boxed
+ * (author_public_id로 프론트가 직접 비교할 수도 있으나, 서버가 계산한 값을 함께 내려 편의를 둔다.) 필드 타입을 boxed
  * {@code Boolean}으로 둔 이유: primitive {@code boolean isAuthor}면 Lombok 게터가 {@code isAuthor()}
  * → Jackson 프로퍼티 {@code author}로 'is'가 떨어져 {@code author}로 직렬화되는 함정이 있다.
  * Boolean이면 게터가 {@code getIsAuthor()} → 프로퍼티 {@code isAuthor} → snake_case {@code is_author}.
@@ -45,8 +48,16 @@ public class PostSummaryResponse {
     @Schema(description = "작성 언어 코드(ko/en/vi/fil)", example = "ko")
     private final String language;
 
+    @Schema(description = "작성자 식별자(UUID). 사진 미설정 시 기본 아바타 시드로 사용",
+            example = "11111111-1111-1111-1111-111111111111")
+    private final String authorPublicId;
+
     @Schema(description = "작성자 닉네임", example = "Minh")
     private final String authorNickname;
+
+    @Schema(description = "작성자 프로필 사진 URL. 미설정 시 null(프론트는 기본 아바타로 대체)",
+            example = "null", nullable = true)
+    private final String authorProfileImageUrl;
 
     @Schema(description = "요청자가 작성자 본인인지 여부(수정·삭제 버튼 노출 판단용)", example = "false")
     private final Boolean isAuthor;
@@ -62,14 +73,17 @@ public class PostSummaryResponse {
 
     @Builder
     private PostSummaryResponse(String publicId, String category, String title, String contentPreview,
-                               String language, String authorNickname, Boolean isAuthor,
-                               Integer likeCount, Integer commentCount, String createdAt) {
+                               String language, String authorPublicId, String authorNickname,
+                               String authorProfileImageUrl, Boolean isAuthor, Integer likeCount,
+                               Integer commentCount, String createdAt) {
         this.publicId = publicId;
         this.category = category;
         this.title = title;
         this.contentPreview = contentPreview;
         this.language = language;
+        this.authorPublicId = authorPublicId;
         this.authorNickname = authorNickname;
+        this.authorProfileImageUrl = authorProfileImageUrl;
         this.isAuthor = isAuthor;
         this.likeCount = likeCount;
         this.commentCount = commentCount;
@@ -87,7 +101,9 @@ public class PostSummaryResponse {
                 .title(post.getTitle())
                 .contentPreview(preview(post.getContent()))
                 .language(post.getLanguage())
+                .authorPublicId(post.getUserPublicId())
                 .authorNickname(author.nickname())
+                .authorProfileImageUrl(author.profileImageUrl())
                 .isAuthor(post.getUserPublicId().equals(requesterUserPublicId))
                 .likeCount(post.getLikeCount())
                 .commentCount(post.getCommentCount())

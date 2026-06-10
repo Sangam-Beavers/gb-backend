@@ -323,7 +323,7 @@ class PostRepositoryTest {
      * (persistPost가 created_at/like_count를 박는 것과 동일 기법).
      */
     private Post persistQnaPost(PostCategory category, int commentCount, boolean deleted) {
-        Post p = Post.of(U1, category, "QnA 제목", "본문");
+        Post p = Post.of(U1, category, "ko", "QnA 제목", "본문");
         if (deleted) {
             p.softDelete();
         }
@@ -342,7 +342,7 @@ class PostRepositoryTest {
      */
     private Post persistPost(String userPublicId, PostCategory category, String title, String content,
                              LocalDateTime createdAt, int likeCount, boolean deleted) {
-        Post p = Post.of(userPublicId, category, title, content);
+        Post p = Post.of(userPublicId, category, "ko", title, content);
         if (deleted) {
             p.softDelete();
         }

@@ -44,7 +44,11 @@ class PostTranslationServiceImplTest {
     private static final String PID = "post-uuid-1";
 
     private Post postKo(String content) {
-        return Post.of(USER, PostCategory.JOB, "최저임금", content);
+        return Post.of(USER, PostCategory.JOB, "ko", "최저임금", content);
+    }
+
+    private Post postLang(String language, String content) {
+        return Post.of(USER, PostCategory.JOB, language, "제목", content);
     }
 
     @Test
@@ -141,6 +145,60 @@ class PostTranslationServiceImplTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommunityErrorCode.CONTENT_TOO_LONG);
 
+        verifyNoInteractions(postTranslationRepository, translationClient);
+    }
+
+    @Test
+    @DisplayName("source=en 게시글의 vi 번역(캐시 miss): translate에 source_lang=en이 전달된다(ko 고정 아님)")
+    void source_en_번역() {
+        Post post = postLang("en", "I worked for low wage");
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(postTranslationRepository.findByPostIdAndLanguage(post.getId(), "vi"))
+                .willReturn(Optional.empty());
+        // source_lang 위치에 eq("en") — 임플이 post.getLanguage()(=en)가 아닌 "ko"를 넘기면 stub 불일치로 실패한다.
+        given(translationClient.translate(
+                eq("post"), eq(post.getPublicId()), eq("제목"), eq("I worked for low wage"), eq("en"), eq("vi")))
+                .willReturn(new TranslationResult("[VI] 제목", "[VI] 본문", "vi", "mock", 0, 0));
+        given(postTranslationRepository.save(any(PostTranslation.class)))
+                .willAnswer(inv -> inv.getArgument(0));
+
+        PostTranslationResponse res = service.getOrTranslate(PID, "vi");
+
+        assertThat(res.getTranslatedLanguage()).isEqualTo("vi");
+        verify(translationClient).translate(
+                eq("post"), eq(post.getPublicId()), eq("제목"), eq("I worked for low wage"), eq("en"), eq("vi"));
+    }
+
+    @Test
+    @DisplayName("source=vi 게시글의 ko 번역(캐시 miss): translate에 source_lang=vi가 전달된다")
+    void source_vi_번역() {
+        Post post = postLang("vi", "Tôi làm việc với mức lương thấp");
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+        given(postTranslationRepository.findByPostIdAndLanguage(post.getId(), "ko"))
+                .willReturn(Optional.empty());
+        given(translationClient.translate(
+                eq("post"), eq(post.getPublicId()), eq("제목"), any(), eq("vi"), eq("ko")))
+                .willReturn(new TranslationResult("[KO] 제목", "[KO] 본문", "ko", "mock", 0, 0));
+        given(postTranslationRepository.save(any(PostTranslation.class)))
+                .willAnswer(inv -> inv.getArgument(0));
+
+        PostTranslationResponse res = service.getOrTranslate(PID, "ko");
+
+        assertThat(res.getTranslatedLanguage()).isEqualTo("ko");
+        verify(postTranslationRepository).save(any(PostTranslation.class));
+    }
+
+    @Test
+    @DisplayName("source=en 게시글에 en 요청: 같은 언어 → 원문 그대로(같은-언어 판정이 ko 고정이 아님)")
+    void source_en_같은_언어() {
+        Post post = postLang("en", "english content");
+        given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
+
+        PostTranslationResponse res = service.getOrTranslate(PID, "en");
+
+        assertThat(res.getTranslatedTitle()).isEqualTo("제목");
+        assertThat(res.getTranslatedContent()).isEqualTo("english content");
+        assertThat(res.getTranslatedLanguage()).isEqualTo("en");
         verifyNoInteractions(postTranslationRepository, translationClient);
     }
 

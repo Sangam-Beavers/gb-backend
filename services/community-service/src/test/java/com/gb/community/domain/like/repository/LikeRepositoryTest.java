@@ -191,7 +191,7 @@ class LikeRepositoryTest {
     /** 게시글 1건 영속화 후 native UPDATE로 like_count/deleted를 지정값으로 만든다(PostRepositoryTest 기법). */
     private Post persistPost(String userPublicId, PostCategory category, String title, String content,
                             int likeCount, boolean deleted) {
-        Post p = Post.of(userPublicId, category, title, content);
+        Post p = Post.of(userPublicId, category, "ko", title, content);
         if (deleted) {
             p.softDelete();
         }

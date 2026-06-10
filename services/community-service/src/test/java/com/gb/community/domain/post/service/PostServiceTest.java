@@ -76,7 +76,7 @@ class PostServiceTest {
     @Test
     @DisplayName("작성 정상: 저장 + 작성자 정보 매핑, category 문자열 매핑")
     void createPost_정상() {
-        Post saved = Post.of(USER, PostCategory.JOB, "제목", "본문");
+        Post saved = Post.of(USER, PostCategory.JOB, "ko", "제목", "본문");
         given(postRepository.save(any(Post.class))).willReturn(saved);
         given(memberClient.getMember(USER)).willReturn(MINH);
 
@@ -105,12 +105,62 @@ class PostServiceTest {
         verifyNoInteractions(postRepository, memberClient);
     }
 
+    @Test
+    @DisplayName("작성 언어 지정(en): resolveLanguage가 그대로 정규화·저장 — Post.language=en")
+    void createPost_언어_en_저장() {
+        given(postRepository.save(any(Post.class))).willAnswer(inv -> inv.getArgument(0));
+        given(memberClient.getMember(USER)).willReturn(MINH);
+
+        service.createPost(USER, createReq("JOB", "en", "title", "content"));
+
+        ArgumentCaptor<Post> captor = ArgumentCaptor.forClass(Post.class);
+        verify(postRepository).save(captor.capture());
+        assertThat(captor.getValue().getLanguage()).isEqualTo("en");
+    }
+
+    @Test
+    @DisplayName("작성 언어 미전송(null): resolveLanguage 기본값 ko로 저장")
+    void createPost_언어_미전송_ko_기본값() {
+        given(postRepository.save(any(Post.class))).willAnswer(inv -> inv.getArgument(0));
+        given(memberClient.getMember(USER)).willReturn(MINH);
+
+        service.createPost(USER, createReq("JOB", null, "title", "content"));
+
+        ArgumentCaptor<Post> captor = ArgumentCaptor.forClass(Post.class);
+        verify(postRepository).save(captor.capture());
+        assertThat(captor.getValue().getLanguage()).isEqualTo("ko");
+    }
+
+    @Test
+    @DisplayName("작성 언어 대소문자·공백 정규화: ' VI ' → vi")
+    void createPost_언어_정규화() {
+        given(postRepository.save(any(Post.class))).willAnswer(inv -> inv.getArgument(0));
+        given(memberClient.getMember(USER)).willReturn(MINH);
+
+        service.createPost(USER, createReq("JOB", "  VI  ", "title", "content"));
+
+        ArgumentCaptor<Post> captor = ArgumentCaptor.forClass(Post.class);
+        verify(postRepository).save(captor.capture());
+        assertThat(captor.getValue().getLanguage()).isEqualTo("vi");
+    }
+
+    @Test
+    @DisplayName("미지원 작성 언어(ja) → COMMUNITY4003, save·member 호출 없음")
+    void createPost_미지원_언어() {
+        assertThatThrownBy(() -> service.createPost(USER, createReq("JOB", "ja", "title", "content")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommunityErrorCode.UNSUPPORTED_LANGUAGE);
+
+        verifyNoInteractions(postRepository, memberClient);
+    }
+
     // ----- get -----
 
     @Test
     @DisplayName("단건 조회 정상: 작성자 정보까지 매핑, 본인 글이면 is_author=true")
     void getPost_정상() {
-        Post post = Post.of(USER, PostCategory.VISA, "비자", "내용");
+        Post post = Post.of(USER, PostCategory.VISA, "ko", "비자", "내용");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(memberClient.getMember(USER)).willReturn(MINH);
 
@@ -124,7 +174,7 @@ class PostServiceTest {
     @Test
     @DisplayName("단건 조회: 타인 글이면 is_author=false (수정·삭제 버튼 비노출 판단)")
     void getPost_타인글_isAuthor_false() {
-        Post post = Post.of(OTHER, PostCategory.VISA, "비자", "내용");
+        Post post = Post.of(OTHER, PostCategory.VISA, "ko", "비자", "내용");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(memberClient.getMember(OTHER)).willReturn(new MemberInfo("Sokha", false));
 
@@ -136,7 +186,7 @@ class PostServiceTest {
     @Test
     @DisplayName("단건 조회: 좋아요한 글이면 is_liked=true — 좋아요 저장의 409 판정과 동일한 EXISTS 조건으로 계산")
     void getPost_좋아요한_글_isLiked_true() {
-        Post post = Post.of(OTHER, PostCategory.VISA, "비자", "내용");
+        Post post = Post.of(OTHER, PostCategory.VISA, "ko", "비자", "내용");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(memberClient.getMember(OTHER)).willReturn(new MemberInfo("Sokha", false));
         // 요청자(USER) 기준으로 (user, POST, post.id) EXISTS — 좋아요 중복 판정과 같은 조건이어야 한다.
@@ -153,7 +203,7 @@ class PostServiceTest {
     @Test
     @DisplayName("단건 조회: 좋아요 안 한 글이면 is_liked=false (null 아님 — 항상 true/false)")
     void getPost_좋아요_안한_글_isLiked_false() {
-        Post post = Post.of(OTHER, PostCategory.VISA, "비자", "내용");
+        Post post = Post.of(OTHER, PostCategory.VISA, "ko", "비자", "내용");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(memberClient.getMember(OTHER)).willReturn(new MemberInfo("Sokha", false));
         given(likeRepository.existsByUserPublicIdAndTargetTypeAndTargetId(
@@ -182,7 +232,7 @@ class PostServiceTest {
     @Test
     @DisplayName("수정 정상: 보낸 필드(title)만 변경되고 본문은 유지된다 + 번역 캐시 무효화(deleteByPostId 호출)")
     void updatePost_정상() {
-        Post post = Post.of(USER, PostCategory.JOB, "old title", "old content");
+        Post post = Post.of(USER, PostCategory.JOB, "ko", "old title", "old content");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(memberClient.getMember(USER)).willReturn(MINH);
 
@@ -200,7 +250,7 @@ class PostServiceTest {
     @Test
     @DisplayName("수정: 본인이 좋아요해 둔 글이면 수정 응답도 is_liked=true (self-like 제한 없음 — 실제 EXISTS 값)")
     void updatePost_본인_좋아요_글_isLiked_true() {
-        Post post = Post.of(USER, PostCategory.JOB, "old title", "old content");
+        Post post = Post.of(USER, PostCategory.JOB, "ko", "old title", "old content");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
         given(memberClient.getMember(USER)).willReturn(MINH);
         given(likeRepository.existsByUserPublicIdAndTargetTypeAndTargetId(
@@ -214,7 +264,7 @@ class PostServiceTest {
     @Test
     @DisplayName("수정: 타인 글 → COMMON4031, 변경·member 호출 없음")
     void updatePost_타인() {
-        Post post = Post.of(OTHER, PostCategory.JOB, "title", "content");
+        Post post = Post.of(OTHER, PostCategory.JOB, "ko", "title", "content");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
 
         assertThatThrownBy(() -> service.updatePost(USER, PID, updateReq(null, "x", null)))
@@ -242,7 +292,7 @@ class PostServiceTest {
     @Test
     @DisplayName("수정: 본인 글이지만 잘못된 category → COMMON4001, member 호출 없음")
     void updatePost_잘못된_카테고리() {
-        Post post = Post.of(USER, PostCategory.JOB, "title", "content");
+        Post post = Post.of(USER, PostCategory.JOB, "ko", "title", "content");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
 
         assertThatThrownBy(() -> service.updatePost(USER, PID, updateReq("BADCAT", null, null)))
@@ -256,7 +306,7 @@ class PostServiceTest {
     @Test
     @DisplayName("수정: 본인 글이지만 all-blank(category·title·content 모두 비움) → COMMON4001, 변경·member 호출 없음")
     void updatePost_all_blank() {
-        Post post = Post.of(USER, PostCategory.JOB, "title", "content");
+        Post post = Post.of(USER, PostCategory.JOB, "ko", "title", "content");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
 
         // title은 공백("  ") — nullIfBlank로 null 정규화되어 세 값 모두 변경 없음 → 빈 PATCH로 거절돼야 한다.
@@ -274,7 +324,7 @@ class PostServiceTest {
     @Test
     @DisplayName("삭제 정상: 본인 글 soft delete (deleted_at 세팅)")
     void deletePost_정상() {
-        Post post = Post.of(USER, PostCategory.JOB, "t", "c");
+        Post post = Post.of(USER, PostCategory.JOB, "ko", "t", "c");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
 
         service.deletePost(USER, PID);
@@ -285,7 +335,7 @@ class PostServiceTest {
     @Test
     @DisplayName("삭제: 타인 글 → COMMON4031, 삭제되지 않음")
     void deletePost_타인() {
-        Post post = Post.of(OTHER, PostCategory.JOB, "t", "c");
+        Post post = Post.of(OTHER, PostCategory.JOB, "ko", "t", "c");
         given(postRepository.findByPublicIdAndDeletedAtIsNull(PID)).willReturn(Optional.of(post));
 
         assertThatThrownBy(() -> service.deletePost(USER, PID))
@@ -348,8 +398,8 @@ class PostServiceTest {
     @Test
     @DisplayName("목록: 같은 작성자 글이 여러 개여도 member 조회는 작성자당 1회(distinct)")
     void getPosts_같은작성자_중복조회_없음() {
-        Post a = Post.of(USER, PostCategory.JOB, "t1", "c1");
-        Post b = Post.of(USER, PostCategory.VISA, "t2", "c2");
+        Post a = Post.of(USER, PostCategory.JOB, "ko", "t1", "c1");
+        Post b = Post.of(USER, PostCategory.VISA, "ko", "t2", "c2");
         given(postRepository.search(any(), any(), any()))
                 .willReturn(new PageImpl<>(List.of(a, b), PageRequest.of(0, 20), 2));
         given(memberClient.getMembers(List.of(USER))).willReturn(Map.of(USER, MINH));
@@ -388,8 +438,8 @@ class PostServiceTest {
     @Test
     @DisplayName("목록 정상: 서로 다른 작성자별로 member 조회 후 항목 매핑, is_author는 항목별 계산(본인 true/타인 false)")
     void getPosts_정상_매핑() {
-        Post p1 = Post.of(USER, PostCategory.JOB, "t1", "c1");
-        Post p2 = Post.of(OTHER, PostCategory.VISA, "t2", "c2");
+        Post p1 = Post.of(USER, PostCategory.JOB, "ko", "t1", "c1");
+        Post p2 = Post.of(OTHER, PostCategory.VISA, "ko", "t2", "c2");
         Page<Post> page = new PageImpl<>(List.of(p1, p2), PageRequest.of(0, 20), 2);
         given(postRepository.search(any(), any(), any())).willReturn(page);
         given(memberClient.getMembers(List.of(USER, OTHER)))
@@ -408,8 +458,13 @@ class PostServiceTest {
     // ----- helpers -----
 
     private PostCreateRequest createReq(String category, String title, String content) {
+        return createReq(category, null, title, content);
+    }
+
+    private PostCreateRequest createReq(String category, String language, String title, String content) {
         PostCreateRequest r = new PostCreateRequest();
         ReflectionTestUtils.setField(r, "category", category);
+        ReflectionTestUtils.setField(r, "language", language);
         ReflectionTestUtils.setField(r, "title", title);
         ReflectionTestUtils.setField(r, "content", content);
         return r;
