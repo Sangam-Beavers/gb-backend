@@ -16,11 +16,14 @@ import com.gb.community.domain.post.repository.PostTranslationRepository;
 import com.gb.community.domain.post.service.PostService;
 import com.gb.community.global.client.MemberClient;
 import com.gb.community.global.client.MemberInfo;
+import com.gb.community.global.event.MilestoneAchieved;
+import com.gb.community.global.event.MilestoneType;
 import com.gb.community.global.exception.code.CommunityErrorCode;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -43,6 +46,8 @@ public class PostServiceImpl implements PostService {
     // #161 — 게시글 본문/제목 수정 시 모든 언어 번역 캐시 무효화.
     // 카테고리만 바뀌는 PATCH는 무효화 대상 아님(요구사항 §6).
     private final PostTranslationRepository postTranslationRepository;
+    // Phase 3(BE-8) — 작성 성공 시 마일스톤 내부 이벤트 발행용(Kafka 전송은 AFTER_COMMIT 리스너).
+    private final ApplicationEventPublisher eventPublisher;
 
     /** self-injection: createPostTx/updatePostTx의 @Transactional 프록시 적용 위함(wallet 동일 패턴). */
     @Autowired
@@ -112,8 +117,14 @@ public class PostServiceImpl implements PostService {
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
         String language = resolveLanguage(request.getLanguage());
-        return postRepository.save(
+        Post saved = postRepository.save(
                 Post.of(requesterUserPublicId, category, language, request.getTitle(), request.getContent()));
+        // Phase 3(BE-8) — 커뮤니티 데뷔 마일스톤. 내부 이벤트만 발행하고, Kafka 전송은 본 tx "커밋 후"
+        // MilestoneEventPublisher(AFTER_COMMIT)가 수행한다(롤백 시 미발행). 첫 글인지 판단하지 않고
+        // 매번 발행 — 수신측(member)이 (user, milestone) UNIQUE로 자연 멱등 스킵(스파이크 결정 3).
+        eventPublisher.publishEvent(
+                new MilestoneAchieved(requesterUserPublicId, MilestoneType.COMMUNITY_DEBUT));
+        return saved;
     }
 
     @Override
