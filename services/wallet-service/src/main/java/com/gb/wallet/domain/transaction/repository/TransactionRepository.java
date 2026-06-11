@@ -1,6 +1,7 @@
 package com.gb.wallet.domain.transaction.repository;
 
 import com.gb.wallet.domain.transaction.entity.Transaction;
+import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -177,6 +178,12 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
             @Param("senderWalletId") Long senderWalletId,
             @Param("bankAccountIds") List<Long> bankAccountIds,
             @Param("timestamps") List<LocalDateTime> timestamps);
+
+    /**
+     * 마일스톤용 — 회원의 특정 status 거래 건수(송신자 기준). 5건 달성 시 TRANSACTION_FIVE_COMPLETED 발행에 쓰임.
+     * 수취 전용 거래(INTERNAL_TRANSFER receiver 측)는 wallet.userPublicId로 필터되지 않으므로 자연히 제외된다.
+     */
+    long countByWallet_UserPublicIdAndStatus(String userPublicId, TransactionStatus status);
 
     // ===== Admin internal API 전용 =====
 

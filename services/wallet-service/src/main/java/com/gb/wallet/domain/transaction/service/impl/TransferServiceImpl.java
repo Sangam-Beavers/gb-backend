@@ -213,6 +213,7 @@ public class TransferServiceImpl implements TransferService {
                             .isVerified(member.isVerified())
                             .lastCurrencyCode(lastCurrency != null ? lastCurrency.name() : null)
                             .lastTransferredAt(RecentRecipientsResponse.toUtcZ(p.getLastTransferredAt()))
+                            .trustGrade(member.trustGrade())
                             .build();
                 })
                 .toList();
@@ -932,6 +933,14 @@ public class TransferServiceImpl implements TransferService {
             eventPublisher.publishEvent(new MilestoneAchieved(
                     senderWallet.getUserPublicId(), MilestoneType.FIRST_TRANSACTION_COMPLETED));
 
+            // (9) Phase 3(BE-7) — 누적 5건 달성 시 GOLD 보너스 마일스톤. tx 저장 후 카운트하므로 현재 건 포함.
+            long completedCount = transactionRepository.countByWallet_UserPublicIdAndStatus(
+                    senderWallet.getUserPublicId(), TransactionStatus.COMPLETED);
+            if (completedCount >= 5) {
+                eventPublisher.publishEvent(new MilestoneAchieved(
+                        senderWallet.getUserPublicId(), MilestoneType.TRANSACTION_FIVE_COMPLETED));
+            }
+
             return TransferExecuteResponse.from(transaction);
         }
     }
@@ -1139,6 +1148,14 @@ public class TransferServiceImpl implements TransferService {
         //      커밋 후(AFTER_COMMIT) 전송되며, 멱등 재반환·롤백 경로에서는 발행되지 않는다.
         eventPublisher.publishEvent(new MilestoneAchieved(
                 senderWallet.getUserPublicId(), MilestoneType.FIRST_TRANSACTION_COMPLETED));
+
+        // (12) Phase 3(BE-7) — 누적 5건 달성 시 GOLD 보너스 마일스톤. tx 저장 후 카운트하므로 현재 건 포함.
+        long remittanceCompletedCount = transactionRepository.countByWallet_UserPublicIdAndStatus(
+                senderWallet.getUserPublicId(), TransactionStatus.COMPLETED);
+        if (remittanceCompletedCount >= 5) {
+            eventPublisher.publishEvent(new MilestoneAchieved(
+                    senderWallet.getUserPublicId(), MilestoneType.TRANSACTION_FIVE_COMPLETED));
+        }
 
         return TransferExecuteResponse.from(transaction);
     }

@@ -18,6 +18,7 @@ import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import com.gb.wallet.domain.account.entity.Bank;
 import com.gb.wallet.domain.account.entity.BankAccount;
+import com.gb.wallet.global.client.AppAdminClient;
 import com.gb.wallet.domain.account.repository.BankAccountRepository;
 import com.gb.wallet.domain.transaction.dto.request.TransferExecuteRequest;
 import com.gb.wallet.domain.transaction.dto.response.TransferExecuteResponse;
@@ -105,6 +106,9 @@ class TransferServiceImplExecuteTest {
     // Phase 2(BE-3): executeInTransaction이 마일스톤 내부 이벤트(MilestoneAchieved)를 발행한다 — @Mock이
     // 없으면 @InjectMocks 생성자 주입 시 null로 들어가 publishEvent에서 NPE.
     @Mock private ApplicationEventPublisher eventPublisher;
+    // app-admin-service 수수료 정책 클라이언트 — REMITTANCE calculateFee()에서 getCashoutFeePolicy() 호출.
+    // null이면 REMITTANCE 경로 전체 NPE이므로 반드시 @Mock 선언.
+    @Mock private AppAdminClient appAdminClient;
     @InjectMocks private TransferServiceImpl service;
 
     private static final String SENDER_USER = "sender-user-uuid";
@@ -132,6 +136,12 @@ class TransferServiceImplExecuteTest {
                 .thenReturn(true);
         Mockito.lenient().when(transferRateLimitProperties.limit()).thenReturn(30);
         Mockito.lenient().when(transferRateLimitProperties.windowSeconds()).thenReturn(60);
+
+        // CASHOUT 수수료 정책: 0.5% (minFee/maxFee 없음) — REMITTANCE calculateFee()에서 사용.
+        // KRW 10000 → fee = 10000 × 0.005 = 50.0000 (기존 REMITTANCE 테스트 기댓값과 일치).
+        // INTERNAL_TRANSFER 테스트는 이 stub을 호출하지 않으므로 lenient로 처리.
+        Mockito.lenient().when(appAdminClient.getCashoutFeePolicy())
+                .thenReturn(new AppAdminClient.FeePolicy("PERCENT", new java.math.BigDecimal("0.5"), null, null));
     }
 
     // ===== 정상 흐름 =====
@@ -1365,6 +1375,98 @@ class TransferServiceImplExecuteTest {
         assertThat(senderBalance.getBalance()).isEqualByComparingTo("990000");
         assertThat(receiverBalance.getBalance()).isEqualByComparingTo("10000");
         verify(transactionRepository, times(1)).save(any(Transaction.class));
+    }
+
+    // ===== Phase 3(BE-7) — TRANSACTION_FIVE_COMPLETED 마일스톤 =====
+
+    @Test
+    @DisplayName("Phase 3 BE-7: INTERNAL_TRANSFER — 누적 COMPLETED 거래가 5건이면 TRANSACTION_FIVE_COMPLETED 발행")
+    void execute_INTERNAL_누적5건_TRANSACTION_FIVE_COMPLETED_발행() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        WalletBalance receiverBalance = balance(receiver, BigDecimal.ZERO);
+        RLock lock = lock();
+
+        stubCacheMiss();
+        stubDbMiss();
+        stubWalletLookups(sender, receiver);
+        stubLockAcquired(lock);
+        stubBalanceLocks(sender, receiver, senderBalance, receiverBalance);
+        stubTransactionSaveAndAuditLog();
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+        // 이번 tx까지 포함해 5건 달성 — 마일스톤 발행 조건 충족.
+        given(transactionRepository.countByWallet_UserPublicIdAndStatus(
+                SENDER_USER, TransactionStatus.COMPLETED)).willReturn(5L);
+
+        service.execute(SENDER_USER, KEY, request("10000.0000"));
+
+        verify(eventPublisher).publishEvent(
+                new MilestoneAchieved(SENDER_USER, MilestoneType.FIRST_TRANSACTION_COMPLETED));
+        verify(eventPublisher).publishEvent(
+                new MilestoneAchieved(SENDER_USER, MilestoneType.TRANSACTION_FIVE_COMPLETED));
+    }
+
+    @Test
+    @DisplayName("Phase 3 BE-7: INTERNAL_TRANSFER — 누적 COMPLETED 거래가 4건이면 TRANSACTION_FIVE_COMPLETED 미발행")
+    void execute_INTERNAL_누적4건_TRANSACTION_FIVE_COMPLETED_미발행() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        Wallet receiver = wallet(RECEIVER_WALLET_ID, RECEIVER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        WalletBalance receiverBalance = balance(receiver, BigDecimal.ZERO);
+        RLock lock = lock();
+
+        stubCacheMiss();
+        stubDbMiss();
+        stubWalletLookups(sender, receiver);
+        stubLockAcquired(lock);
+        stubBalanceLocks(sender, receiver, senderBalance, receiverBalance);
+        stubTransactionSaveAndAuditLog();
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+        // 아직 4건 — 5건 미달, 마일스톤 미발행.
+        given(transactionRepository.countByWallet_UserPublicIdAndStatus(
+                SENDER_USER, TransactionStatus.COMPLETED)).willReturn(4L);
+
+        service.execute(SENDER_USER, KEY, request("10000.0000"));
+
+        verify(eventPublisher).publishEvent(
+                new MilestoneAchieved(SENDER_USER, MilestoneType.FIRST_TRANSACTION_COMPLETED));
+        verify(eventPublisher, never()).publishEvent(
+                new MilestoneAchieved(SENDER_USER, MilestoneType.TRANSACTION_FIVE_COMPLETED));
+    }
+
+    @Test
+    @DisplayName("Phase 3 BE-7: REMITTANCE — 누적 COMPLETED 거래가 5건 이상이면 TRANSACTION_FIVE_COMPLETED 발행")
+    void execute_REMITTANCE_누적5건_TRANSACTION_FIVE_COMPLETED_발행() throws Exception {
+        Wallet sender = wallet(SENDER_WALLET_ID, SENDER_USER);
+        WalletBalance senderBalance = balance(sender, new BigDecimal("1000000"));
+        BankAccount account = mockBankAccount(MOCK_TOKEN);
+
+        stubCacheMiss();
+        stubDbMiss();
+        given(walletRepository.findByUserPublicId(SENDER_USER)).willReturn(Optional.of(sender));
+        given(walletRepository.findById(SENDER_WALLET_ID)).willReturn(Optional.of(sender));
+        given(bankAccountRepository.findByPublicIdAndUserPublicIdAndIsActiveTrue(BANK_ACCOUNT_PUB_ID, SENDER_USER))
+                .willReturn(Optional.of(account));
+        given(walletBalanceRepository.findForUpdateByWalletAndCurrency(sender, CurrencyType.KRW))
+                .willReturn(Optional.of(senderBalance));
+        given(bankClient.payout(eq(BANK_CODE), eq(BANK_ACCOUNT_NUMBER),
+                eq(new BigDecimal("10000.0000")), eq("KRW"), eq(KEY)))
+                .willReturn(new PayoutResult(
+                        "mock-payout-1", "COMPLETED", new BigDecimal("10000.0000"), "KRW",
+                        new BigDecimal("500000.0000")));
+        stubTransactionSaveAndAuditLog();
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+        // 이번 REMITTANCE tx까지 포함해 6건(5 이상) — 마일스톤 발행 조건 충족.
+        given(transactionRepository.countByWallet_UserPublicIdAndStatus(
+                SENDER_USER, TransactionStatus.COMPLETED)).willReturn(6L);
+
+        service.execute(SENDER_USER, KEY, remittanceRequest("10000.0000", BANK_ACCOUNT_PUB_ID));
+
+        verify(eventPublisher).publishEvent(
+                new MilestoneAchieved(SENDER_USER, MilestoneType.FIRST_TRANSACTION_COMPLETED));
+        verify(eventPublisher).publishEvent(
+                new MilestoneAchieved(SENDER_USER, MilestoneType.TRANSACTION_FIVE_COMPLETED));
     }
 
     // ===== helpers — stub blocks =====

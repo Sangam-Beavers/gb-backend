@@ -208,10 +208,10 @@ class CommentServiceTest {
         // comment_count 증가는 DB 원자 UPDATE(incrementCommentCount) 호출로 검증(like_count와 동일)
         verify(postRepository).incrementCommentCount(post.getId());
 
-        // Phase 3(BE-8): 작성 성공 tx 안에서 COMMUNITY_DEBUT 내부 이벤트가 발행된다
+        // Phase 3(BE-8): 작성 성공 tx 안에서 COMMUNITY_ACTIVE 내부 이벤트가 발행된다
         // (Kafka 전송은 커밋 후 MilestoneEventPublisher 책임 — 여기선 도메인 발행만 검증).
         verify(eventPublisher).publishEvent(
-                new MilestoneAchieved(USER, MilestoneType.COMMUNITY_DEBUT));
+                new MilestoneAchieved(USER, MilestoneType.COMMUNITY_ACTIVE));
 
         // Comment INSERT 시 parentId는 null (최상위만)
         ArgumentCaptor<Comment> commentCaptor = ArgumentCaptor.forClass(Comment.class);

@@ -31,6 +31,7 @@ import com.gb.wallet.domain.wallet.entity.WalletBalance;
 import com.gb.wallet.domain.wallet.repository.WalletBalanceRepository;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
 import com.gb.wallet.domain.wallet.service.WalletBalanceWriter;
+import com.gb.wallet.global.client.AppAdminClient;
 import com.gb.wallet.global.client.ExchangeRateClient;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.ExchangeType;
@@ -80,6 +81,8 @@ class ExchangeServiceImplTest {
     @Mock private IdempotencyCacheHelper idempotencyCacheHelper;
     @Mock private ObjectMapper objectMapper;
     @Mock private ExchangeService self;
+    // 환전 수수료 정책 클라이언트 — createQuote()의 appAdminClient.getExchangeFeePolicy() 호출 시 null이면 NPE.
+    @Mock private AppAdminClient appAdminClient;
 
     @InjectMocks private ExchangeServiceImpl exchangeService;
 
@@ -90,6 +93,11 @@ class ExchangeServiceImplTest {
         // exchangeProperties는 대응 @Mock이 없어 생성자 주입 시 null → 견적 수수료 계산에서 NPE.
         // 실제 객체로 기본값(0.5%)을 박아 기존 단언(수수료 0.5% 기준)을 유지한다(BankAccountServiceTest 동일 패턴).
         ReflectionTestUtils.setField(exchangeService, "exchangeProperties", new ExchangeProperties(null));
+
+        // AppAdminClient.getExchangeFeePolicy()는 createQuote() 진입 시 무조건 호출됨. null이면 NPE.
+        // 0.5% PERCENT — ExchangeProperties 기본값과 동일해 기존 단언을 그대로 유지한다.
+        org.mockito.Mockito.lenient().when(appAdminClient.getExchangeFeePolicy())
+                .thenReturn(new AppAdminClient.FeePolicy("PERCENT", new BigDecimal("0.5"), null, null));
     }
 
     // ───────────────────── 지원 통화 목록 ─────────────────────

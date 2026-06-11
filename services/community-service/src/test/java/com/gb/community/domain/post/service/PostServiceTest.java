@@ -98,10 +98,10 @@ class PostServiceTest {
         assertThat(res.getIsLiked()).isFalse();
         verifyNoInteractions(likeRepository);
         verify(postRepository).save(any(Post.class));
-        // Phase 3(BE-8): 작성 성공 tx 안에서 COMMUNITY_DEBUT 내부 이벤트가 발행된다
+        // Phase 3(BE-8): 작성 성공 tx 안에서 COMMUNITY_ACTIVE 내부 이벤트가 발행된다
         // (Kafka 전송은 커밋 후 MilestoneEventPublisher 책임 — 여기선 도메인 발행만 검증).
         verify(eventPublisher).publishEvent(
-                new MilestoneAchieved(USER, MilestoneType.COMMUNITY_DEBUT));
+                new MilestoneAchieved(USER, MilestoneType.COMMUNITY_ACTIVE));
     }
 
     @Test

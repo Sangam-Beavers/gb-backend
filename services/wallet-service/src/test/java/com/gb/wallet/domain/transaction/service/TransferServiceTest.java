@@ -34,6 +34,7 @@ import com.gb.wallet.domain.transaction.repository.TransactionRepository;
 import com.gb.wallet.domain.transaction.service.impl.TransferServiceImpl;
 import com.gb.wallet.domain.wallet.entity.Wallet;
 import com.gb.wallet.domain.wallet.repository.WalletRepository;
+import com.gb.wallet.global.client.AppAdminClient;
 import com.gb.wallet.global.client.BankClient;
 import com.gb.wallet.global.client.MemberClient;
 import com.gb.wallet.global.client.MemberInfo;
@@ -72,6 +73,8 @@ class TransferServiceTest {
     @Mock private BankAccountRepository bankAccountRepository;
     @Mock private MemberClient memberClient;
     @Mock private BankClient bankClient;
+    // REMITTANCE calculateFee()에서 getCashoutFeePolicy() 호출 — null이면 NPE.
+    @Mock private AppAdminClient appAdminClient;
     @InjectMocks private TransferServiceImpl transferService;
 
     private static final String SENDER_PUBLIC_ID = "sender-uuid";
@@ -301,6 +304,9 @@ class TransferServiceTest {
     @Test
     @DisplayName("getTransferFee REMITTANCE KRW 10000 → fee=50.0000, total=10050.0000, fee_currency=KRW")
     void getTransferFee_REMITTANCE_KRW_정상() {
+        given(appAdminClient.getCashoutFeePolicy())
+                .willReturn(new AppAdminClient.FeePolicy("PERCENT", new BigDecimal("0.5"), null, null));
+
         TransferFeeResponse response = transferService.getTransferFee(
                 new TransferFeeRequest("REMITTANCE", "KRW", "10000.0000"));
 
@@ -314,6 +320,9 @@ class TransferServiceTest {
     @Test
     @DisplayName("getTransferFee REMITTANCE USD 100 → fee=0.5000, total=100.5000, fee_currency=USD")
     void getTransferFee_REMITTANCE_USD_정상() {
+        given(appAdminClient.getCashoutFeePolicy())
+                .willReturn(new AppAdminClient.FeePolicy("PERCENT", new BigDecimal("0.5"), null, null));
+
         TransferFeeResponse response = transferService.getTransferFee(
                 new TransferFeeRequest("REMITTANCE", "USD", "100.0000"));
 
@@ -380,6 +389,9 @@ class TransferServiceTest {
     @Test
     @DisplayName("getTransferFee BigDecimal 정밀도: 10000.5555 × 0.005 = 50.0027775 → HALF_UP scale 4 = 50.0028")
     void getTransferFee_BigDecimal_정밀도() {
+        given(appAdminClient.getCashoutFeePolicy())
+                .willReturn(new AppAdminClient.FeePolicy("PERCENT", new BigDecimal("0.5"), null, null));
+
         TransferFeeResponse response = transferService.getTransferFee(
                 new TransferFeeRequest("REMITTANCE", "KRW", "10000.5555"));
 
