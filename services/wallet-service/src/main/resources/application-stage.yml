@@ -25,6 +25,8 @@ spring:
       password: ${SPRING_DATA_REDIS_PASSWORD}
       database: 0
       timeout: 3s
+      ssl:
+        enabled: true
 
   security:
     oauth2:
