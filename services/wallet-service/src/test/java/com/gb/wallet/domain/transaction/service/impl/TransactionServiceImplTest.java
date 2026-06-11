@@ -3,6 +3,8 @@ package com.gb.wallet.domain.transaction.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -11,6 +13,8 @@ import com.gb.wallet.domain.transaction.dto.response.TransactionListResponse;
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import com.gb.wallet.domain.transaction.repository.TransactionRepository;
 import com.gb.wallet.domain.wallet.entity.Wallet;
+import com.gb.wallet.global.client.MemberClient;
+import com.gb.wallet.global.client.MemberInfo;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
@@ -18,6 +22,7 @@ import com.gb.wallet.global.common.enums.WalletStatus;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -39,6 +44,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 class TransactionServiceImplTest {
 
     @Mock private TransactionRepository transactionRepository;
+    @Mock private MemberClient memberClient;
     @InjectMocks private TransactionServiceImpl service;
 
     private static final String USER = "user-uuid";
@@ -126,6 +132,52 @@ class TransactionServiceImplTest {
                 .containsExactly("it-out", "it-in");
         assertThat(response.getTransactions()).extracting(TransactionHistoryItemResponse::getDirection)
                 .containsExactly("OUT", "IN");
+    }
+
+    @Test
+    @DisplayName("getMyTransactions: INTERNAL_TRANSFER 거래 상대 닉네임을 배치 1회 조회로 채운다(OUT=받는 사람, IN=보낸 사람)")
+    void getMyTransactions_거래상대_닉네임_매핑() {
+        Wallet me = Wallet.builder().publicId("w-me").userPublicId(USER).status(WalletStatus.ACTIVE).build();
+        Wallet other = Wallet.builder().publicId("w-other").userPublicId("other-uuid")
+                .status(WalletStatus.ACTIVE).build();
+        // 내가 보낸 거래(OUT, 상대=other) + 내가 받은 거래(IN, 상대=other). 양쪽 모두 상대는 other-uuid 1명.
+        Transaction sent = tx("it-out", me, other, TransactionType.INTERNAL_TRANSFER,
+                new BigDecimal("10000"), CurrencyType.KRW, BigDecimal.ZERO, null, null, null);
+        Transaction received = tx("it-in", other, me, TransactionType.INTERNAL_TRANSFER,
+                new BigDecimal("20000"), CurrencyType.KRW, BigDecimal.ZERO, null, null, null);
+        when(transactionRepository.findByMineSendingOrReceiving(eq(USER), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(sent, received), PageRequest.of(0, 20), 2));
+        when(memberClient.getMembers(any())).thenReturn(Map.of(
+                "other-uuid", new MemberInfo("other-uuid", null, "Nguyen", "하노이댁", "VN", false)));
+
+        TransactionListResponse response = service.getMyTransactions(USER, 0, 20);
+
+        // OUT=받는 사람(other), IN=보낸 사람(other) — 둘 다 상대 닉네임이 채워진다.
+        assertThat(response.getTransactions()).extracting(TransactionHistoryItemResponse::getCounterpartyNickname)
+                .containsExactly("하노이댁", "하노이댁");
+        // 건별 HTTP가 아니라 배치 1회만 호출(중복 상대 id는 distinct로 1건).
+        verify(memberClient, times(1)).getMembers(any());
+    }
+
+    @Test
+    @DisplayName("getMyTransactions: 송금 외 유형(CHARGE/REMITTANCE/EXCHANGE)은 상대 닉네임 null + MemberClient 미호출")
+    void getMyTransactions_비송금_상대없음() {
+        Wallet wallet = Wallet.builder().publicId("w-1").userPublicId(USER).status(WalletStatus.ACTIVE).build();
+        Transaction charge = tx("c-1", wallet, null, TransactionType.CHARGE, new BigDecimal("500000"),
+                CurrencyType.KRW, BigDecimal.ZERO, null, null, null);
+        Transaction remittance = tx("r-1", wallet, null, TransactionType.REMITTANCE, new BigDecimal("100000"),
+                CurrencyType.KRW, new BigDecimal("3000"), "홍길동", null, null);
+        when(transactionRepository.findByMineSendingOrReceiving(eq(USER), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(charge, remittance), PageRequest.of(0, 20), 2));
+
+        TransactionListResponse response = service.getMyTransactions(USER, 0, 20);
+
+        // 앱 사용자 상대가 없는 유형은 counterparty_nickname=null (REMITTANCE는 receiver_name로 별도 표기).
+        assertThat(response.getTransactions()).extracting(TransactionHistoryItemResponse::getCounterpartyNickname)
+                .containsExactly(null, null);
+        assertThat(response.getTransactions().get(1).getReceiverName()).isEqualTo("홍길동");
+        // 조회할 상대가 없으면 member-service를 아예 호출하지 않는다(불필요 HTTP 차단).
+        verify(memberClient, never()).getMembers(any());
     }
 
     @Test

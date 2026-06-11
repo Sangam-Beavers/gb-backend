@@ -126,7 +126,8 @@
 | `fee` | string | N | 수수료 (string, 소수 4자리, 무료면 `0.0000`) |
 | `receive_amount` | string | Y | 수령액 (환전·송금만) |
 | `receive_currency_code` | string | Y | 수령 통화 코드 (환전·송금만) |
-| `receiver_name` | string | Y | 수취인 이름 (송금만) |
+| `receiver_name` | string | Y | 수취인 이름 (REMITTANCE 해외송금 외부 수취인) |
+| `counterparty_nickname` | string | Y | 거래 상대 닉네임 (이슈 #207). **앱 사용자 간 송금(INTERNAL_TRANSFER)만** — `OUT`이면 받는 사람, `IN`이면 보낸 사람의 닉네임. 그 외 유형(CHARGE/REMITTANCE/EXCHANGE)·조회 불가 시 null. MemberClient `display-info` 배치 조회. 이메일은 PII 정책상 미노출(conventions §13) |
 | `created_at` | string | N | 거래 시각 (ISO 8601 UTC Z) |
 
 **Error**: 400 COMMON4001 (`page<0` 또는 `size` 1~100 범위 위반) / 401 AUTH4011

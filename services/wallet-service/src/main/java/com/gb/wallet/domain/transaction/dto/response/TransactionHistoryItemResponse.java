@@ -1,6 +1,9 @@
 package com.gb.wallet.domain.transaction.dto.response;
 
 import com.gb.wallet.domain.transaction.entity.Transaction;
+import com.gb.wallet.domain.wallet.entity.Wallet;
+import com.gb.wallet.global.client.MemberInfo;
+import com.gb.wallet.global.common.enums.TransactionType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -8,6 +11,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.Map;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -57,8 +61,13 @@ public class TransactionHistoryItemResponse {
     @Schema(description = "수령 통화 코드 (환전·송금만, nullable)", example = "USD", nullable = true)
     private final String receiveCurrencyCode;
 
-    @Schema(description = "수취인 이름 (송금만, nullable)", example = "홍길동", nullable = true)
+    @Schema(description = "수취인 이름 (REMITTANCE 해외송금 외부 수취인, nullable)", example = "홍길동", nullable = true)
     private final String receiverName;
+
+    @Schema(description = "거래 상대 닉네임 (앱 사용자 간 송금 INTERNAL_TRANSFER만 — OUT이면 받는 사람, "
+            + "IN이면 보낸 사람의 닉네임. 그 외 유형/조회불가는 null). 이메일은 PII 정책상 미노출(conventions §13).",
+            example = "하노이댁", nullable = true)
+    private final String counterpartyNickname;
 
     @Schema(description = "거래 시각 (ISO 8601 UTC Z)", example = "2026-05-26T04:15:30Z")
     private final String createdAt;
@@ -66,7 +75,8 @@ public class TransactionHistoryItemResponse {
     @Builder
     private TransactionHistoryItemResponse(String publicId, String type, String direction, String status,
                                            String amount, String currencyCode, String fee, String receiveAmount,
-                                           String receiveCurrencyCode, String receiverName, String createdAt) {
+                                           String receiveCurrencyCode, String receiverName,
+                                           String counterpartyNickname, String createdAt) {
         this.publicId = publicId;
         this.type = type;
         this.direction = direction;
@@ -77,6 +87,7 @@ public class TransactionHistoryItemResponse {
         this.receiveAmount = receiveAmount;
         this.receiveCurrencyCode = receiveCurrencyCode;
         this.receiverName = receiverName;
+        this.counterpartyNickname = counterpartyNickname;
         this.createdAt = createdAt;
     }
 
@@ -85,7 +96,8 @@ public class TransactionHistoryItemResponse {
      * 수신자({@code receiverWallet})인 경우 {@code direction=IN}, 그 외(CHARGE/REMITTANCE/EXCHANGE 또는
      * INTERNAL_TRANSFER 송신자)는 {@code direction=OUT}이다.
      */
-    public static TransactionHistoryItemResponse from(Transaction tx, String currentUserPublicId) {
+    public static TransactionHistoryItemResponse from(Transaction tx, String currentUserPublicId,
+                                                      Map<String, MemberInfo> membersByPublicId) {
         return TransactionHistoryItemResponse.builder()
                 .publicId(tx.getPublicId())
                 .type(tx.getType().name())
@@ -97,8 +109,45 @@ public class TransactionHistoryItemResponse {
                 .receiveAmount(toPlainString(tx.getReceiveAmount()))
                 .receiveCurrencyCode(tx.getReceiveCurrencyCode() != null ? tx.getReceiveCurrencyCode().name() : null)
                 .receiverName(tx.getReceiverName())
+                .counterpartyNickname(resolveCounterpartyNickname(tx, currentUserPublicId, membersByPublicId))
                 .createdAt(toUtcZ(tx.getCreatedAt()))
                 .build();
+    }
+
+    /**
+     * 거래 상대(앱 사용자)의 user_public_id. INTERNAL_TRANSFER만 대상이며, 본인이 송신자면 수취 지갑 주인,
+     * 본인이 수신자면 출금 지갑 주인을 돌려준다. 그 외 유형(CHARGE/REMITTANCE/EXCHANGE)이나 한쪽 지갑이
+     * 없으면 null(상대 없음). Service가 이 값으로 표시정보를 배치 조회(getMembers)한다.
+     */
+    public static String counterpartyUserPublicId(Transaction tx, String currentUserPublicId) {
+        if (tx.getType() != TransactionType.INTERNAL_TRANSFER) {
+            return null;
+        }
+        Wallet sender = tx.getWallet();
+        Wallet receiver = tx.getReceiverWallet();
+        if (sender == null || receiver == null) {
+            return null;
+        }
+        String senderId = sender.getUserPublicId();
+        String receiverId = receiver.getUserPublicId();
+        if (currentUserPublicId.equals(senderId)) {
+            return receiverId;   // 본인이 보냄(OUT) → 상대 = 받는 사람
+        }
+        if (currentUserPublicId.equals(receiverId)) {
+            return senderId;     // 본인이 받음(IN) → 상대 = 보낸 사람
+        }
+        return null;
+    }
+
+    /** 거래 상대 닉네임 조회. 상대 없음/맵 미제공/조회 누락이면 null(표시용 — 호출 측이 생략). */
+    private static String resolveCounterpartyNickname(Transaction tx, String currentUserPublicId,
+                                                      Map<String, MemberInfo> membersByPublicId) {
+        String counterpartyId = counterpartyUserPublicId(tx, currentUserPublicId);
+        if (counterpartyId == null || membersByPublicId == null) {
+            return null;
+        }
+        MemberInfo member = membersByPublicId.get(counterpartyId);
+        return member != null ? member.nickname() : null;
     }
 
     /**
