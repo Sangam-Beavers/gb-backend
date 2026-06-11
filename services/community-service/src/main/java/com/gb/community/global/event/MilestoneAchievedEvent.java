@@ -11,7 +11,7 @@ import java.util.UUID;
  * {
  *   "event_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
  *   "event_type": "MILESTONE_ACHIEVED",
- *   "milestone_type": "COMMUNITY_DEBUT",
+ *   "milestone_type": "COMMUNITY_ACTIVE",
  *   "user_public_id": "9b2f...uuid",
  *   "occurred_at": "2026-06-10T05:21:08Z",
  *   "source_service": "community-service",

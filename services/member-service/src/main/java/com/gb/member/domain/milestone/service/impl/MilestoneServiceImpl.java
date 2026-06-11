@@ -113,11 +113,26 @@ public class MilestoneServiceImpl implements MilestoneService {
                         .orElse(null)
                 : null;
 
-        // 카탈로그 전체(미달성 포함) — 등급 체인(Lv2→Lv3→Lv4) 순서 고정. 프론트가 다음 단계 CTA를 그린다.
+        // ACCOUNT_NINETY_DAYS 합성값 — createdAt 기준 90일 경과 여부 실시간 계산. DB에 저장 안 함.
+        boolean ninetyDaysElapsed = member.getCreatedAt() != null
+                && java.time.temporal.ChronoUnit.DAYS.between(
+                        member.getCreatedAt(), LocalDateTime.now(ZoneOffset.UTC)) >= 90L;
+        LocalDateTime memberCreatedAt = member.getCreatedAt();
+
+        // 카탈로그 전체(미달성 포함) — 순차 체인(Lv2→Lv4) + GOLD 보너스(4종) 순서 고정.
+        // 프론트: 체인 3개로 Lv4 TRUSTED까지 CTA를 그리고, 보너스 섹션에서 GOLD 조건을 표시한다.
         List<MilestoneItem> milestones = List.of(
+                // ── 순차 체인 (Lv2→Lv3→Lv4) ──────────────────────────────────────────
                 MilestoneItem.of(ID_VERIFIED, member.isVerified(), verifiedAt),
                 toItem(MilestoneType.BANK_ACCOUNT_CONNECTED, achieved),
-                toItem(MilestoneType.FIRST_TRANSACTION_COMPLETED, achieved));
+                toItem(MilestoneType.FIRST_TRANSACTION_COMPLETED, achieved),
+                // ── GOLD 보너스 4종 (2개 이상 달성 시 Lv5 GOLD) ─────────────────────
+                toItem(MilestoneType.DOCUMENT_ANALYZED, achieved),
+                toItem(MilestoneType.COMMUNITY_ACTIVE, achieved),
+                toItem(MilestoneType.TRANSACTION_FIVE_COMPLETED, achieved),
+                // ACCOUNT_NINETY_DAYS — DB 저장 없음. 합성: createdAt 90일 경과.
+                MilestoneItem.of("ACCOUNT_NINETY_DAYS", ninetyDaysElapsed,
+                        ninetyDaysElapsed ? memberCreatedAt : null));
 
         return TrustMilestonesResponse.of(member.getTrustGrade().name(), milestones);
     }

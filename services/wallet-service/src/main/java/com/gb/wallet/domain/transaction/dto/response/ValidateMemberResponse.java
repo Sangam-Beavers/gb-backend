@@ -29,11 +29,17 @@ public class ValidateMemberResponse {
     @JsonProperty("is_verified")
     private final boolean isVerified;
 
+    @Schema(description = "마일스톤 기반 신뢰등급 (NEWCOMER/VERIFIED/CONNECTED/TRUSTED/GOLD)",
+            example = "VERIFIED")
+    private final String trustGrade;
+
     @Builder
-    private ValidateMemberResponse(String receiverPublicId, String nickname, boolean isVerified) {
+    private ValidateMemberResponse(String receiverPublicId, String nickname, boolean isVerified,
+                                   String trustGrade) {
         this.receiverPublicId = receiverPublicId;
         this.nickname = nickname;
         this.isVerified = isVerified;
+        this.trustGrade = trustGrade;
     }
 
     public static ValidateMemberResponse from(MemberInfo member) {
@@ -41,6 +47,7 @@ public class ValidateMemberResponse {
                 .receiverPublicId(member.userPublicId())
                 .nickname(member.nickname())
                 .isVerified(member.isVerified())
+                .trustGrade(member.trustGrade())
                 .build();
     }
 }

@@ -1,6 +1,5 @@
 package com.gb.document.domain.document.scheduled;
 
-import com.gb.document.domain.document.entity.DocumentResult;
 import com.gb.document.domain.document.entity.ProcessingStatus;
 import com.gb.document.domain.document.repository.DocumentResultRepository;
 import com.gb.document.global.event.MilestoneAchieved;
@@ -48,21 +47,22 @@ public class DevMilestoneSyncJob {
     /**
      * 30초마다 실행. 분석이 완료된 모든 문서에 대해 {@code DOCUMENT_ANALYZED} 마일스톤 이벤트를 발행한다.
      * member-service가 멱등 처리하므로 중복 발행은 무해하다.
+     *
+     * <p>필요한 값은 {@code userPublicId} 하나뿐이라 projection 쿼리로 단일 SELECT한다 —
+     * 과거 {@code findAll...} 후 {@code getSubmission()} 건별 LAZY 초기화로 발생하던 N+1
+     * ({@code document_submissions where id=?} 반복)을 제거했다.
      */
     @Scheduled(fixedDelay = 30_000)
     @Transactional
     public void syncMilestones() {
-        List<DocumentResult> completed = documentResultRepository.findAllByProcessingStatusIn(COMPLETED_STATUSES);
-        if (completed.isEmpty()) {
+        List<String> userPublicIds =
+                documentResultRepository.findUserPublicIdsByProcessingStatusIn(COMPLETED_STATUSES);
+        if (userPublicIds.isEmpty()) {
             return;
         }
-        for (DocumentResult result : completed) {
-            String userPublicId = result.getSubmission().getUserPublicId();
-            if (userPublicId == null || userPublicId.isBlank()) {
-                continue;
-            }
+        for (String userPublicId : userPublicIds) {
             eventPublisher.publishEvent(new MilestoneAchieved(userPublicId, MilestoneType.DOCUMENT_ANALYZED));
         }
-        log.debug("[dev-milestone-sync] DOCUMENT_ANALYZED 이벤트 발행 {}건", completed.size());
+        log.debug("[dev-milestone-sync] DOCUMENT_ANALYZED 이벤트 발행 {}건", userPublicIds.size());
     }
 }
