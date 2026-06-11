@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
@@ -37,6 +38,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class MemberServiceImpl implements MemberService {
@@ -228,7 +230,6 @@ public class MemberServiceImpl implements MemberService {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public void sendPasswordResetEmail(PasswordResetEmailRequest request) {
         String email = request.getEmail();
 
@@ -239,11 +240,15 @@ public class MemberServiceImpl implements MemberService {
             throw new BusinessException(CommonErrorCode.TOO_MANY_REQUESTS);
         }
 
-        // 가입 여부 노출 방지(보안): 미가입 이메일이어도 예외/다른 응답 없이 조용히 종료한다.
+        // 가입 여부 노출 방지(보안): 미가입/탈퇴 이메일이어도 예외/다른 응답 없이 조용히 종료한다.
         // (공격자가 응답 차이로 "이 이메일 가입돼 있나"를 알아내지 못하게 — 호출 측은 항상 200을 받는다.)
+        // 탈퇴자 제외: findByEmailAndDeletedAtIsNull로 탈퇴 회원에게는 재설정 메일을 보내지 않는다 — 탈퇴 시
+        // IdP 계정이 비활성화되어 재설정해도 로그인 불가이므로(getDisplayInfoByEmail과 동일 정책).
         // 저장 이메일(가입 당시 표기)을 사용한다. MySQL 기본 collation은 대소문자를 무시하므로,
         // IdP username과 byte-exact 일치를 보장하기 위해 입력값이 아닌 저장값을 사용한다.
-        Optional<Member> member = memberRepository.findByEmail(email);
+        // 트랜잭션을 두지 않는다: 유일한 DB 접근은 이 단건 읽기뿐이라 별도 tx가 불필요하고, 이후 외부 SMTP
+        // 호출(최대 15초) 동안 DB 커넥션(HikariCP)을 점유하지 않는다.
+        Optional<Member> member = memberRepository.findByEmailAndDeletedAtIsNull(email);
         if (member.isEmpty()) {
             return;
         }
@@ -255,12 +260,19 @@ public class MemberServiceImpl implements MemberService {
         // 재설정 링크를 메일로 발송. 링크는 프론트 비번재설정 페이지로 향한다(토큰을 쿼리로 전달).
         // 유효 시간 문구는 토큰 TTL 단일 출처에서 가져온다(MEM-08 — 리터럴 분리로 인한 불일치 방지).
         String link = passwordResetBaseUrl + "?token=" + token;
-        emailSender.send(
-                canonicalEmail,
-                "[Global Bridge] 비밀번호 재설정 안내",
-                "아래 링크에서 비밀번호를 재설정해주세요(" + passwordResetTokenStore.ttlMinutes()
-                        + "분 내 유효):\n\n" + link
-                        + "\n\n본인이 요청하지 않았다면 이 메일을 무시하세요.");
+        String subject = "[Global Bridge] 비밀번호 재설정 안내";
+        String body = "아래 링크에서 비밀번호를 재설정해주세요(" + passwordResetTokenStore.ttlMinutes()
+                + "분 내 유효):\n\n" + link
+                + "\n\n본인이 요청하지 않았다면 이 메일을 무시하세요.";
+        try {
+            emailSender.send(canonicalEmail, subject, body);
+        } catch (RuntimeException e) {
+            // 발송 실패(SMTP 장애 등)를 호출 측에 전파하지 않는다. 이 엔드포인트의 응답 계약은 200/400/429이며,
+            // "가입 이메일만 500, 미가입은 200"이 되면 가입 여부가 노출되는 enumeration 오라클이 된다. 따라서
+            // 실패해도 200을 유지하고 error 로그로만 남겨 운영이 인지하게 한다(EmailSender가 마스킹 로그를 이미
+            // 남김). 저장된 토큰은 미사용 상태로 TTL(30분) 후 자동 만료된다.
+            log.error("비밀번호 재설정 메일 발송 실패(응답 200 유지 — enumeration 방지): {}", e.getMessage());
+        }
     }
 
     @Override

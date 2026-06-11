@@ -1,6 +1,7 @@
 package com.gb.member.domain.member.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -548,7 +549,7 @@ class MemberServiceImplTest {
         PasswordResetEmailRequest request = new PasswordResetEmailRequest();
         ReflectionTestUtils.setField(request, "email", "user@example.com");
         when(passwordResetRateLimiter.tryAcquire("user@example.com")).thenReturn(true);
-        when(memberRepository.findByEmail("user@example.com"))
+        when(memberRepository.findByEmailAndDeletedAtIsNull("user@example.com"))
                 .thenReturn(Optional.of(Member.builder().email("user@example.com").build()));
         when(passwordResetTokenStore.ttlMinutes()).thenReturn(30L);
 
@@ -569,7 +570,7 @@ class MemberServiceImplTest {
         PasswordResetEmailRequest request = new PasswordResetEmailRequest();
         ReflectionTestUtils.setField(request, "email", "User@Example.COM");
         when(passwordResetRateLimiter.tryAcquire("User@Example.COM")).thenReturn(true);
-        when(memberRepository.findByEmail("User@Example.COM"))
+        when(memberRepository.findByEmailAndDeletedAtIsNull("User@Example.COM"))
                 .thenReturn(Optional.of(Member.builder().email("user@example.com").build()));
         when(passwordResetTokenStore.ttlMinutes()).thenReturn(30L);
 
@@ -587,11 +588,27 @@ class MemberServiceImplTest {
         PasswordResetEmailRequest request = new PasswordResetEmailRequest();
         ReflectionTestUtils.setField(request, "email", "nobody@example.com");
         when(passwordResetRateLimiter.tryAcquire("nobody@example.com")).thenReturn(true);
-        when(memberRepository.findByEmail("nobody@example.com")).thenReturn(Optional.empty());
+        when(memberRepository.findByEmailAndDeletedAtIsNull("nobody@example.com")).thenReturn(Optional.empty());
 
         memberService.sendPasswordResetEmail(request);
 
-        // 미가입이어도 예외 없이 끝나고, 토큰 저장·메일 발송은 하지 않는다.
+        // 미가입(또는 탈퇴)이어도 예외 없이 끝나고, 토큰 저장·메일 발송은 하지 않는다.
+        verify(passwordResetTokenStore, never()).save(anyString(), anyString());
+        verifyNoInteractions(emailSender, idpUserClient);
+    }
+
+    @Test
+    @DisplayName("재설정 메일: 탈퇴 회원이면 조용히 종료(findByEmailAndDeletedAtIsNull이 제외 — 탈퇴자 메일 미발송)")
+    void sendPasswordResetEmail_탈퇴회원_조용히종료() {
+        // 탈퇴 회원은 deleted_at이 설정돼 findByEmailAndDeletedAtIsNull이 빈 결과를 준다(= 없는 것으로 취급).
+        // 탈퇴 시 IdP 계정이 비활성화되므로 재설정 메일을 보내지 않는 게 정책(getDisplayInfoByEmail과 동일).
+        PasswordResetEmailRequest request = new PasswordResetEmailRequest();
+        ReflectionTestUtils.setField(request, "email", "withdrawn@example.com");
+        when(passwordResetRateLimiter.tryAcquire("withdrawn@example.com")).thenReturn(true);
+        when(memberRepository.findByEmailAndDeletedAtIsNull("withdrawn@example.com")).thenReturn(Optional.empty());
+
+        memberService.sendPasswordResetEmail(request);
+
         verify(passwordResetTokenStore, never()).save(anyString(), anyString());
         verifyNoInteractions(emailSender, idpUserClient);
     }
@@ -609,9 +626,31 @@ class MemberServiceImplTest {
                 .isEqualTo(CommonErrorCode.TOO_MANY_REQUESTS);
 
         // rate-limit이 가입 여부 확인 *전*에 차단 — 가입조회/토큰/메일 모두 미진입.
-        verify(memberRepository, never()).findByEmail(anyString());
+        verify(memberRepository, never()).findByEmailAndDeletedAtIsNull(anyString());
         verify(passwordResetTokenStore, never()).save(anyString(), anyString());
         verifyNoInteractions(emailSender, idpUserClient);
+    }
+
+    @Test
+    @DisplayName("재설정 메일: SMTP 발송 실패여도 예외 전파 없이 200 유지(enumeration 방지 — 가입 이메일만 500 노출 차단)")
+    void sendPasswordResetEmail_발송실패_응답200유지() {
+        PasswordResetEmailRequest request = new PasswordResetEmailRequest();
+        ReflectionTestUtils.setField(request, "email", "user@example.com");
+        when(passwordResetRateLimiter.tryAcquire("user@example.com")).thenReturn(true);
+        when(memberRepository.findByEmailAndDeletedAtIsNull("user@example.com"))
+                .thenReturn(Optional.of(Member.builder().email("user@example.com").build()));
+        when(passwordResetTokenStore.ttlMinutes()).thenReturn(30L);
+        // EmailSender는 SMTP 실패 시 BusinessException(INTERNAL_SERVER_ERROR)을 던진다.
+        doThrow(new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR))
+                .when(emailSender).send(eq("user@example.com"), anyString(), anyString());
+
+        // 발송이 실패해도 호출 측엔 예외가 전파되지 않아야 한다(컨트롤러는 200을 반환 — 문서화된 계약).
+        assertThatCode(() -> memberService.sendPasswordResetEmail(request))
+                .doesNotThrowAnyException();
+
+        // 토큰은 발송 시도 전에 이미 저장됐고(미사용 TTL 만료), 발송도 1회 시도된다.
+        verify(passwordResetTokenStore).save(anyString(), eq("user@example.com"));
+        verify(emailSender).send(eq("user@example.com"), anyString(), anyString());
     }
 
     @Test

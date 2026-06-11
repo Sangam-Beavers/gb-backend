@@ -10,7 +10,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: validate        # stage/prod에서는 validate (update 금지 — 스키마는 Flyway/수동 관리)
+      ddl-auto: update        # stage/prod에서는 validate (update 금지 — 스키마는 Flyway/수동 관리)
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
@@ -24,9 +24,8 @@ spring:
       port: ${REDIS_PORT}
       password: ${SPRING_DATA_REDIS_PASSWORD}
       database: 0
-      timeout: 3s
       ssl:
-        enabled: true
+        enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:true}  # SM: tls
 
   security:
     oauth2:
