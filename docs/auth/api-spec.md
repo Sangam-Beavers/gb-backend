@@ -69,6 +69,8 @@
 | `nickname` | string | O | 닉네임 |
 | `nationality` | string | O | 국적 (ISO 3166-1 alpha-2, 예: "VN") |
 | `language` | string | O | 주 사용 언어 (BCP 47 소문자, 예: "vi") |
+| `gender` | string | O | 성별 (이슈 #203). enum 코드 — `MALE` / `FEMALE`. 미정의 값은 400 MEMBER4005 |
+| `age_range` | string | O | 연령대 (이슈 #203). enum 코드 — `TEENS` / `TWENTIES` / `THIRTIES` / `FORTIES` / `FIFTIES` / `SIXTIES_PLUS`. 미정의 값은 400 MEMBER4006 |
 | `terms_agreed` | boolean | △ | 이용약관 동의 (※ 임시: 프론트 미연동으로 **미전송 허용** — 미전송 시 백엔드가 동의 처리. 전송 시 `false`는 거부. 프론트 연동 후 필수(O)로 복구) |
 | `privacy_agreed` | boolean | △ | 개인정보 처리방침 동의 (terms_agreed와 동일 임시 정책) |
 
@@ -85,6 +87,8 @@ message: "회원가입이 완료되었습니다."
 | HTTP | code | message |
 | --- | --- | --- |
 | 400 | COMMON4001 | 요청 값이 올바르지 않습니다. |
+| 400 | MEMBER4005 | 지원하지 않는 성별입니다. (gender 미정의 값 — 이슈 #203) |
+| 400 | MEMBER4006 | 지원하지 않는 연령대입니다. (age_range 미정의 값 — 이슈 #203) |
 | 409 | MEMBER4002 | 이미 사용 중인 이메일입니다. |
 | 409 | MEMBER4003 | 이미 사용 중인 닉네임입니다. |
 | 500 | COMMON5000 | IdP 프로비저닝 실패 등 서버 오류. |

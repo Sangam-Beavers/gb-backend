@@ -63,6 +63,8 @@ class MemberControllerTest {
         body.put("nickname", "gildong");
         body.put("nationality", "VN");
         body.put("language", "vi");
+        body.put("gender", "MALE");          // 이슈 #203 — 필수(@NotBlank)
+        body.put("age_range", "TWENTIES");   // 이슈 #203 — 필수(@NotBlank)
         body.put("terms_agreed", true);
         body.put("privacy_agreed", true);
         return body;
@@ -109,6 +111,22 @@ class MemberControllerTest {
     void register_개인정보_미동의_400() throws Exception {
         Map<String, Object> body = validBody();
         body.put("privacy_agreed", false);
+        expectBadRequest(body);
+    }
+
+    @Test
+    @DisplayName("POST /auth/register 400: gender 미전송(@NotBlank 위반) → COMMON4001, service 미호출 (이슈 #203)")
+    void register_성별_미전송_400() throws Exception {
+        Map<String, Object> body = validBody();
+        body.remove("gender");
+        expectBadRequest(body);
+    }
+
+    @Test
+    @DisplayName("POST /auth/register 400: age_range 미전송(@NotBlank 위반) → COMMON4001, service 미호출 (이슈 #203)")
+    void register_연령대_미전송_400() throws Exception {
+        Map<String, Object> body = validBody();
+        body.remove("age_range");
         expectBadRequest(body);
     }
 

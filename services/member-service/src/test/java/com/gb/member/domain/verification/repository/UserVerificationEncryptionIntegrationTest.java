@@ -117,6 +117,8 @@ class UserVerificationEncryptionIntegrationTest {
                 .nickname(nickname)
                 .nationality("VN")
                 .language("vi")
+                .gender(com.gb.member.domain.member.entity.Gender.MALE)
+                .ageRange(com.gb.member.domain.member.entity.AgeRange.TWENTIES)
                 .authProviderId(authProviderId)
                 .termsAgreed(true)
                 .privacyAgreed(true)
