@@ -60,8 +60,7 @@ public class Document extends BaseEntity {
 
     /**
      * 제출 시 발급한 Pre-signed URL의 S3 오브젝트 키({@code original/{날짜}/{publicId}/{파일명}}).
-     * retry 시 키를 날짜로 재조립하면 제출일과 다른 날 retry할 때 키가 어긋나므로(원본 미일치 버그)
-     * 발급 시점의 키를 그대로 저장해 재사용한다. 도입 이전 행은 null — 조회 측에서 createdAt 날짜로 복원.
+     * 어떤 키로 업로드를 받았는지 기록용으로 발급 시점의 키를 그대로 저장한다(추적·디버깅). 도입 이전 행은 null.
      */
     @Column(name = "s3_key", length = 512)
     private String s3Key;
@@ -89,11 +88,6 @@ public class Document extends BaseEntity {
     /** SQS Consumer가 분석 실패 결과를 받았을 때 호출. */
     public void markFailed() {
         this.status = DocumentStatus.FAILED;
-    }
-
-    /** retry 요청 시 호출 — FAILED 상태에서 ANALYZING으로 되돌린다. */
-    public void markAnalyzing() {
-        this.status = DocumentStatus.ANALYZING;
     }
 
     /** 요청자(userPublicId)가 문서 소유자가 맞는지 확인. */

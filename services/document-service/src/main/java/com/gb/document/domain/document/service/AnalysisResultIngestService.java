@@ -12,7 +12,7 @@ public interface AnalysisResultIngestService {
 
     /**
      * 결과 메시지를 적용한다. 같은 {@code document_public_id}로 결과가 이미 존재하면 갱신(UPSERT) —
-     * SQS at-least-once 재수신 및 retry 후 성공 케이스 모두 멱등하게 처리.
+     * SQS at-least-once 재수신을 멱등하게 처리.
      *
      * <p>처리 흐름:
      * <ol>

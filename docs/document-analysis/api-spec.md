@@ -14,7 +14,6 @@
 | 분석 요청 (Pre-signed URL 발급) | POST | `/api/v1/documents` | ✅ |
 | 분석 진행 상태 조회 (폴링) | GET | `/api/v1/documents/{id}/status` | ✅ |
 | 분석 결과 상세 조회 | GET | `/api/v1/documents/{id}/result` | ✅ |
-| 분석 재요청 (FAILED 시) | POST | `/api/v1/documents/{id}/retry` | ✅ |
 | 문서 분석 결과 단건 조회 (※ 미구현) | GET | `/api/v1/documents/{id}` | ✅ |
 | 후속 질문 챗봇 (SSE 스트리밍) | POST | `/api/v1/documents/{id}/chat` | ✅ |
 | 후속 질문 챗봇 대화 이력 조회 | GET | `/api/v1/documents/{id}/chat/history` | ✅ |
@@ -80,6 +79,12 @@
 
 **Error**: 401 COMMON4011 / 403 COMMON4031 / 404 DOCUMENT4001
 
+> **ANALYZING 고아 건 정리(스케줄러):** 제출 후 업로드를 안 하거나 분석 결과가 유실되면 그 건은
+> 영원히 ANALYZING으로 남으므로, 백엔드 스케줄러(`StaleSubmissionSweeper`, 기본 10분 주기)가
+> `updatedAt` 기준 임계(기본 30분, `gb.analysis.stale-timeout-minutes`) 초과 ANALYZING 건을 FAILED로
+> 정리한다. FAILED 처리된 건의 복구는 사용자가 §1(`POST /api/v1/documents`)로 새로 제출하는 것뿐이다.
+> sweep 후 결과가 늦게 도착해도 Consumer가 status를 덮어쓰므로 무해(최종적으로 결과가 이김).
+
 ---
 
 ## 3. 분석 결과 상세 조회
@@ -143,34 +148,13 @@
 
 ---
 
-## 5. 분석 재요청
-
-`POST /api/v1/documents/{id}/retry` · Auth ✅
-
-FAILED 상태 문서의 분석을 다시 트리거. **S3에 원본이 남아 있을 때만**(서버가 HeadObject로 판정)
-같은 키로 Lambda A를 재트리거하고 `status`를 ANALYZING으로 전환한다(재업로드 불필요).
-원본이 없으면(URL만 발급받고 미업로드 → 정리 스케줄러가 FAILED 처리한 건) **422 COMMON4221** —
-재시도 대상이 아니므로 클라이언트는 §1(`POST /api/v1/documents`)로 새로 제출한다.
-
-> **ANALYZING 고아 건 정리(스케줄러):** 제출 후 업로드를 안 하거나 분석 결과가 유실되면 그 건은
-> 영원히 ANALYZING으로 남으므로, 백엔드 스케줄러(`StaleSubmissionSweeper`, 기본 10분 주기)가
-> `updatedAt` 기준 임계(기본 30분, `gb.analysis.stale-timeout-minutes`) 초과 ANALYZING 건을 FAILED로
-> 정리한다. 이후 복구 경로는 두 갈래 — 원본이 S3에 있으면(결과 유실) 본 retry API,
-> 원본이 없으면(미업로드) §1 새 제출. retry가 status를 ANALYZING으로 되돌리면 updatedAt이 갱신돼
-> 유예 시간이 다시 시작된다. sweep 후 결과가 늦게 도착해도 Consumer가 status를 덮어쓰므로
-> 무해(최종적으로 결과가 이김).
-
-**Error**: 401 COMMON4011 / 403 COMMON4031 / 404 DOCUMENT4001 / 422 COMMON4221(비-FAILED 또는 원본 미존재)
-
----
-
-## 6. 문서 분석 결과 단건 조회
+## 5. 문서 분석 결과 단건 조회
 
 `GET /api/v1/documents/{id}` · Auth ✅ — 마이페이지 진입용 단건 조회. **(※ 미구현 — 코드에 매핑 없음.)** 응답은 §3의 결과 또는 메타 요약(구현 시 통일).
 
 ---
 
-## 7. 후속 질문 챗봇 대화 이력 조회
+## 6. 후속 질문 챗봇 대화 이력 조회
 
 `GET /api/v1/documents/{id}/chat/history?limit=&cursor=` · Auth ✅
 

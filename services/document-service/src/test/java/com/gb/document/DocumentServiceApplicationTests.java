@@ -1,7 +1,6 @@
 package com.gb.document;
 
 import com.gb.document.global.client.s3.S3PresignedUrlClient;
-import com.gb.document.global.client.sqs.AnalysisRequestPublisher;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
@@ -25,9 +24,6 @@ class DocumentServiceApplicationTests {
 
     @MockitoBean
     S3PresignedUrlClient s3PresignedUrlClient;
-
-    @MockitoBean
-    AnalysisRequestPublisher analysisRequestPublisher;
 
     @MockitoBean
     JwtDecoder jwtDecoder;

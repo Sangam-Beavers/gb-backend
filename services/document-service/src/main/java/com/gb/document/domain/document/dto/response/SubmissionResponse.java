@@ -11,9 +11,9 @@ import lombok.Builder;
 import lombok.Getter;
 
 /**
- * 분석 요청 응답(POST /api/v1/documents) + retry 응답.
- * uploadUrl / uploadHeaders / expiresAt은 retry에서는 null이고, 최초 제출에서는 Pre-signed PUT URL과
- * 그 URL로 업로드할 때 함께 보내야 하는 서명 헤더가 담긴다.
+ * 분석 요청 응답(POST /api/v1/documents).
+ * uploadUrl / uploadHeaders / expiresAt에는 Pre-signed PUT URL과 그 URL로 업로드할 때 함께 보내야
+ * 하는 서명 헤더가 담긴다.
  */
 @Getter
 public class SubmissionResponse {
@@ -26,19 +26,18 @@ public class SubmissionResponse {
             allowableValues = {"ANALYZING", "COMPLETED", "FAILED"})
     private final String status;
 
-    @Schema(description = "Pre-signed PUT URL. retry 응답에서는 null.",
+    @Schema(description = "Pre-signed PUT URL.",
             example = "https://s3.ap-northeast-2.amazonaws.com/...")
     private final String uploadUrl;
 
     @Schema(description = "uploadUrl로 PUT 업로드할 때 그대로 함께 보내야 하는 헤더(이름+값). "
-            + "서명에 포함되어 있어 누락/변경 시 403이 나고 메타데이터가 오브젝트에 박히지 않는다. "
-            + "retry 응답에서는 null.",
+            + "서명에 포함되어 있어 누락/변경 시 403이 나고 메타데이터가 오브젝트에 박히지 않는다.",
             example = "{\"Content-Type\":\"application/octet-stream\","
                     + "\"x-amz-meta-source\":\"production\","
                     + "\"x-amz-meta-document_id\":\"550e8400-e29b-41d4-a716-446655440000\"}")
     private final Map<String, String> uploadHeaders;
 
-    @Schema(description = "uploadUrl 만료 시각(ISO 8601 UTC Z). retry 응답에서는 null.",
+    @Schema(description = "uploadUrl 만료 시각(ISO 8601 UTC Z).",
             example = "2026-05-29T10:00:00Z")
     private final String expiresAt;
 
@@ -61,14 +60,6 @@ public class SubmissionResponse {
                 .uploadUrl(uploadUrl)
                 .uploadHeaders(uploadHeaders)
                 .expiresAt(toUtcZ(expiresAt))
-                .build();
-    }
-
-    /** retry — uploadUrl/expiresAt 없이 상태만 회신. */
-    public static SubmissionResponse forRetry(Document document) {
-        return SubmissionResponse.builder()
-                .publicId(document.getPublicId())
-                .status(document.getStatus().name())
                 .build();
     }
 

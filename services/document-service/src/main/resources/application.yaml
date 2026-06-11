@@ -57,7 +57,6 @@ chatbot:
 # - source: Lambda A가 S3 메타데이터에서 읽어 결과 경로를 분기한다. dev=development(온프렘 직결),
 #   stage/prod=production(SQS 경유). 환경별 application-{env}.yml에서 덮어쓴다.
 # - result-queue-arn: production 계열에서만 S3 메타데이터에 주입. 환경별로 다른 큐를 가리킨다.
-# - request-queue-url: retry 시 Lambda A를 재트리거할 요청 큐. 운영(!dev)에서 비어 있으면 retry 시 예외.
 # - upload-bucket: Pre-signed PUT URL이 가리킬 S3 버킷.
 # - consumer-enabled / consumer-queue-name: 결과 수신 Consumer(routing §3). dev=false(미기동),
 #   stage/prod=true + 환경별 자기 큐 이름. 코드 동일, 큐 이름만 환경 분리(데이터 오염 경로 없음).
@@ -73,7 +72,6 @@ gb:
   analysis:
     source: ${GB_ANALYSIS_SOURCE:development}
     result-queue-arn: ${GB_ANALYSIS_RESULT_QUEUE_ARN:}
-    request-queue-url: ${GB_ANALYSIS_REQUEST_QUEUE_URL:}
     upload-bucket: ${GB_ANALYSIS_UPLOAD_BUCKET:gb-document-bucket}
     upload-url-expires-seconds: ${GB_ANALYSIS_UPLOAD_URL_EXPIRES_SECONDS:600}
     aws-region: ${GB_ANALYSIS_AWS_REGION:ap-northeast-2}

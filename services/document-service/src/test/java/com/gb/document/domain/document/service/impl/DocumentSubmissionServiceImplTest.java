@@ -25,10 +25,8 @@ import com.gb.document.domain.document.entity.ProcessingStatus;
 import com.gb.document.domain.document.entity.RiskLevel;
 import com.gb.document.domain.document.repository.DocumentRepository;
 import com.gb.document.domain.document.repository.DocumentResultRepository;
-import com.gb.document.global.client.s3.S3ObjectClient;
 import com.gb.document.global.client.s3.S3PresignedUrlClient;
 import com.gb.document.global.client.s3.S3PresignedUrlClient.IssueUrlResult;
-import com.gb.document.global.client.sqs.AnalysisRequestPublisher;
 import com.gb.document.global.config.AnalysisProperties;
 import com.gb.document.global.exception.code.DocumentErrorCode;
 import java.lang.reflect.Field;
@@ -36,7 +34,6 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
@@ -53,13 +50,10 @@ class DocumentSubmissionServiceImplTest {
     private static final String OWNER = "user-public-id-A";
     private static final String OTHER = "user-public-id-B";
     private static final String PUBLIC_ID = "doc-public-id-1";
-    private static final String S3_KEY = "original/2026-06-04/" + PUBLIC_ID + "/c.pdf";
 
     @Mock DocumentRepository documentRepository;
     @Mock DocumentResultRepository documentResultRepository;
     @Mock S3PresignedUrlClient s3PresignedUrlClient;
-    @Mock S3ObjectClient s3ObjectClient;
-    @Mock AnalysisRequestPublisher analysisRequestPublisher;
 
     @InjectMocks DocumentSubmissionServiceImpl service;
 
@@ -113,7 +107,6 @@ class DocumentSubmissionServiceImplTest {
         f.set(service, new AnalysisProperties(
                 "production",
                 "arn:aws:sqs:ap-northeast-2:123:gb-analysis-results-prod",
-                "",
                 "gb-document-uploads-prod",
                 600,
                 "ap-northeast-2",
@@ -286,67 +279,6 @@ class DocumentSubmissionServiceImplTest {
                 .isEqualTo("https://s3.signed.example/masked/doc-public-id-1.txt?X-Amz-Signature=x");
     }
 
-    @Test
-    @DisplayName("retry: S3 원본 존재 — ANALYZING 전환 + 저장된 s3Key로 publisher 호출, URL 재발급 없음")
-    void retry_원본존재_재트리거() {
-        Document doc = failedDoc();
-        given(documentRepository.findByPublicId(PUBLIC_ID)).willReturn(Optional.of(doc));
-        given(s3ObjectClient.objectExists(S3_KEY)).willReturn(true);
-
-        SubmissionResponse res = service.retry(OWNER, PUBLIC_ID);
-
-        assertThat(doc.getStatus()).isEqualTo(DocumentStatus.ANALYZING);
-        assertThat(res.getStatus()).isEqualTo("ANALYZING");
-        assertThat(res.getUploadUrl()).isNull();
-        verify(analysisRequestPublisher).publishRetry(PUBLIC_ID, OWNER, S3_KEY);
-        verify(s3PresignedUrlClient, never()).issueUploadUrl(anyString(), anyString(), anyMap(), any());
-    }
-
-    @Test
-    @DisplayName("retry: S3 원본 미존재(미업로드 만료) — COMMON4221, FAILED 유지, publisher 미호출 (새 제출로 유도)")
-    void retry_원본미존재_거절() {
-        Document doc = failedDoc();
-        given(documentRepository.findByPublicId(PUBLIC_ID)).willReturn(Optional.of(doc));
-        given(s3ObjectClient.objectExists(S3_KEY)).willReturn(false);
-
-        assertThatThrownBy(() -> service.retry(OWNER, PUBLIC_ID))
-                .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
-                .isEqualTo(CommonErrorCode.UNPROCESSABLE_ENTITY);
-
-        // 거절 시 상태는 FAILED 그대로(사용자는 POST /documents로 새로 제출), 재트리거·URL 발급 없음.
-        assertThat(doc.getStatus()).isEqualTo(DocumentStatus.FAILED);
-        verifyNoInteractions(analysisRequestPublisher);
-        verify(s3PresignedUrlClient, never()).issueUploadUrl(anyString(), anyString(), anyMap(), any());
-    }
-
-    @Test
-    @DisplayName("retry: s3_key 컬럼 도입 이전 행(null)은 createdAt 날짜로 키를 복원해 사용")
-    void retry_레거시행_createdAt날짜로_키복원() throws Exception {
-        Document doc = failedDocWithoutS3Key();
-        setCreatedAt(doc, LocalDateTime.parse("2026-05-29T09:00:00"));
-        given(documentRepository.findByPublicId(PUBLIC_ID)).willReturn(Optional.of(doc));
-        // 제출일(5/29) 날짜로 복원돼야 한다 — 오늘 날짜로 재조립하면 원본 키와 어긋난다(날짜 드리프트 버그).
-        String legacyKey = "original/2026-05-29/" + PUBLIC_ID + "/c.pdf";
-        given(s3ObjectClient.objectExists(legacyKey)).willReturn(true);
-
-        service.retry(OWNER, PUBLIC_ID);
-
-        verify(analysisRequestPublisher).publishRetry(PUBLIC_ID, OWNER, legacyKey);
-    }
-
-    @Test
-    @DisplayName("retry: 비-FAILED 상태(ANALYZING)면 COMMON4221, publisher·S3 미호출")
-    void retry_비실패상태() {
-        given(documentRepository.findByPublicId(PUBLIC_ID)).willReturn(Optional.of(analyzingDoc()));
-
-        assertThatThrownBy(() -> service.retry(OWNER, PUBLIC_ID))
-                .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
-                .isEqualTo(CommonErrorCode.UNPROCESSABLE_ENTITY);
-        verifyNoInteractions(analysisRequestPublisher, s3ObjectClient, s3PresignedUrlClient);
-    }
-
     // ---- helpers ----
 
     private Document analyzingDoc() {
@@ -369,28 +301,6 @@ class DocumentSubmissionServiceImplTest {
                 .build();
     }
 
-    private Document failedDoc() {
-        return Document.builder()
-                .publicId(PUBLIC_ID)
-                .userPublicId(OWNER)
-                .analysisDocumentType(AnalysisDocumentType.LABOR_CONTRACT)
-                .fileName("c.pdf")
-                .status(DocumentStatus.FAILED)
-                .s3Key(S3_KEY)
-                .build();
-    }
-
-    /** s3_key 컬럼 도입 이전에 저장된 행 모사 — s3Key=null. */
-    private Document failedDocWithoutS3Key() {
-        return Document.builder()
-                .publicId(PUBLIC_ID)
-                .userPublicId(OWNER)
-                .analysisDocumentType(AnalysisDocumentType.LABOR_CONTRACT)
-                .fileName("c.pdf")
-                .status(DocumentStatus.FAILED)
-                .build();
-    }
-
     /** lazy-sync 테스트용 최소 결과 — processing_status만 의미 있다. */
     private static DocumentResult resultOf(Document doc, ProcessingStatus processingStatus) {
         return DocumentResult.builder()
@@ -402,18 +312,10 @@ class DocumentSubmissionServiceImplTest {
                 .build();
     }
 
-    /** BaseEntity.createdAt은 auditing 전용이라 builder가 없다 — 단위 테스트에서만 reflection으로 주입. */
-    private static void setCreatedAt(Document doc, LocalDateTime createdAt) throws Exception {
-        Field f = doc.getClass().getSuperclass().getDeclaredField("createdAt");
-        f.setAccessible(true);
-        f.set(doc, createdAt);
-    }
-
     private static AnalysisProperties productionProps(String resultQueueArn) {
         // dev 기본(source=development, queue ARN 빈 값)
-        Map<String, String> ignored = new HashMap<>();
         return new AnalysisProperties(
-                "development", resultQueueArn, "", "gb-document-uploads-dev", 600, "ap-northeast-2",
+                "development", resultQueueArn, "gb-document-uploads-dev", 600, "ap-northeast-2",
                 false, "", 30);
     }
 }

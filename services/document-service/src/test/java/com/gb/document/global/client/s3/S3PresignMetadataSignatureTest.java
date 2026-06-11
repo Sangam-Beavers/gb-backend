@@ -100,7 +100,6 @@ class S3PresignMetadataSignatureTest {
         AnalysisProperties props = new AnalysisProperties(
                 "production",
                 "arn:aws:sqs:ap-northeast-2:123456789012:gb-analysis-results-prod",
-                "",
                 "gb-document-uploads-prod",
                 600,
                 "ap-northeast-2",
