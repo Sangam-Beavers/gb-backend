@@ -48,7 +48,7 @@ class MilestoneEventPublisherTest {
         given(kafkaTemplate.send(anyString(), anyString(), any(MilestoneAchievedEvent.class)))
                 .willReturn(CompletableFuture.completedFuture(sendResult));
 
-        publisher.publish(new MilestoneAchieved(USER, MilestoneType.COMMUNITY_DEBUT));
+        publisher.publish(new MilestoneAchieved(USER, MilestoneType.COMMUNITY_ACTIVE));
 
         ArgumentCaptor<MilestoneAchievedEvent> captor = ArgumentCaptor.forClass(MilestoneAchievedEvent.class);
         verify(kafkaTemplate).send(eq(MilestoneEventPublisher.TOPIC), eq(USER), captor.capture());
@@ -58,7 +58,7 @@ class MilestoneEventPublisherTest {
         MilestoneAchievedEvent event = captor.getValue();
         assertThat(event.eventId()).isNotBlank();                       // UUID 발급
         assertThat(event.eventType()).isEqualTo("MILESTONE_ACHIEVED");
-        assertThat(event.milestoneType()).isEqualTo("COMMUNITY_DEBUT");
+        assertThat(event.milestoneType()).isEqualTo("COMMUNITY_ACTIVE");
         assertThat(event.userPublicId()).isEqualTo(USER);
         assertThat(event.occurredAt()).isNotNull();
         assertThat(event.sourceService()).isEqualTo("community-service");
@@ -72,7 +72,7 @@ class MilestoneEventPublisherTest {
                 .willReturn(CompletableFuture.failedFuture(new KafkaException("broker error")));
 
         assertThatCode(() -> publisher.publish(
-                new MilestoneAchieved(USER, MilestoneType.COMMUNITY_DEBUT)))
+                new MilestoneAchieved(USER, MilestoneType.COMMUNITY_ACTIVE)))
                 .doesNotThrowAnyException();
     }
 
@@ -83,7 +83,7 @@ class MilestoneEventPublisherTest {
                 .willThrow(new KafkaException("max.block.ms timeout"));
 
         assertThatCode(() -> publisher.publish(
-                new MilestoneAchieved(USER, MilestoneType.COMMUNITY_DEBUT)))
+                new MilestoneAchieved(USER, MilestoneType.COMMUNITY_ACTIVE)))
                 .doesNotThrowAnyException();
     }
 }

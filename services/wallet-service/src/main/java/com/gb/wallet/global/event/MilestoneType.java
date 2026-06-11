@@ -13,5 +13,12 @@ public enum MilestoneType {
     BANK_ACCOUNT_CONNECTED,
 
     /** 첫 금융 거래(충전/송금/현금화) COMPLETED (Lv4 마일스톤). "첫 건" 판단 없이 매번 발행 — 수신측 자연 멱등. */
-    FIRST_TRANSACTION_COMPLETED
+    FIRST_TRANSACTION_COMPLETED,
+
+    /**
+     * 누적 금융 거래(충전·송금·현금화) 5건 이상 COMPLETED (Phase 3 GOLD 보너스 "꾸준한 거래").
+     * 5건 달성 시점마다 발행 — member-service가 (user, milestone) UNIQUE로 자연 멱등 스킵.
+     * 카운트 기준: 본인 wallet의 COMPLETED 거래 전체(충전·송금·현금화 포함, 수취 제외).
+     */
+    TRANSACTION_FIVE_COMPLETED
 }

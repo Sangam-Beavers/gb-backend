@@ -127,7 +127,7 @@ public class PostServiceImpl implements PostService {
         // MilestoneEventPublisher(AFTER_COMMIT)가 수행한다(롤백 시 미발행). 첫 글인지 판단하지 않고
         // 매번 발행 — 수신측(member)이 (user, milestone) UNIQUE로 자연 멱등 스킵(스파이크 결정 3).
         eventPublisher.publishEvent(
-                new MilestoneAchieved(requesterUserPublicId, MilestoneType.COMMUNITY_DEBUT));
+                new MilestoneAchieved(requesterUserPublicId, MilestoneType.COMMUNITY_ACTIVE));
         return saved;
     }
 

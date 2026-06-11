@@ -31,7 +31,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 /**
- * 마일스톤 이벤트 수신 통합 테스트 (Phase 2 — BE-4. EmbeddedKafka + H2, 실브로커 불필요 — 스파이크 결정 6).
+ * 마일스톤 이벤트 수신 통합 테스트 (Phase 2 — BE-4 / Phase 3 — BE-7.
+ * EmbeddedKafka + H2, 실브로커 불필요 — 스파이크 결정 6).
  *
  * <p>발행(와이어 JSON — 발행측 클래스 미사용) → @KafkaListener 수신 → 역직렬화(snake_case/Instant) →
  * member_milestones 저장 → TrustGradeService 재계산까지 끝-끝으로 검증한다. 중복 발행(같은 user ×
@@ -49,7 +50,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 @SpringBootTest(properties = "gb.kafka.milestone-consumer.auto-startup=true")
 @ActiveProfiles("test")
 @EmbeddedKafka(partitions = 1,
-        topics = MilestoneEventConsumer.TOPIC,
+        topics = {MilestoneEventConsumer.WALLET_TOPIC, MilestoneEventConsumer.DOCUMENT_TOPIC,
+                MilestoneEventConsumer.COMMUNITY_TOPIC},
         bootstrapServersProperty = "spring.kafka.bootstrap-servers")
 class MilestoneEventConsumerIntegrationTest {
 
@@ -78,7 +80,7 @@ class MilestoneEventConsumerIntegrationTest {
         Member member = persistVerifiedMember("linh");
         String userPublicId = member.getPublicId();
 
-        send(userPublicId, milestoneJson(userPublicId, "BANK_ACCOUNT_CONNECTED"));
+        send(userPublicId, milestoneJson(userPublicId, "BANK_ACCOUNT_CONNECTED", "wallet-service"));
 
         awaitUntil(() -> memberMilestoneRepository
                 .existsByUserPublicIdAndMilestoneType(userPublicId, MilestoneType.BANK_ACCOUNT_CONNECTED));
@@ -96,6 +98,34 @@ class MilestoneEventConsumerIntegrationTest {
     }
 
     @Test
+    @DisplayName("Phase 3 BE-7: document-service 토픽(DOCUMENT_ANALYZED)을 수신해 member_milestones에 저장된다")
+    void document_토픽_DOCUMENT_ANALYZED_저장() {
+        // TRUSTED 상태 회원 세팅(BANK_ACCOUNT_CONNECTED + FIRST_TRANSACTION_COMPLETED 선행)
+        Member member = persistVerifiedMember("fatima");
+        String userPublicId = member.getPublicId();
+
+        // wallet 토픽으로 체인 마일스톤 먼저 기록해 TRUSTED 달성
+        sendTo(MilestoneEventConsumer.WALLET_TOPIC, userPublicId,
+                milestoneJson(userPublicId, "BANK_ACCOUNT_CONNECTED", "wallet-service"));
+        sendTo(MilestoneEventConsumer.WALLET_TOPIC, userPublicId,
+                milestoneJson(userPublicId, "FIRST_TRANSACTION_COMPLETED", "wallet-service"));
+        awaitUntil(() -> memberMilestoneRepository
+                .existsByUserPublicIdAndMilestoneType(userPublicId, MilestoneType.FIRST_TRANSACTION_COMPLETED));
+
+        // document 토픽으로 보너스 마일스톤 발행
+        sendTo(MilestoneEventConsumer.DOCUMENT_TOPIC, userPublicId,
+                milestoneJson(userPublicId, "DOCUMENT_ANALYZED", "document-service"));
+        awaitUntil(() -> memberMilestoneRepository
+                .existsByUserPublicIdAndMilestoneType(userPublicId, MilestoneType.DOCUMENT_ANALYZED));
+
+        assertThat(memberMilestoneRepository.findAllByUserPublicId(userPublicId))
+                .extracting(MemberMilestone::getMilestoneType)
+                .contains(MilestoneType.DOCUMENT_ANALYZED);
+        // DOCUMENT_ANALYZED 1개로는 GOLD 조건(보너스 2개) 미달 — 여전히 TRUSTED
+        assertThat(reload(userPublicId).getTrustGrade()).isEqualTo(TrustGrade.TRUSTED);
+    }
+
+    @Test
     @DisplayName("중복 발행: 같은 (user, milestone) 이벤트 2회 수신 시 1건만 저장(자연 멱등), 후속 이벤트로 TRUSTED까지 정상 진행")
     void 중복발행_1건만_저장_멱등() {
         Member member = persistVerifiedMember("minh");
@@ -104,9 +134,9 @@ class MilestoneEventConsumerIntegrationTest {
         // 같은 마일스톤 2회(서로 다른 event_id — 발행측 "매번 발행" 전략 모사) + 후속 마일스톤 1회.
         // partitions=1 + 키 동일이라 순서 보장 — 마지막(FIRST_TRANSACTION_COMPLETED) 처리 확인이
         // 앞 중복분 처리 완료를 함께 보장한다.
-        send(userPublicId, milestoneJson(userPublicId, "BANK_ACCOUNT_CONNECTED"));
-        send(userPublicId, milestoneJson(userPublicId, "BANK_ACCOUNT_CONNECTED"));
-        send(userPublicId, milestoneJson(userPublicId, "FIRST_TRANSACTION_COMPLETED"));
+        send(userPublicId, milestoneJson(userPublicId, "BANK_ACCOUNT_CONNECTED", "wallet-service"));
+        send(userPublicId, milestoneJson(userPublicId, "BANK_ACCOUNT_CONNECTED", "wallet-service"));
+        send(userPublicId, milestoneJson(userPublicId, "FIRST_TRANSACTION_COMPLETED", "wallet-service"));
 
         awaitUntil(() -> memberMilestoneRepository
                 .existsByUserPublicIdAndMilestoneType(userPublicId, MilestoneType.FIRST_TRANSACTION_COMPLETED));
@@ -150,8 +180,8 @@ class MilestoneEventConsumerIntegrationTest {
         return memberRepository.findByPublicIdAndDeletedAtIsNull(userPublicId).orElseThrow();
     }
 
-    /** 스파이크 결정 2 스키마 그대로의 와이어 JSON(snake_case). */
-    private static String milestoneJson(String userPublicId, String milestoneType) {
+    /** 스파이크 결정 2 스키마 그대로의 와이어 JSON(snake_case). sourceService = 발행 서비스 식별자. */
+    private static String milestoneJson(String userPublicId, String milestoneType, String sourceService) {
         return """
                 {
                   "event_id": "%s",
@@ -159,20 +189,25 @@ class MilestoneEventConsumerIntegrationTest {
                   "milestone_type": "%s",
                   "user_public_id": "%s",
                   "occurred_at": "2026-06-10T05:21:08Z",
-                  "source_service": "wallet-service",
+                  "source_service": "%s",
                   "schema_version": 1
-                }""".formatted(UUID.randomUUID(), milestoneType, userPublicId);
+                }""".formatted(UUID.randomUUID(), milestoneType, userPublicId, sourceService);
     }
 
-    /** 메시지 키 = user_public_id(결정 2 — 유저 단위 순서 보장)로 토픽에 발행한다. */
+    /** wallet 토픽 발행 — 기존 테스트 호환 단축 헬퍼. */
     private void send(String userPublicId, String json) {
+        sendTo(MilestoneEventConsumer.WALLET_TOPIC, userPublicId, json);
+    }
+
+    /** 메시지 키 = user_public_id(결정 2 — 유저 단위 순서 보장)로 지정 토픽에 발행한다. */
+    private void sendTo(String topic, String userPublicId, String json) {
         if (producer == null) {
             Map<String, Object> props = KafkaTestUtils.producerProps(embeddedKafka);
             ProducerFactory<String, String> factory = new DefaultKafkaProducerFactory<>(
                     props, new StringSerializer(), new StringSerializer());
             producer = new KafkaTemplate<>(factory);
         }
-        producer.send(MilestoneEventConsumer.TOPIC, userPublicId, json);
+        producer.send(topic, userPublicId, json);
         producer.flush();
     }
 

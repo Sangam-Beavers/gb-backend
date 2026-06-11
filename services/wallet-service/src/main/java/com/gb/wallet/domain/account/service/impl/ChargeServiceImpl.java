@@ -296,6 +296,15 @@ public class ChargeServiceImpl implements ChargeService {
         eventPublisher.publishEvent(
                 new MilestoneAchieved(userPublicId, MilestoneType.FIRST_TRANSACTION_COMPLETED));
 
+        // (11) Phase 3(BE-7) — 누적 거래 5건 달성 시 GOLD 보너스 마일스톤. 충전 tx가 COMPLETED로 저장된
+        //      직후 카운트하므로 지금 막 저장된 건 포함. member 자연 멱등으로 5건 초과 재발행도 무해.
+        long completedCount = transactionRepository.countByWallet_UserPublicIdAndStatus(
+                userPublicId, TransactionStatus.COMPLETED);
+        if (completedCount >= 5) {
+            eventPublisher.publishEvent(
+                    new MilestoneAchieved(userPublicId, MilestoneType.TRANSACTION_FIVE_COMPLETED));
+        }
+
         return ChargeResponse.of(tx, accountPublicId, afterBalance);
     }
 

@@ -1,6 +1,7 @@
 package com.gb.document.domain.document.repository;
 
 import com.gb.document.domain.document.entity.DocumentResult;
+import com.gb.document.domain.document.entity.ProcessingStatus;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -21,6 +22,12 @@ public interface DocumentResultRepository extends JpaRepository<DocumentResult, 
 
     /** 목록 화면에서 risk_level 표시용. submission id IN (...) batch 조회. */
     List<DocumentResult> findAllBySubmission_IdIn(List<Long> submissionIds);
+
+    /**
+     * 처리 상태 목록에 해당하는 결과 전체 조회.
+     * Phase 3 dev 전용 마일스톤 동기화 잡({@code DevMilestoneSyncJob})에서 사용.
+     */
+    List<DocumentResult> findAllByProcessingStatusIn(List<ProcessingStatus> statuses);
 
     // ===== Admin internal API =====
 
