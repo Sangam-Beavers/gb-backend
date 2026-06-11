@@ -23,6 +23,8 @@ spring:
       port: ${REDIS_PORT}
       password: ${SPRING_DATA_REDIS_PASSWORD}
       database: 0
+      ssl:
+        enabled: true
 
   security:
     oauth2:
