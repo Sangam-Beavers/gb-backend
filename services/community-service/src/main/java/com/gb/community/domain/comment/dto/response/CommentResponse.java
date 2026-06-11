@@ -63,6 +63,10 @@ public class CommentResponse {
             allowableValues = {"NEWCOMER", "VERIFIED", "CONNECTED", "TRUSTED"}, example = "VERIFIED")
     private final String authorTrustGrade;
 
+    @Schema(description = "작성자 아바타 색조 회전 각도(0~359°). 마이페이지 '색깔 변경' 저장값. 미설정·폴백 시 0",
+            example = "120")
+    private final int authorAvatarHue;
+
     @Schema(description = "요청자가 작성자 본인인지 여부(수정·삭제 버튼 노출 판단용)", example = "false")
     private final Boolean isAuthor;
 
@@ -73,7 +77,7 @@ public class CommentResponse {
     private CommentResponse(String publicId, String postPublicId, String parentCommentPublicId,
                             String content, String authorPublicId, String authorNickname,
                             String authorProfileImageUrl, boolean authorIsVerified,
-                            String authorTrustGrade, Boolean isAuthor,
+                            String authorTrustGrade, int authorAvatarHue, Boolean isAuthor,
                             String createdAt) {
         this.publicId = publicId;
         this.postPublicId = postPublicId;
@@ -84,6 +88,7 @@ public class CommentResponse {
         this.authorProfileImageUrl = authorProfileImageUrl;
         this.authorIsVerified = authorIsVerified;
         this.authorTrustGrade = authorTrustGrade;
+        this.authorAvatarHue = authorAvatarHue;
         this.isAuthor = isAuthor;
         this.createdAt = createdAt;
     }
@@ -110,6 +115,7 @@ public class CommentResponse {
                 .authorProfileImageUrl(author.profileImageUrl())
                 .authorIsVerified(author.isVerified())
                 .authorTrustGrade(author.trustGrade())
+                .authorAvatarHue(author.avatarHue())
                 .isAuthor(comment.getUserPublicId().equals(requesterUserPublicId))
                 .createdAt(UtcTime.toUtcZ(comment.getCreatedAt()))
                 .build();

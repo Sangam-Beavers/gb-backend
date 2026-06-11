@@ -338,7 +338,8 @@ public class MemberServiceImpl implements MemberService {
             throw new BusinessException(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
         }
 
-        member.updateProfile(request.getNickname(), request.getLanguage(), request.getBio());
+        member.updateProfile(request.getNickname(), request.getLanguage(),
+                request.getBio(), request.getAvatarHue());
         return ProfileResponse.from(member);
     }
 
