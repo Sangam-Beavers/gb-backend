@@ -108,6 +108,14 @@ public class Member extends BaseEntity {
     @Column(name = "bio", length = 200)
     private String bio;
 
+    // 프로필 아바타 색조(hue) 회전 각도(0~359). 마이페이지 "색깔 변경"에서 무작위로 고른 값을 저장해
+    // 사진/Identicon에 hue-rotate로 적용한다(이미지 자체는 안 바꾸고 표시 색만 회전). 기본 0(회전 없음).
+    // @ColumnDefault: ddl-auto:update가 기존 행이 있는 members에 NOT NULL 컬럼을 ADD할 때 0으로 백필한다
+    //   (isAdmin/communityBanned와 동일 사유). @Builder엔 없어 신규 가입은 inline 기본값(0)이 유지된다.
+    @Column(name = "avatar_hue", nullable = false)
+    @ColumnDefault("0")
+    private int avatarHue = 0;
+
     // 관리자가 설정하는 계정 상태. 기본값 ACTIVE. ddl-auto:update가 신규 컬럼을 ADD하므로
     // 기존 행은 DEFAULT 값('ACTIVE')으로 채워진다.
     @Enumerated(EnumType.STRING)
@@ -165,13 +173,19 @@ public class Member extends BaseEntity {
     }
 
     /**
-     * 마이페이지 프로필 수정: 닉네임·언어·자기소개를 한 번에 변경한다.
+     * 마이페이지 프로필 수정: 닉네임·언어·자기소개·아바타 색상을 한 번에 변경한다.
      * (국적·이미지·이메일은 이 화면에서 바꾸지 않는다 — 이미지는 별도 API, 그 외는 불변.)
+     *
+     * <p>{@code avatarHue}는 null이면 기존 값을 유지한다 — 색상을 보내지 않는 구버전 클라이언트가
+     * 프로필을 저장할 때 색이 0으로 초기화되지 않게 하기 위함.
      */
-    public void updateProfile(String nickname, String language, String bio) {
+    public void updateProfile(String nickname, String language, String bio, Integer avatarHue) {
         this.nickname = nickname;
         this.language = language;
         this.bio = bio;
+        if (avatarHue != null) {
+            this.avatarHue = avatarHue;
+        }
     }
 
     /** 신분증 인증 승인 시 인증 배지를 부여한다. (verification 도메인 서비스에서 호출) */

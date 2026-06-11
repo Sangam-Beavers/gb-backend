@@ -63,6 +63,10 @@ public class PostSummaryResponse {
             allowableValues = {"NEWCOMER", "VERIFIED", "CONNECTED", "TRUSTED"}, example = "VERIFIED")
     private final String authorTrustGrade;
 
+    @Schema(description = "작성자 아바타 색조 회전 각도(0~359°). 마이페이지 '색깔 변경' 저장값. 미설정·폴백 시 0",
+            example = "120")
+    private final int authorAvatarHue;
+
     @Schema(description = "요청자가 작성자 본인인지 여부(수정·삭제 버튼 노출 판단용)", example = "false")
     private final Boolean isAuthor;
 
@@ -78,8 +82,8 @@ public class PostSummaryResponse {
     @Builder
     private PostSummaryResponse(String publicId, String category, String title, String contentPreview,
                                String language, String authorPublicId, String authorNickname,
-                               String authorProfileImageUrl, String authorTrustGrade, Boolean isAuthor,
-                               Integer likeCount, Integer commentCount, String createdAt) {
+                               String authorProfileImageUrl, String authorTrustGrade, int authorAvatarHue,
+                               Boolean isAuthor, Integer likeCount, Integer commentCount, String createdAt) {
         this.publicId = publicId;
         this.category = category;
         this.title = title;
@@ -89,6 +93,7 @@ public class PostSummaryResponse {
         this.authorNickname = authorNickname;
         this.authorProfileImageUrl = authorProfileImageUrl;
         this.authorTrustGrade = authorTrustGrade;
+        this.authorAvatarHue = authorAvatarHue;
         this.isAuthor = isAuthor;
         this.likeCount = likeCount;
         this.commentCount = commentCount;
@@ -110,6 +115,7 @@ public class PostSummaryResponse {
                 .authorNickname(author.nickname())
                 .authorProfileImageUrl(author.profileImageUrl())
                 .authorTrustGrade(author.trustGrade())
+                .authorAvatarHue(author.avatarHue())
                 .isAuthor(post.getUserPublicId().equals(requesterUserPublicId))
                 .likeCount(post.getLikeCount())
                 .commentCount(post.getCommentCount())
