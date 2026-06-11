@@ -79,6 +79,8 @@
 | `nickname` | VARCHAR(50) | NOT NULL | 닉네임 |
 | `nationality` | VARCHAR(10) | NOT NULL | 국적 코드 (KR, VN, PH 등) |
 | `language` | VARCHAR(10) | NOT NULL | 주 사용 언어 (BCP 47 소문자, 예: "vi") |
+| `gender` | VARCHAR(10), ENUM | NOT NULL | 성별 (이슈 #203). `MALE`/`FEMALE`. 가입 시 수집(엔티티 `Member.gender`, `@Enumerated STRING`). |
+| `age_range` | VARCHAR(20), ENUM | NOT NULL | 연령대 (이슈 #203). `TEENS`/`TWENTIES`/`THIRTIES`/`FORTIES`/`FIFTIES`/`SIXTIES_PLUS`(10년 단위). 가입 시 수집(엔티티 `Member.ageRange`). |
 | `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | 인증 배지 여부. `user_verifications` APPROVED 시 true로 반영(엔티티 `Member.isVerified` 반영 완료). |
 | `terms_agreed` | BOOLEAN | NOT NULL, DEFAULT TRUE | 이용약관 동의 여부(가입 시 필수 동의 — 명세 auth §2). DTO `@AssertTrue`로 강제되어 신규 가입은 항상 true. 기본값 TRUE = 기존 행은 동의로 백필. |
 | `privacy_agreed` | BOOLEAN | NOT NULL, DEFAULT TRUE | 개인정보 처리방침 동의 여부(가입 시 필수 동의 — 명세 auth §2). |
@@ -103,6 +105,18 @@
 > ```
 > (기존 회원은 동의 상태(TRUE)·마이그레이션 시각으로 백필하고, 신규 가입은 항상 명시값 true·동의 시각으로 저장된다.
 > 부울 컬럼은 Hibernate가 `bit(1)`로 생성한다 — 기존 테이블이 `tinyint(1)`이면 `BOOLEAN ... DEFAULT TRUE`로 대체.)
+
+> **성별·연령대 컬럼 마이그레이션(이슈 #203, 기존 행 있는 환경):** `gender`/`age_range`는 NOT NULL 신규 enum
+> 컬럼이다. 엔티티 `@ColumnDefault('MALE'/'TWENTIES')`로 `ddl-auto:update`(dev)가 기존 행을 백필하며 ADD COLUMN
+> 하지만, **운영/스테이징은 `ddl-auto`를 쓰지 않으므로** 아래 수동 ALTER가 필요하다:
+> ```sql
+> ALTER TABLE members
+>   ADD COLUMN gender    VARCHAR(10) NOT NULL DEFAULT 'MALE',
+>   ADD COLUMN age_range VARCHAR(20) NOT NULL DEFAULT 'TWENTIES';
+> ```
+> ⚠️ 성별·연령대는 자연 기본값이 없다. 위 DEFAULT/`@ColumnDefault`는 **기존 행 백필 전용**이며, 신규 가입은
+> 항상 사용자가 입력한 실제 값(`MALE`/`FEMALE`, `TEENS`~`SIXTIES_PLUS`)을 빌더로 명시 저장한다. 운영 데이터가
+> 있다면 백필 정책을 별도 확정한다(기존 dev 데이터는 테스트 데이터라 의미 없음).
 
 ### `user_verifications`
 > 신분증 인증. APPROVED 시 `members.is_verified = TRUE`. **member 내부 테이블 → `user_id`는 BIGINT FK 유지.**

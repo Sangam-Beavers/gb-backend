@@ -45,6 +45,9 @@ class SignupRequestValidationTest {
         ReflectionTestUtils.setField(request, "nickname", nickname);
         ReflectionTestUtils.setField(request, "nationality", nationality);
         ReflectionTestUtils.setField(request, "language", language);
+        // 성별·연령대(이슈 #203)는 @NotBlank 필수 — 길이 경계 검증 케이스가 이들 누락으로 오염되지 않게 유효값을 채운다.
+        ReflectionTestUtils.setField(request, "gender", "MALE");
+        ReflectionTestUtils.setField(request, "ageRange", "TWENTIES");
         return request;
     }
 

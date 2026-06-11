@@ -35,6 +35,18 @@ public class SocialProfileRequest {
     @Size(max = 10, message = "언어 코드는 10자 이내여야 합니다")
     private String language;
 
+    // 성별·연령대 (이슈 #203). 소셜 가입도 members row를 최초 생성하는 "가입"이라 이메일 가입(SignupRequest)과
+    //   동일 정책 — enum 코드 문자열로 받고 @NotBlank로 형식만 1차 검증, enum 후보 검증은 Service에서 처리한다.
+    @Schema(description = "성별 (MALE / FEMALE)", example = "MALE", allowableValues = {"MALE", "FEMALE"})
+    @NotBlank(message = "성별은 필수입니다")
+    private String gender;
+
+    @Schema(description = "연령대 (TEENS / TWENTIES / THIRTIES / FORTIES / FIFTIES / SIXTIES_PLUS)",
+            example = "TWENTIES",
+            allowableValues = {"TEENS", "TWENTIES", "THIRTIES", "FORTIES", "FIFTIES", "SIXTIES_PLUS"})
+    @NotBlank(message = "연령대는 필수입니다")
+    private String ageRange;
+
     // 약관 동의. 소셜 가입도 members row를 최초 생성하는 "가입"이라 이메일 가입(SignupRequest)과 동일 정책이다.
     //   프론트 미연동이라 임시로 @NotNull 제거(미전송 null 허용) — 미전송 시 Service가 동의로 처리한다.
     //   @AssertTrue는 유지해 명시적 false만 막는다(null 통과). TODO(약관): 프론트 연동 후 @NotNull 복구.

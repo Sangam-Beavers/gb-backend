@@ -16,7 +16,9 @@ public enum MemberErrorCode implements ErrorCode {
     MEMBER_NOT_FOUND(HttpStatus.NOT_FOUND, "MEMBER4001", "존재하지 않는 회원입니다."),
     EMAIL_ALREADY_EXISTS(HttpStatus.CONFLICT, "MEMBER4002", "이미 사용 중인 이메일입니다."),
     NICKNAME_ALREADY_EXISTS(HttpStatus.CONFLICT, "MEMBER4003", "이미 사용 중인 닉네임입니다."),
-    INVALID_RESET_TOKEN(HttpStatus.BAD_REQUEST, "MEMBER4004", "유효하지 않거나 만료된 재설정 토큰입니다.");
+    INVALID_RESET_TOKEN(HttpStatus.BAD_REQUEST, "MEMBER4004", "유효하지 않거나 만료된 재설정 토큰입니다."),
+    INVALID_GENDER(HttpStatus.BAD_REQUEST, "MEMBER4005", "지원하지 않는 성별입니다."),
+    INVALID_AGE_RANGE(HttpStatus.BAD_REQUEST, "MEMBER4006", "지원하지 않는 연령대입니다.");
 
     private final HttpStatus httpStatus;
     private final String code;

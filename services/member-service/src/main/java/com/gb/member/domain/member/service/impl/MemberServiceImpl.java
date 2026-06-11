@@ -14,6 +14,8 @@ import com.gb.member.domain.member.dto.response.MemberDisplayResponse;
 import com.gb.member.domain.member.dto.response.ProfileResponse;
 import com.gb.member.domain.member.dto.response.SignupResponse;
 import com.gb.member.domain.member.dto.response.SocialProfileResponse;
+import com.gb.member.domain.member.entity.AgeRange;
+import com.gb.member.domain.member.entity.Gender;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
 import com.gb.member.domain.member.service.MemberService;
@@ -81,6 +83,11 @@ public class MemberServiceImpl implements MemberService {
             throw new BusinessException(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
         }
 
+        // 성별·연령대 enum 변환(이슈 #203). IdP 프로비저닝(외부 사용자 생성) "전"에 검증해, 잘못된 값으로
+        // IdP 고아가 생기지 않게 한다(fromCode 실패 시 도메인 ErrorCode — conventions §6).
+        Gender gender = parseGender(request.getGender());
+        AgeRange ageRange = parseAgeRange(request.getAgeRange());
+
         // publicId를 먼저 생성한다. IdP(attributes.public_id)와 우리 DB에 같은 값을 써야
         // 토큰 custom claim(public_id)과 우리 회원이 일치한다(토큰 sub ↔ publicId 매핑).
         String publicId = UUID.randomUUID().toString();
@@ -99,6 +106,8 @@ public class MemberServiceImpl implements MemberService {
                 .nickname(request.getNickname())
                 .nationality(request.getNationality())
                 .language(request.getLanguage())
+                .gender(gender)
+                .ageRange(ageRange)
                 .authProviderId(authProviderId)
                 // TODO(약관): 프론트 미연동 — 미전송(null)은 임시로 동의(true)로 처리한다(@AssertTrue가 명시 false는 차단).
                 //   프론트가 동의 값을 전송하면 SignupRequest @NotNull 복구 + 아래 null 기본처리를 제거한다.
@@ -145,6 +154,10 @@ public class MemberServiceImpl implements MemberService {
             throw new BusinessException(MemberErrorCode.NICKNAME_ALREADY_EXISTS);
         }
 
+        // 4) 성별·연령대 enum 변환(이슈 #203 — 이메일 가입과 동일 정책).
+        Gender gender = parseGender(request.getGender());
+        AgeRange ageRange = parseAgeRange(request.getAgeRange());
+
         Member member = Member.builder()
                 .publicId(publicId)
                 .email(email)
@@ -152,6 +165,8 @@ public class MemberServiceImpl implements MemberService {
                 .nickname(request.getNickname())
                 .nationality(request.getNationality())
                 .language(request.getLanguage())
+                .gender(gender)
+                .ageRange(ageRange)
                 .authProviderId(authProviderId)
                 // TODO(약관): 이메일 가입과 동일 임시 정책 — 미전송(null)은 동의(true)로 처리한다(consent_agreed_at은 NOT NULL).
                 //   프론트 연동 후 SocialProfileRequest @NotNull 복구 + null 기본처리 제거.
@@ -331,5 +346,17 @@ public class MemberServiceImpl implements MemberService {
     private Member getActiveMemberOrThrow(String userPublicId) {
         return memberRepository.findByPublicIdAndDeletedAtIsNull(userPublicId)
                 .orElseThrow(() -> new BusinessException(MemberErrorCode.MEMBER_NOT_FOUND));
+    }
+
+    /** 성별 코드 문자열을 enum으로 변환한다. 미정의 값이면 MEMBER4005(이슈 #203, conventions §6). */
+    private Gender parseGender(String code) {
+        return Gender.fromCode(code)
+                .orElseThrow(() -> new BusinessException(MemberErrorCode.INVALID_GENDER));
+    }
+
+    /** 연령대 코드 문자열을 enum으로 변환한다. 미정의 값이면 MEMBER4006(이슈 #203, conventions §6). */
+    private AgeRange parseAgeRange(String code) {
+        return AgeRange.fromCode(code)
+                .orElseThrow(() -> new BusinessException(MemberErrorCode.INVALID_AGE_RANGE));
     }
 }

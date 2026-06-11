@@ -94,6 +94,8 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", "gildong");
         ReflectionTestUtils.setField(request, "nationality", "VN");
         ReflectionTestUtils.setField(request, "language", "vi");
+        ReflectionTestUtils.setField(request, "gender", "MALE");
+        ReflectionTestUtils.setField(request, "ageRange", "TWENTIES");
         // 약관 동의 필드는 일부러 미설정(null) — 프론트 미전송 상황을 본떠, Service가 동의로 처리하는지 검증한다.
 
         when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
@@ -123,6 +125,10 @@ class MemberServiceImplTest {
         // IdP가 준 sub가 빌더로 채워진 "완전한 형상"으로 INSERT돼야 한다(sub 없는 row 상태 없음 — IdP-first).
         assertThat(saved.getValue().getAuthProviderId()).isEqualTo("idp-sub-uuid-9999");
 
+        // 성별·연령대(이슈 #203)가 enum으로 변환돼 저장돼야 한다.
+        assertThat(saved.getValue().getGender()).isEqualTo(com.gb.member.domain.member.entity.Gender.MALE);
+        assertThat(saved.getValue().getAgeRange()).isEqualTo(com.gb.member.domain.member.entity.AgeRange.TWENTIES);
+
         // 약관 동의 증적이 엔티티에 저장돼야 한다(동의값 → 저장 끝까지 검증, consent_agreed_at은 NOT NULL).
         assertThat(saved.getValue().isTermsAgreed()).isTrue();
         assertThat(saved.getValue().isPrivacyAgreed()).isTrue();
@@ -146,6 +152,8 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", "gildong");
         ReflectionTestUtils.setField(request, "nationality", "VN");
         ReflectionTestUtils.setField(request, "language", "vi");
+        ReflectionTestUtils.setField(request, "gender", "MALE");
+        ReflectionTestUtils.setField(request, "ageRange", "TWENTIES");
         // 약관 동의 필드는 일부러 미설정(null) — 프론트 미전송 상황을 본떠, Service가 동의로 처리하는지 검증한다.
 
         when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
@@ -183,6 +191,55 @@ class MemberServiceImplTest {
     }
 
     @Test
+    @DisplayName("성별 코드가 잘못되면 MEMBER4005로 거절하고 IdP/저장에 도달하지 않는다(이슈 #203)")
+    void signup_잘못된성별_MEMBER4005() {
+        SignupRequest request = new SignupRequest();
+        ReflectionTestUtils.setField(request, "email", "new@example.com");
+        ReflectionTestUtils.setField(request, "password", "P@ssw0rd!");
+        ReflectionTestUtils.setField(request, "name", "홍길동");
+        ReflectionTestUtils.setField(request, "nickname", "gildong");
+        ReflectionTestUtils.setField(request, "nationality", "VN");
+        ReflectionTestUtils.setField(request, "language", "vi");
+        ReflectionTestUtils.setField(request, "gender", "DOG");        // enum 후보 아님
+        ReflectionTestUtils.setField(request, "ageRange", "TWENTIES");
+        when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
+        when(memberRepository.existsByNickname("gildong")).thenReturn(false);
+
+        assertThatThrownBy(() -> memberService.signup(request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.INVALID_GENDER);
+
+        // enum 검증은 IdP 프로비저닝 "전"이라 IdP 고아/로컬 저장이 생기지 않아야 한다(conventions §6, fail-fast).
+        verify(idpUserClient, never()).provisionUser(any(), any(), any(), any());
+        verify(memberRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("연령대 코드가 잘못되면 MEMBER4006으로 거절하고 IdP/저장에 도달하지 않는다(이슈 #203)")
+    void signup_잘못된연령대_MEMBER4006() {
+        SignupRequest request = new SignupRequest();
+        ReflectionTestUtils.setField(request, "email", "new@example.com");
+        ReflectionTestUtils.setField(request, "password", "P@ssw0rd!");
+        ReflectionTestUtils.setField(request, "name", "홍길동");
+        ReflectionTestUtils.setField(request, "nickname", "gildong");
+        ReflectionTestUtils.setField(request, "nationality", "VN");
+        ReflectionTestUtils.setField(request, "language", "vi");
+        ReflectionTestUtils.setField(request, "gender", "MALE");
+        ReflectionTestUtils.setField(request, "ageRange", "NINETIES");  // enum 후보 아님
+        when(memberRepository.existsByEmail("new@example.com")).thenReturn(false);
+        when(memberRepository.existsByNickname("gildong")).thenReturn(false);
+
+        assertThatThrownBy(() -> memberService.signup(request))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(MemberErrorCode.INVALID_AGE_RANGE);
+
+        verify(idpUserClient, never()).provisionUser(any(), any(), any(), any());
+        verify(memberRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
     @DisplayName("동시 가입 race(saveAndFlush UNIQUE 위반) → COMMON4091 + 방금 만든 IdP 사용자 보상 회수")
     void signup_동시가입race_COMMON4091_보상회수() {
         SignupRequest request = new SignupRequest();
@@ -192,6 +249,8 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", "gildong");
         ReflectionTestUtils.setField(request, "nationality", "VN");
         ReflectionTestUtils.setField(request, "language", "vi");
+        ReflectionTestUtils.setField(request, "gender", "MALE");
+        ReflectionTestUtils.setField(request, "ageRange", "TWENTIES");
         // 약관 동의 필드는 일부러 미설정(null) — 프론트 미전송 상황을 본떠, Service가 동의로 처리하는지 검증한다.
         when(memberRepository.existsByEmail("race@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
@@ -221,6 +280,8 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", "gildong");
         ReflectionTestUtils.setField(request, "nationality", "VN");
         ReflectionTestUtils.setField(request, "language", "vi");
+        ReflectionTestUtils.setField(request, "gender", "MALE");
+        ReflectionTestUtils.setField(request, "ageRange", "TWENTIES");
         when(memberRepository.existsByEmail("dbdown@example.com")).thenReturn(false);
         when(memberRepository.existsByNickname("gildong")).thenReturn(false);
         when(idpUserClient.provisionUser(any(), any(), any(), any())).thenReturn("idp-sub-dbdown-1");
@@ -243,6 +304,8 @@ class MemberServiceImplTest {
         ReflectionTestUtils.setField(request, "nickname", nickname);
         ReflectionTestUtils.setField(request, "nationality", nationality);
         ReflectionTestUtils.setField(request, "language", language);
+        ReflectionTestUtils.setField(request, "gender", "FEMALE");
+        ReflectionTestUtils.setField(request, "ageRange", "THIRTIES");
         // 약관 동의는 미설정(null) — 프론트 미전송 상황. Service가 동의로 처리해 저장 값이 true가 돼야 한다.
         return request;
     }
@@ -277,6 +340,9 @@ class MemberServiceImplTest {
         assertThat(m.getNickname()).isEqualTo("gildong");
         assertThat(m.getNationality()).isEqualTo("VN");
         assertThat(m.getLanguage()).isEqualTo("vi");
+        // 소셜 가입도 성별·연령대를 enum으로 변환해 저장해야 한다(이슈 #203 — 이메일 가입과 동일).
+        assertThat(m.getGender()).isEqualTo(com.gb.member.domain.member.entity.Gender.FEMALE);
+        assertThat(m.getAgeRange()).isEqualTo(com.gb.member.domain.member.entity.AgeRange.THIRTIES);
         // 소셜 가입도 약관 동의 증적을 저장해야 한다(consent_agreed_at NOT NULL — 미설정 시 INSERT 깨짐 회귀 방지).
         assertThat(m.isTermsAgreed()).isTrue();
         assertThat(m.isPrivacyAgreed()).isTrue();

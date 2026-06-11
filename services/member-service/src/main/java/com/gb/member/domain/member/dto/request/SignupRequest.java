@@ -37,6 +37,15 @@ public class SignupRequest {
     @Size(max = 10, message = "언어 코드는 10자 이내여야 합니다")
     private String language;
 
+    // 성별·연령대 (이슈 #203). enum 코드 문자열(MALE/FEMALE, TWENTIES 등)로 받는다. 형식(빈 값)만 @NotBlank로
+    //   1차 검증하고, enum 후보 검증은 Service에서 Gender/AgeRange.fromCode 실패 시 도메인 ErrorCode로 처리한다
+    //   (conventions §6 — @Pattern으로 enum 후보를 박지 않는다. 박으면 COMMON4001로 떨어져 도메인 의도와 다름).
+    @NotBlank(message = "성별은 필수입니다")
+    private String gender;
+
+    @NotBlank(message = "연령대는 필수입니다")
+    private String ageRange;
+
     // 약관 동의. 명세 auth §2는 terms_agreed/privacy_agreed를 필수로 규정하나, 프론트가 아직 전송하지 않아
     //   임시로 @NotNull을 제거해 "미전송(null) 허용"한다 — 미전송 시 Service가 동의로 처리한다(임의 동의).
     //   @AssertTrue는 유지해 "명시적 false(동의 거부)"만 400으로 막는다(거짓 동의 증적 방지). null은 통과한다.

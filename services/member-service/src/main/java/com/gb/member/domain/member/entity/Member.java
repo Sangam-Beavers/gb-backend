@@ -52,6 +52,20 @@ public class Member extends BaseEntity {
     @Column(nullable = false, length = 10)
     private String language;    // 주 사용 언어 (BCP 47 소문자)
 
+    // 성별·연령대 (이슈 #203). 가입 시 수집하는 필수 값. enum STRING 매핑(database.md §members SSOT).
+    // @ColumnDefault: ddl-auto:update가 기존 행이 있는 members에 NOT NULL 컬럼을 ADD할 때 기존 행을
+    //   백필한다(termsAgreed와 동일 사유). 성별·연령대는 자연 기본값이 없어 기본값은 "기존 행 마이그레이션
+    //   전용"이며, 신규 가입은 항상 빌더로 사용자 입력 실제 값을 명시 저장한다(아래 @Builder 인자).
+    @Enumerated(EnumType.STRING)
+    @Column(name = "gender", nullable = false, length = 10)
+    @ColumnDefault("'MALE'")
+    private Gender gender;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "age_range", nullable = false, length = 20)
+    @ColumnDefault("'TWENTIES'")
+    private AgeRange ageRange;
+
     // 약관 동의 증적(컴플라이언스). 가입 시 필수 동의를 받았다는 사실과 시각을 보관한다(명세 auth §2).
     // 동의는 가입 단계에서 @AssertTrue로 강제되므로 저장 값은 항상 true이나, "언제 동의했는지"도 함께 남긴다.
     // @ColumnDefault: ddl-auto:update가 기존 행이 있는 members 테이블에 NOT NULL 컬럼을 ADD할 때
@@ -125,6 +139,7 @@ public class Member extends BaseEntity {
     @Builder
     public Member(String publicId, String email, String name,
                   String nickname, String nationality, String language,
+                  Gender gender, AgeRange ageRange,
                   String authProviderId,
                   boolean termsAgreed, boolean privacyAgreed, LocalDateTime consentAgreedAt) {
         this.publicId = publicId;
@@ -133,6 +148,8 @@ public class Member extends BaseEntity {
         this.nickname = nickname;
         this.nationality = nationality;
         this.language = language;
+        this.gender = gender;
+        this.ageRange = ageRange;
         this.authProviderId = authProviderId;
         this.termsAgreed = termsAgreed;
         this.privacyAgreed = privacyAgreed;

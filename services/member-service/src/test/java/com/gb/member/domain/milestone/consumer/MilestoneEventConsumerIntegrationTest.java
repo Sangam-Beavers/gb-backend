@@ -134,6 +134,8 @@ class MilestoneEventConsumerIntegrationTest {
                 .nickname("nick-" + seed)
                 .nationality("VN")
                 .language("vi")
+                .gender(com.gb.member.domain.member.entity.Gender.MALE)
+                .ageRange(com.gb.member.domain.member.entity.AgeRange.TWENTIES)
                 .authProviderId("idp-sub-" + seed)
                 .termsAgreed(true)
                 .privacyAgreed(true)
