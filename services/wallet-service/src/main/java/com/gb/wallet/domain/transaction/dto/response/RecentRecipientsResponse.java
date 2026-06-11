@@ -71,16 +71,22 @@ public class RecentRecipientsResponse {
         @Schema(description = "가장 최근 송금 시각(ISO 8601, UTC Z)", example = "2026-05-24T09:20:00Z")
         private final String lastTransferredAt;
 
+        @Schema(description = "마일스톤 기반 신뢰등급 (NEWCOMER/VERIFIED/CONNECTED/TRUSTED/GOLD)",
+                example = "VERIFIED")
+        private final String trustGrade;
+
         @Builder
         private RecipientItem(String memberPublicId, String nickname, String nationality,
                               boolean isVerified,
-                              String lastCurrencyCode, String lastTransferredAt) {
+                              String lastCurrencyCode, String lastTransferredAt,
+                              String trustGrade) {
             this.memberPublicId = memberPublicId;
             this.nickname = nickname;
             this.nationality = nationality;
             this.isVerified = isVerified;
             this.lastCurrencyCode = lastCurrencyCode;
             this.lastTransferredAt = lastTransferredAt;
+            this.trustGrade = trustGrade;
         }
     }
 }

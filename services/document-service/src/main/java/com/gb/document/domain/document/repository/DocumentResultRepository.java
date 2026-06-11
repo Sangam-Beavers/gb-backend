@@ -24,10 +24,24 @@ public interface DocumentResultRepository extends JpaRepository<DocumentResult, 
     List<DocumentResult> findAllBySubmission_IdIn(List<Long> submissionIds);
 
     /**
-     * 처리 상태 목록에 해당하는 결과 전체 조회.
+     * 처리 상태 목록에 해당하는 결과의 회원 public_id만 조회.
      * Phase 3 dev 전용 마일스톤 동기화 잡({@code DevMilestoneSyncJob})에서 사용.
+     *
+     * <p><b>N+1 방지:</b> 잡은 {@code submission.userPublicId} 한 값만 필요하므로 엔티티 그래프를
+     * 끌고 오지 않고 path projection으로 단일 SELECT(submission INNER JOIN, user_public_id만 select)한다.
+     * {@code findAll...} 후 {@code getSubmission()} 건별 LAZY 초기화로 발생하던 건당
+     * {@code document_submissions where id=?} 반복(N+1)을 제거한다.
+     * {@code null}/blank 식별자는 쿼리에서 제외한다.
      */
-    List<DocumentResult> findAllByProcessingStatusIn(List<ProcessingStatus> statuses);
+    @org.springframework.data.jpa.repository.Query("""
+            SELECT r.submission.userPublicId
+            FROM DocumentResult r
+            WHERE r.processingStatus IN :statuses
+              AND r.submission.userPublicId IS NOT NULL
+              AND r.submission.userPublicId <> ''
+            """)
+    List<String> findUserPublicIdsByProcessingStatusIn(
+            @org.springframework.data.repository.query.Param("statuses") List<ProcessingStatus> statuses);
 
     // ===== Admin internal API =====
 
