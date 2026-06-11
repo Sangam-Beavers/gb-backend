@@ -1,0 +1,50 @@
+# stage 프로파일 — 모든 값은 환경변수로 주입 (실제 값 절대 기재 금지)
+# DB: SM(sb/stage/document/db) → ESO → k8s Secret
+# SQS/S3/Lambda 설정: ConfigMap(gb-infra values-stage.yaml)에서 주입
+spring:
+  datasource:
+    url: jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}?serverTimezone=UTC&characterEncoding=UTF-8
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: false
+    show-sql: false
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER_URI}
+
+  cloud:
+    aws:
+      region:
+        static: ${GB_ANALYSIS_AWS_REGION:ap-northeast-2}
+      sqs:
+        # stage/prod에서는 SQS Consumer 활성화
+        enabled: ${GB_ANALYSIS_CONSUMER_ENABLED:true}
+
+# AI 분석 파이프라인 — 모두 ConfigMap에서 주입 (비밀 아닌 인프라 참조값)
+gb:
+  analysis:
+    source: production                                        # stage/prod는 production 계열 SQS 경유
+    result-queue-arn: ${GB_ANALYSIS_RESULT_QUEUE_ARN}
+    request-queue-url: ${GB_ANALYSIS_REQUEST_QUEUE_URL}
+    upload-bucket: ${GB_ANALYSIS_UPLOAD_BUCKET}
+    upload-url-expires-seconds: ${GB_ANALYSIS_UPLOAD_URL_EXPIRES_SECONDS:600}
+    aws-region: ${GB_ANALYSIS_AWS_REGION:ap-northeast-2}
+    consumer-enabled: true
+    consumer-queue-name: ${GB_ANALYSIS_CONSUMER_QUEUE_NAME}  # stage용 SQS 큐 이름
+
+# AI 챗봇 Lambda — CHATBOT_FUNCTION_URL (ConfigMap), stage에서 IAM 서명 활성
+chatbot:
+  function-url: ${CHATBOT_FUNCTION_URL}
+  aws-region: ${CHATBOT_AWS_REGION:ap-northeast-2}
+  auth-enabled: true                                         # stage에서는 IAM 서명 사용
+  request-timeout-seconds: 120
