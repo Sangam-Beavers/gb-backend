@@ -71,6 +71,8 @@ application-dev.properties
 **/src/main/resources/application-*.yml
 **/src/main/resources/application-*.yaml
 **/src/main/resources/application-*.properties
+# stage 프로파일은 실제 값 없음 → 커밋 허용
+!**/src/main/resources/application-stage.yml
 
 # ===========================
 # 로그

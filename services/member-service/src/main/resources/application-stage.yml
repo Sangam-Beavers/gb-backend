@@ -1,0 +1,69 @@
+# stage 프로파일 — 모든 값은 환경변수로 주입 (실제 값 절대 기재 금지)
+# DB: SM(sb/stage/member/db) → ESO → k8s Secret
+# Redis: SM(sb/stage/redis/auth) → ESO → k8s Secret
+# Cognito: Parameter Store(/sb/stage/member/*) → ESO → k8s Secret
+spring:
+  datasource:
+    url: jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}?serverTimezone=UTC&characterEncoding=UTF-8
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: false
+    show-sql: false
+
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      password: ${SPRING_DATA_REDIS_PASSWORD}
+      database: 0
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # AUTH_ISSUER_URI = Cognito issuer (PS /sb/stage/member/AUTH_ISSUER_URI → k8s Secret)
+          issuer-uri: ${AUTH_ISSUER_URI}
+
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${MAIL_USERNAME}
+    password: ${SPRING_MAIL_PASSWORD}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+
+# Cognito 관리 API (회원가입 프로비저닝) — @Profile("prod | stage")에서만 활성
+# COGNITO_REGION, COGNITO_USER_POOL_ID: PS /sb/stage/member/* → k8s Secret
+auth:
+  cognito:
+    region: ${COGNITO_REGION}
+    user-pool-id: ${COGNITO_USER_POOL_ID}
+
+# 비밀번호 재설정 메일 링크 — APP_PASSWORD_RESET_BASE_URL (ConfigMap)
+app:
+  password-reset:
+    base-url: ${APP_PASSWORD_RESET_BASE_URL}
+
+# PII 컬럼 암호화 키 (AES-256-GCM) — GB_CRYPTO_KEY (k8s Secret, Vault 경유)
+gb:
+  crypto:
+    key: ${GB_CRYPTO_KEY}
+
+# wallet-service 내부 호출 — WALLET_API_BASE_URL (ConfigMap)
+wallet:
+  api:
+    base-url: ${WALLET_API_BASE_URL}
