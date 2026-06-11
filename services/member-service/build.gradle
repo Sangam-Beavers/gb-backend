@@ -22,6 +22,9 @@ dependencies {
     // BOM으로 버전 관리 → 모듈 버전을 개별 명시하지 않는다. dev/test는 Authentik이라 런타임 미사용.
     implementation platform('software.amazon.awssdk:bom:2.28.16')
     implementation 'software.amazon.awssdk:cognitoidentityprovider'
+    // IRSA(웹아이덴티티) 자격증명용 — 없으면 DefaultCredentialsProvider가 AssumeRoleWithWebIdentity를
+    // 조용히 건너뛰고 IMDS(노드 롤)로 폴백한다. stage/prod에서 SA IRSA로 Cognito 역할을 assume하려면 필수.
+    implementation 'software.amazon.awssdk:sts'
 
     runtimeOnly 'com.mysql:mysql-connector-j'
 
