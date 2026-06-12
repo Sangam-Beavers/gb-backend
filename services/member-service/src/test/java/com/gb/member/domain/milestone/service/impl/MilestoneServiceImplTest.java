@@ -160,7 +160,7 @@ class MilestoneServiceImplTest {
     // ===== getMyTrustMilestones (BE-6) — 단계별 유저 =====
 
     @Test
-    @DisplayName("가입만(미인증): NEWCOMER + 카탈로그 3종 전부 미달성(achieved_at null), 인증 시각 조회 안 함")
+    @DisplayName("가입만(미인증): NEWCOMER + 카탈로그 7종 전부 미달성(achieved_at null), 인증 시각 조회 안 함")
     void getMyTrustMilestones_가입만() {
         Member member = member(); // is_verified=false, trust_grade=NEWCOMER(기본)
         given(memberRepository.findByPublicIdAndDeletedAtIsNull(USER)).willReturn(Optional.of(member));
@@ -174,7 +174,11 @@ class MilestoneServiceImplTest {
                 .containsExactly(
                         tuple("ID_VERIFIED", false, null),
                         tuple("BANK_ACCOUNT_CONNECTED", false, null),
-                        tuple("FIRST_TRANSACTION_COMPLETED", false, null));
+                        tuple("FIRST_TRANSACTION_COMPLETED", false, null),
+                        tuple("DOCUMENT_ANALYZED", false, null),
+                        tuple("COMMUNITY_ACTIVE", false, null),
+                        tuple("TRANSACTION_FIVE_COMPLETED", false, null),
+                        tuple("ACCOUNT_NINETY_DAYS", false, null));
         verifyNoInteractions(userVerificationRepository); // 미인증이면 승인 시각 조회 불필요
     }
 
@@ -204,7 +208,11 @@ class MilestoneServiceImplTest {
                 .containsExactly(
                         tuple("ID_VERIFIED", true, "2026-06-01T10:00:00Z"),
                         tuple("BANK_ACCOUNT_CONNECTED", false, null),
-                        tuple("FIRST_TRANSACTION_COMPLETED", false, null));
+                        tuple("FIRST_TRANSACTION_COMPLETED", false, null),
+                        tuple("DOCUMENT_ANALYZED", false, null),
+                        tuple("COMMUNITY_ACTIVE", false, null),
+                        tuple("TRANSACTION_FIVE_COMPLETED", false, null),
+                        tuple("ACCOUNT_NINETY_DAYS", false, null));
     }
 
     @Test
@@ -226,7 +234,7 @@ class MilestoneServiceImplTest {
     }
 
     @Test
-    @DisplayName("계좌까지: CONNECTED + ID_VERIFIED·BANK_ACCOUNT_CONNECTED 달성, 첫 거래만 미달성")
+    @DisplayName("계좌까지: CONNECTED + ID_VERIFIED·BANK_ACCOUNT_CONNECTED 달성, 나머지 5종 미달성")
     void getMyTrustMilestones_계좌까지() {
         Member member = member();
         member.markVerified();
@@ -245,11 +253,15 @@ class MilestoneServiceImplTest {
                 .containsExactly(
                         tuple("ID_VERIFIED", true, null),
                         tuple("BANK_ACCOUNT_CONNECTED", true, "2026-06-10T05:21:08Z"),
-                        tuple("FIRST_TRANSACTION_COMPLETED", false, null));
+                        tuple("FIRST_TRANSACTION_COMPLETED", false, null),
+                        tuple("DOCUMENT_ANALYZED", false, null),
+                        tuple("COMMUNITY_ACTIVE", false, null),
+                        tuple("TRANSACTION_FIVE_COMPLETED", false, null),
+                        tuple("ACCOUNT_NINETY_DAYS", false, null));
     }
 
     @Test
-    @DisplayName("거래까지: TRUSTED + 카탈로그 3종 전부 달성")
+    @DisplayName("거래까지: TRUSTED + 등급 3종(ID·계좌·첫거래) 달성, 부가 4종 미달성")
     void getMyTrustMilestones_거래까지() {
         Member member = member();
         member.markVerified();
@@ -269,7 +281,11 @@ class MilestoneServiceImplTest {
                 .containsExactly(
                         tuple("ID_VERIFIED", true, null),
                         tuple("BANK_ACCOUNT_CONNECTED", true, "2026-06-10T05:21:08Z"),
-                        tuple("FIRST_TRANSACTION_COMPLETED", true, "2026-06-11T09:00:00Z"));
+                        tuple("FIRST_TRANSACTION_COMPLETED", true, "2026-06-11T09:00:00Z"),
+                        tuple("DOCUMENT_ANALYZED", false, null),
+                        tuple("COMMUNITY_ACTIVE", false, null),
+                        tuple("TRANSACTION_FIVE_COMPLETED", false, null),
+                        tuple("ACCOUNT_NINETY_DAYS", false, null));
     }
 
     @Test

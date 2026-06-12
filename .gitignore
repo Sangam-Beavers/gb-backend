@@ -105,5 +105,7 @@ test-results/
 .claude/settings.local.json
 .claude
 **/src/main/resources/data-dev.sql
+# wallet banks 마스터 시드는 비밀값 없음 + stage 배포 jar에 포함돼야 함 → 커밋 허용
+!services/wallet-service/src/main/resources/data-dev.sql
 # Alertmanager Slack 웹훅 (보안)
 .env.monitoring

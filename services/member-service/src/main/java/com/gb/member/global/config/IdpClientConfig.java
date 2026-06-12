@@ -5,6 +5,7 @@ import java.time.Duration;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
@@ -21,8 +22,12 @@ import org.springframework.web.client.RestClient;
  * <p>baseUrl은 설정하지 않는다 — {@code RealIdpUserClient}가 호출마다 절대 URI({@code apiBaseUri}+경로)를
  * 만든다. 기본값은 {@code @Value} 디폴트(connect 3s / read 10s)로 두고, 환경별 튜닝은
  * {@code auth.idp.connect-timeout}/{@code auth.idp.read-timeout}로 덮어쓴다(env yml 변경 불필요).
+ *
+ * <p>프로필 게이트는 유일한 소비자 {@code RealIdpUserClient}({@code !prod & !stage})와 1:1로 맞춘다 —
+ * stage/prod(Cognito)에서 쓰이지 않는 Authentik 호출 인프라 빈이 뜨지 않게 한다({@code CognitoClientConfig}와 대칭).
  */
 @Configuration
+@Profile("!prod & !stage")
 public class IdpClientConfig {
 
     /**

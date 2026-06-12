@@ -29,7 +29,9 @@ public class RealAppAdminClient implements AppAdminClient {
 
     public RealAppAdminClient(
             RestClient.Builder builder,
-            @Value("${app-admin.api.base-url:http://localhost:8086}") String baseUrl) {
+            // 기본값 없음 — base URL의 SSOT는 yaml(base=localhost 기본값, stage=필수 env). 코드 측
+            // 이중 기본값을 두면 stage에서 env 누락이 조용히 localhost 호출로 숨는다.
+            @Value("${app-admin.api.base-url}") String baseUrl) {
         this.restClient = builder.baseUrl(baseUrl).build();
     }
 

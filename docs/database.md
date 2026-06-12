@@ -93,8 +93,9 @@
 > 환경별 `auth_provider_id`: 개발 `"authentik|..."`, 운영 `"ap-northeast-2_...|..."`. Spring은 `issuer-uri` 설정만 다르게.
 
 > **약관 동의 컬럼 마이그레이션(기존 행 있는 환경):** `terms_agreed`/`privacy_agreed`/`consent_agreed_at`은
-> NOT NULL 신규 컬럼이다. 엔티티에 `@ColumnDefault`(FALSE/CURRENT_TIMESTAMP)를 둬 `ddl-auto:update`(dev)가 기존
-> 행을 백필하며 ADD COLUMN 하지만, **운영/스테이징은 `ddl-auto`를 쓰지 않으므로** 아래 수동 ALTER가 필요하다:
+> NOT NULL 신규 컬럼이다. 엔티티에 `@ColumnDefault`(FALSE/CURRENT_TIMESTAMP)를 둬 `ddl-auto:update`(dev·stage)가 기존
+> 행을 백필하며 ADD COLUMN 하지만, **prod는 `ddl-auto`를 쓰지 않으므로** 아래 수동 ALTER가 필요하다
+> (stage는 dev와 동일하게 `ddl-auto:update`로 통일 — 환경 비대칭 제거, 2026-06-12):
 > ```sql
 > -- Hibernate가 LocalDateTime을 datetime(6)으로 만들므로 DEFAULT도 정밀도를 맞춰 CURRENT_TIMESTAMP(6)을 쓴다.
 > --   (datetime(6)에 정밀도 없는 CURRENT_TIMESTAMP는 MySQL error 1067로 거부됨 — ddl-auto가 조용히 삼켜 컬럼 누락.)
@@ -107,8 +108,8 @@
 > 부울 컬럼은 Hibernate가 `bit(1)`로 생성한다 — 기존 테이블이 `tinyint(1)`이면 `BOOLEAN ... DEFAULT TRUE`로 대체.)
 
 > **성별·연령대 컬럼 마이그레이션(이슈 #203, 기존 행 있는 환경):** `gender`/`age_range`는 NOT NULL 신규 enum
-> 컬럼이다. 엔티티 `@ColumnDefault('MALE'/'TWENTIES')`로 `ddl-auto:update`(dev)가 기존 행을 백필하며 ADD COLUMN
-> 하지만, **운영/스테이징은 `ddl-auto`를 쓰지 않으므로** 아래 수동 ALTER가 필요하다:
+> 컬럼이다. 엔티티 `@ColumnDefault('MALE'/'TWENTIES')`로 `ddl-auto:update`(dev·stage)가 기존 행을 백필하며 ADD COLUMN
+> 하지만, **prod는 `ddl-auto`를 쓰지 않으므로** 아래 수동 ALTER가 필요하다:
 > ```sql
 > ALTER TABLE members
 >   ADD COLUMN gender    VARCHAR(10) NOT NULL DEFAULT 'MALE',
@@ -140,6 +141,9 @@
 
 ### `banks`
 > 은행 마스터. 국내/해외/시뮬레이션 은행(Beaver Bank, Quokka Bank) 모두 포함.
+> **시드**: `wallet-service`의 `data-dev.sql`이 dev·stage 공통으로 기동 시마다 멱등 실행된다
+> (양쪽 yml의 `spring.sql.init.data-locations` + `defer-datasource-initialization`, `ON DUPLICATE KEY UPDATE`).
+> 현행 시드 = 파트너 은행 16개(KR 5·US 4·VN 4·PH 4, gb-mock-bank seed.json과 일치), 구 시뮬레이션 은행(900/901)은 비활성 처리.
 
 | 컬럼 | 타입 | 제약 | 설명 |
 | --- | --- | --- | --- |
@@ -294,7 +298,7 @@
 
 > **왜 remittance_attempts와 분리하나(WACC-01)**: 충전은 외부계좌 `withdrawal`(차감), 송금은 `payout`(증액)으로 외부 계좌 기준 돈 방향이 정반대다. 고아 흔적(외부 성공인데 메인 tx 롤백) 발생 시 reconcile 교정 방향도 정반대(충전=환불, 송금=클로백)이므로 유형을 섞지 않고 별도 테이블로 둔다.
 > **공통 컬럼/`soft delete` 미적용**: `remittance_attempts`와 동일(append-only — `updated_at` 무의미, `created_at`은 `attempted_at`과 의미 중복, `BaseEntity` 미상속, 흔적 영구 보존).
-> **마이그레이션**: dev는 `ddl-auto=update`가 엔티티에서 신규 테이블을 자동 생성한다. stage/prod 등 수동 스키마 환경은 위 DDL 표를 기준으로 생성한다.
+> **마이그레이션**: dev·stage는 `ddl-auto=update`가 엔티티에서 신규 테이블을 자동 생성한다. prod 등 수동 스키마 환경은 위 DDL 표를 기준으로 생성한다.
 
 ### `scheduled_transfers`
 > 정기 송금 설정. 매주/매월 자동 실행되는 송금의 메타. 실행 자체는 별도 스케줄러(KST 매일 새벽 1시)가 `status=ACTIVE` & `next_run_date <= today` 행을 가져와 `TransferService.execute`를 호출하고 `next_run_date`를 갱신한다.
@@ -544,6 +548,12 @@
 | 게시글 조회수 *(계획 — 미구현)* | `view:post:{postPublicId}` | `INCR` (배치로 DB 동기화) | — |
 | 환율 캐시 | `rate:{from}-{to}` | `SET ... <rate> EX 60` | 60초 |
 | 전일 환율 백업 (stage/prod, 등락률 계산) | `rate:KRW-{currency}:prev` | exchange-updater가 매일 자정 새 값을 쓰기 전 직전 값을 이 키로 백업. 위젯 등락률 = 현재값 vs prev 비교(없으면 0 처리) | updater 정책 의존 |
+
+> ⚠️ **stage/prod 환율 운영 전제(13E)**: `RealExchangeRateClient`(@Profile stage·prod)는 외부
+> **gb-mcp-servers/exchange-updater**가 매일 자정 적재하는 `rate:KRW-{currency}`(·`:prev`) 키에 전적으로 의존한다
+> (본체에 폴백 없음). 키 부재 시 환전·송금(TRANSFER4002)뿐 아니라 **비KRW 잔액 보유자의 `GET /wallets/me`·환율
+> 위젯까지 광역 실패**하므로, stage/prod 개통·Redis 교체 시 updater 가동을 먼저 확인한다. dev는 Mock 고정환율
+> (USD 1380·PHP 24.5·VND 0.054, 등락률 0)이라 updater 비의존 — 의도된 환경 차이.
 | 세션 캐시 *(계획 — 미구현)* | `session:{id}` | TTL 30분. 방식 B(stateless 검증)라 도입 여부 미정 | 30분 |
 
 > ⚠️ 잔액(balance)은 Redis에 캐싱하지 않는다.

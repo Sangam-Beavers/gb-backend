@@ -3,6 +3,7 @@ package com.gb.member.domain.member.dto.request;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -18,7 +19,14 @@ public class SignupRequest {
     @Size(max = 255, message = "이메일은 255자 이내여야 합니다")
     private String email;
 
+    // 비밀번호 복잡도 = stage/prod IdP(Cognito User Pool 기본 정책: 8자+, 대/소문자·숫자·특수문자) 미러링.
+    //   dev(Authentik)에서 가입되는 비밀번호가 stage에서 거부되는 환경 비대칭을 입구에서 막는다.
+    //   최종 판정은 여전히 IdP — 여기 통과해도 IdP가 거부하면 COMMON4001로 매핑된다(CognitoIdpUserClient).
+    // TODO(비밀번호 정책): 실제 Cognito 풀 정책 확정 시 이 패턴과 1:1 일치 여부를 재확인한다.
     @NotBlank(message = "비밀번호는 필수입니다")
+    @Size(min = 8, max = 256, message = "비밀번호는 8자 이상 256자 이내여야 합니다")
+    @Pattern(regexp = "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9]).*$",
+            message = "비밀번호는 대문자·소문자·숫자·특수문자를 각각 1자 이상 포함해야 합니다")
     private String password;
 
     @NotBlank(message = "이름은 필수입니다")
