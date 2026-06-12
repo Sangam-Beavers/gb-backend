@@ -7,6 +7,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
@@ -105,15 +106,18 @@ class PostServiceTest {
     }
 
     @Test
-    @DisplayName("작성 시 잘못된 category → COMMON4001, save·member 호출 없음")
+    @DisplayName("작성 시 잘못된 category → COMMON4001, save·표시정보 조회 없음(차단 검증 1회만)")
     void createPost_잘못된_카테고리() {
         assertThatThrownBy(() -> service.createPost(USER, createReq("NOPE", "t", "c")))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INVALID_REQUEST);
 
+        // 차단 검증(isCommunityBanned)은 진입 시 1회 호출되는 현행 계약 — 표시정보 조회(getMember)는 없어야 한다.
+        verify(memberClient).isCommunityBanned(USER);
+        verifyNoMoreInteractions(memberClient);
         // Phase 3(BE-8): 작성 실패 시 마일스톤 이벤트도 미발행
-        verifyNoInteractions(postRepository, memberClient, eventPublisher);
+        verifyNoInteractions(postRepository, eventPublisher);
     }
 
     @Test
@@ -156,15 +160,18 @@ class PostServiceTest {
     }
 
     @Test
-    @DisplayName("미지원 작성 언어(ja) → COMMUNITY4003, save·member 호출 없음")
+    @DisplayName("미지원 작성 언어(ja) → COMMUNITY4003, save·표시정보 조회 없음(차단 검증 1회만)")
     void createPost_미지원_언어() {
         assertThatThrownBy(() -> service.createPost(USER, createReq("JOB", "ja", "title", "content")))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommunityErrorCode.UNSUPPORTED_LANGUAGE);
 
+        // 차단 검증(isCommunityBanned)은 진입 시 1회 호출되는 현행 계약 — 표시정보 조회(getMember)는 없어야 한다.
+        verify(memberClient).isCommunityBanned(USER);
+        verifyNoMoreInteractions(memberClient);
         // Phase 3(BE-8): 작성 실패 시 마일스톤 이벤트도 미발행
-        verifyNoInteractions(postRepository, memberClient, eventPublisher);
+        verifyNoInteractions(postRepository, eventPublisher);
     }
 
     // ----- get -----
