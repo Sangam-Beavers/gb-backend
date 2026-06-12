@@ -5,6 +5,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.gb.appadmin.domain.member.dto.response.UserActivityResponse;
 import com.gb.appadmin.domain.member.dto.response.UserCommentView;
 import com.gb.appadmin.domain.member.dto.response.UserPostView;
+import com.gb.appadmin.domain.report.dto.response.MemberReportItemResponse;
+import com.gb.appadmin.domain.report.dto.response.ReportedAuthorSummary;
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import java.util.List;
@@ -68,6 +70,59 @@ public class RealCommunityAdminClient implements CommunityAdminClient {
         }
     }
 
+    @Override
+    public List<ReportedAuthorSummary> getReportedAuthors(int page, int size) {
+        try {
+            String uri = UriComponentsBuilder
+                    .fromPath("/api/v1/internal/admin/reports/by-author")
+                    .queryParam("page", page)
+                    .queryParam("size", size)
+                    .build().toUriString();
+
+            Envelope<ByAuthorPagePayload> env = communityRestClient.get().uri(uri)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+
+            ByAuthorPagePayload payload = env == null ? null : env.data();
+            if (payload == null || payload.authors() == null) {
+                return List.of();
+            }
+            return payload.authors().stream()
+                    .map(a -> new ReportedAuthorSummary(
+                            a.authorPublicId(), null, null,
+                            a.totalReportCount(), a.reportedContentCount()))
+                    .toList();
+        } catch (RuntimeException e) {
+            log.error("[RealCommunityAdminClient] getReportedAuthors 실패: {}", e.getMessage());
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
+    }
+
+    @Override
+    public List<MemberReportItemResponse> getMemberReports(String authorPublicId) {
+        try {
+            Envelope<List<AdminReportViewWire>> env = communityRestClient.get()
+                    .uri("/api/v1/internal/admin/reports/by-author/{id}", authorPublicId)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+
+            List<AdminReportViewWire> items = env == null ? null : env.data();
+            if (items == null) {
+                return List.of();
+            }
+            return items.stream()
+                    .map(v -> new MemberReportItemResponse(
+                            v.postPublicId(), v.postTitle(), v.authorPublicId(),
+                            v.targetType(), v.category(),
+                            v.reportCount(), v.status(), v.lastReportedAt()))
+                    .toList();
+        } catch (RuntimeException e) {
+            log.error("[RealCommunityAdminClient] getMemberReports 실패 authorPublicId={}: {}",
+                    authorPublicId, e.getMessage());
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
+    }
+
     private static UserActivityResponse empty(int size) {
         return new UserActivityResponse(List.of(), 0, size, 0, List.of(), 0, size, 0);
     }
@@ -104,4 +159,29 @@ public class RealCommunityAdminClient implements CommunityAdminClient {
             @JsonProperty("content") String content,
             @JsonProperty("like_count") int likeCount,
             @JsonProperty("created_at") String createdAt) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record ByAuthorPagePayload(
+            @JsonProperty("authors") List<AuthorAggWire> authors,
+            @JsonProperty("page") int page,
+            @JsonProperty("size") int size,
+            @JsonProperty("total_elements") long totalElements,
+            @JsonProperty("total_pages") int totalPages) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record AuthorAggWire(
+            @JsonProperty("author_public_id") String authorPublicId,
+            @JsonProperty("total_report_count") long totalReportCount,
+            @JsonProperty("reported_content_count") long reportedContentCount) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record AdminReportViewWire(
+            @JsonProperty("post_public_id") String postPublicId,
+            @JsonProperty("post_title") String postTitle,
+            @JsonProperty("author_public_id") String authorPublicId,
+            @JsonProperty("target_type") String targetType,
+            @JsonProperty("category") String category,
+            @JsonProperty("report_count") int reportCount,
+            @JsonProperty("status") String status,
+            @JsonProperty("last_reported_at") String lastReportedAt) {}
 }

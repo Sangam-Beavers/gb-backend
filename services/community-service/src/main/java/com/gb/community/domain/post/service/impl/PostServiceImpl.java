@@ -100,7 +100,15 @@ public class PostServiceImpl implements PostService {
     @Override
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public PostDetailResponse createPost(String requesterUserPublicId, PostCreateRequest request) {
-        // 커뮤니티 활동 제한 회원 차단 — member-service HTTP 호출(fail-fast). DB 쓰기 전에 검증한다.
+        // 입력 검증 먼저 — 외부 HTTP 호출 전 fast-fail (불필요한 네트워크 비용 방지, CLAUDE.md §4).
+        // parseCategory/resolveLanguage는 부작용 없는 순수 검증이라 createPostTx에서의 재호출과 중복되지만 안전.
+        PostCategory category = parseCategory(request.getCategory());
+        if (category == null) {
+            throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
+        }
+        resolveLanguage(request.getLanguage()); // 미지원 언어이면 COMMUNITY4003 throw
+
+        // 커뮤니티 활동 제한 회원 차단 — member-service HTTP 호출(입력 검증 통과 후에만).
         if (memberClient.isCommunityBanned(requesterUserPublicId)) {
             throw new BusinessException(CommunityErrorCode.COMMUNITY_BANNED);
         }

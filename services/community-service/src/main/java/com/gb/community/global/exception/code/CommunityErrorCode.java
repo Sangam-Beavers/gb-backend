@@ -31,7 +31,13 @@ public enum CommunityErrorCode implements ErrorCode {
     // 댓글 2000자)과는 별도 — 번역은 더 짧은 캡으로 비용 보호.
     CONTENT_TOO_LONG(HttpStatus.BAD_REQUEST, "COMMUNITY4004", "본문이 너무 깁니다."),
     // 커뮤니티 활동 제한된 회원이 글/댓글 작성 시도 시.
-    COMMUNITY_BANNED(HttpStatus.FORBIDDEN, "COMMUNITY4005", "커뮤니티 활동이 제한된 계정입니다.");
+    COMMUNITY_BANNED(HttpStatus.FORBIDDEN, "COMMUNITY4005", "커뮤니티 활동이 제한된 계정입니다."),
+
+    // ===== 신고 도메인 (COMMUNITY4006~) =====
+    // 동일 (reporter, target_type, target_id) 조합으로 중복 신고 시도 시.
+    DUPLICATE_REPORT(HttpStatus.CONFLICT, "COMMUNITY4006", "이미 신고한 콘텐츠입니다."),
+    // Service에서 ReportReason.valueOf() 실패 시 — COMMON4001 대신 도메인 코드 사용(CLAUDE.md §6).
+    UNSUPPORTED_REPORT_REASON(HttpStatus.BAD_REQUEST, "COMMUNITY4007", "지원하지 않는 신고 사유입니다.");
 
     private final HttpStatus httpStatus; // @Getter가 getHttpStatus/getCode/getMessage 생성 → ErrorCode 충족
     private final String code;

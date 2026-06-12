@@ -3,6 +3,7 @@ package com.gb.appadmin.global.client;
 import com.gb.appadmin.domain.member.dto.response.AppMemberPageResponse;
 import com.gb.appadmin.domain.member.dto.response.AppMemberResponse;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -51,5 +52,11 @@ public class MockMemberAdminClient implements MemberAdminClient {
     public void setCommunityBan(String userPublicId, boolean banned) {
         log.info("[MockMemberAdminClient] setCommunityBan userPublicId={}, banned={} (픽스처 — 실제 변경 없음)",
                 userPublicId, banned);
+    }
+
+    @Override
+    public Optional<AppMemberResponse> getMemberByPublicId(String userPublicId) {
+        log.info("[MockMemberAdminClient] getMemberByPublicId userPublicId={}", userPublicId);
+        return FIXTURE.stream().filter(m -> m.userPublicId().equals(userPublicId)).findFirst();
     }
 }

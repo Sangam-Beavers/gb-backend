@@ -8,7 +8,9 @@ public record AdminReportSummary(
         String authorPublicId,
         String authorNickname,
         long reportCount,
-        String category,        // SPAM / ABUSE / ...
+        String reason,          // SPAM / ABUSE / FRAUD / SEXUAL / ETC
+        String targetType,      // POST / COMMENT
+        String status,          // PENDING / RESOLVED_DELETED / DISMISSED
         LocalDateTime lastReportedAt
 ) {
 }
