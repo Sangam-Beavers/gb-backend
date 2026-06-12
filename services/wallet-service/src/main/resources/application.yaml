@@ -50,6 +50,10 @@ wallet:
     verify-rate-limit:
       window-seconds: 60     # 카운터 윈도(초)
       limit: 10              # 윈도 내 허용 호출 수. 초과 시 ACCOUNT4005(429). Redis 장애 시 fail-open
+  reward:
+    # 송금 적립/쿠폰 정책(#215). 미지정 시 RewardProperties 기본값(5칸/90일)으로 동작.
+    stamps-per-coupon: 5     # 쿠폰 1장 발급에 필요한 스탬프 수(카드 한 장의 칸 수)
+    coupon-valid-days: 90    # 발급 쿠폰 유효기간(일)
 
 # app-admin-service 연동 (수수료 정책 조회)
 app-admin:
