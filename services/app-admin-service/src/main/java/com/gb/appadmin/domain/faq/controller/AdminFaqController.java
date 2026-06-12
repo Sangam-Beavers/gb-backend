@@ -27,7 +27,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "FAQs (Admin)", description = "FAQ 관리")
 @RestController
-@RequestMapping("/api/v1/admin/app/faqs")
+@RequestMapping("/api/v1/app-admin/admin/faqs")
 @RequiredArgsConstructor
 public class AdminFaqController {
 

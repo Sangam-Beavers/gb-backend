@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Service Settings (Public)", description = "서비스 설정 공개 조회")
 @RestController
-@RequestMapping("/api/v1/app/settings")
+@RequestMapping("/api/v1/app-admin/app/settings")
 @RequiredArgsConstructor
 public class ServiceSettingController {
 

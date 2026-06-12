@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "App Admin - 회원 관리", description = "앱 관리자용 회원 조회 및 상태 변경")
 @RestController
-@RequestMapping("/api/v1/admin/app/members")
+@RequestMapping("/api/v1/app-admin/admin/members")
 @RequiredArgsConstructor
 public class AppMemberController {
 

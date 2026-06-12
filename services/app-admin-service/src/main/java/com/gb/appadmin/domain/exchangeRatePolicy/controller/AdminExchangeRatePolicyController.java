@@ -27,7 +27,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Exchange Rate Policies (Admin)", description = "환율 정책 관리")
 @RestController
-@RequestMapping("/api/v1/admin/app/exchange-rate-policies")
+@RequestMapping("/api/v1/app-admin/admin/exchange-rate-policies")
 @RequiredArgsConstructor
 public class AdminExchangeRatePolicyController {
 
