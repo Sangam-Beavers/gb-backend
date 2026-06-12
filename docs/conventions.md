@@ -357,6 +357,10 @@ com.gb.common
 
 본인 식별자(`userPublicId`)는 토큰 custom claim **`public_id`**(UUID)에서 추출한다. 토큰 `sub`↔`public_id` 매핑은 회원가입 시 IdP attribute(`attributes.public_id`)로 해결됨. 컨트롤러는 서비스별 `global/security`의 ArgumentResolver로 받는다.
 
+> **환경별 `public_id` claim 노출 경로(인프라 전제 — 백엔드 코드 밖):**
+> - **dev(Authentik)**: 가입 시 `attributes.public_id` 저장(백엔드) + Provider **Property Mapping**이 claim으로 노출. subject mode는 UUID 기반으로 설정해야 `authProviderId`↔`sub`가 일치한다(`RealIdpUserClient` 주석 참고).
+> - **stage/prod(Cognito)**: 백엔드(`CognitoIdpUserClient`)는 `custom:public_id` **attribute 저장까지만** 책임진다. claim 노출은 User Pool의 **Pre Token Generation Lambda** 소관(`custom:public_id` → `public_id`). **풀 요구사항 체크리스트**: ① 커스텀 attribute `custom:public_id` 정의(미정의 시 `AdminCreateUser` 자체가 실패 → 가입 전부 COMMON5000) ② Pre Token Generation Lambda 연결(미설정 시 토큰에 claim이 없어 **모든 `@CurrentUserPublicId` 엔드포인트가 AUTH4011**) ③ 환경 개통 시 가입→로그인→`GET /api/v1/members/me` 스모크로 claim 노출을 확인한다.
+
 ```java
 @CurrentUserPublicId String userPublicId   // = jwt.getClaimAsString("public_id")
 ```
