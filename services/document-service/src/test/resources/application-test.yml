@@ -46,7 +46,6 @@ gb:
   analysis:
     source: development
     result-queue-arn: ""
-    request-queue-url: ""
     upload-bucket: gb-document-uploads-test
     upload-url-expires-seconds: 600
     aws-region: ap-northeast-2

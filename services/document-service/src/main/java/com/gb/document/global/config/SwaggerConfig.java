@@ -28,7 +28,7 @@ public class SwaggerConfig {
         return new OpenAPI()
                 .info(new Info()
                         .title("Document Service API")
-                        .description("문서 분석 API (제출/상태/결과/목록/재요청) + 분석 결과 후속 질문 챗봇(SSE 스트리밍)")
+                        .description("문서 분석 API (제출/상태/결과/목록) + 분석 결과 후속 질문 챗봇(SSE 스트리밍)")
                         .version("v1"))
                 .components(new Components().addSecuritySchemes(BEARER_SCHEME,
                         new SecurityScheme()

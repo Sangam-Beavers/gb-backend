@@ -19,12 +19,10 @@ import org.springframework.transaction.annotation.Transactional;
  * <p><b>왜 필요한가:</b> 제출(POST /documents)은 Pre-signed URL만 발급하고 파일 업로드는 사용자가
  * S3에 직접 한다. 사용자가 업로드를 안 하면 백엔드는 그 사실을 알 길이 없어(S3 이벤트는 Lambda A로만 감)
  * 해당 건이 영원히 ANALYZING으로 남는다. 업로드는 됐지만 결과가 유실된 건(Lambda 장애·DLQ행)도 마찬가지.
- * 둘 다 "일정 시간 지나도 ANALYZING이면 FAILED" 한 가지 규칙으로 정리한다 — 이후 복구는 두 갈래:
- * 원본이 S3에 있으면(결과 유실) retry(POST /documents/{id}/retry)로 재트리거, 없으면(미업로드)
- * retry가 422로 거절하므로 사용자가 새로 제출(POST /documents)한다.
+ * 둘 다 "일정 시간 지나도 ANALYZING이면 FAILED" 한 가지 규칙으로 정리한다 — 이후 복구는
+ * 사용자가 새로 제출(POST /documents)하는 한 경로뿐이다(원본 재사용 재시도 경로는 없음).
  *
- * <p><b>판정 기준 — updatedAt:</b> createdAt이 아니라 updatedAt 기준이다. retry가 FAILED→ANALYZING으로
- * 되돌리면 updatedAt이 갱신돼 유예 시간이 다시 시작된다(createdAt 기준이면 retry 직후 바로 다시 FAILED됨).
+ * <p><b>판정 기준 — updatedAt:</b> createdAt이 아니라 updatedAt(상태가 마지막으로 바뀐 시점) 기준이다.
  * 임계값({@code gb.analysis.stale-timeout-minutes}, 기본 30분)은 업로드 URL TTL(10분) + 분석 소요(수 분)
  * 보다 넉넉해야 정상 진행 중인 건을 죽이지 않는다.
  *

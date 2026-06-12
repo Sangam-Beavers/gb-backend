@@ -30,7 +30,7 @@ class StaleSubmissionSweeperTest {
 
     private StaleSubmissionSweeper sweeper() {
         AnalysisProperties props = new AnalysisProperties(
-                "development", "", "", "gb-document-uploads-dev", 600, "ap-northeast-2",
+                "development", "", "gb-document-uploads-dev", 600, "ap-northeast-2",
                 false, "", TIMEOUT_MINUTES);
         return new StaleSubmissionSweeper(documentRepository, props);
     }

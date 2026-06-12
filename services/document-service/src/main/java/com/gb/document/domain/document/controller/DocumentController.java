@@ -34,7 +34,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-@Tag(name = "Document", description = "문서 분석 API (제출/상태/결과/목록/재요청)")
+@Tag(name = "Document", description = "문서 분석 API (제출/상태/결과/목록)")
 @RestController
 @RequestMapping("/api/v1/documents")
 @RequiredArgsConstructor
@@ -175,39 +175,5 @@ public class DocumentController {
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC)
             Pageable pageable) {
         return ApiResponse.success(documentSubmissionService.list(userPublicId, status, pageable));
-    }
-
-    @Operation(summary = "분석 재요청",
-            description = "FAILED 상태의 문서를 다시 분석한다. S3 원본이 남아 있을 때만 재사용해 재트리거"
-                    + "(재업로드 불필요). 원본이 없으면(업로드 안 한 채 만료돼 정리된 건) 422 — "
-                    + "이 경우 POST /api/v1/documents로 새로 제출한다. 비-FAILED 상태에서 호출 시에도 422.")
-    @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
-                    description = "재요청 접수. status가 ANALYZING으로 전환된다."),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
-                    description = "AUTH4011 - 인증이 필요합니다.",
-                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "COMMON4031 - 다른 사용자의 문서.",
-                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4031", value = EX_COMMON4031))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
-                    description = "DOCUMENT4001 - 존재하지 않는 문서.",
-                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "DOCUMENT4001", value = EX_DOCUMENT4001))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422",
-                    description = "COMMON4221 - FAILED 상태가 아닌 문서, 또는 S3 원본 미존재(재시도 불가 — "
-                            + "POST /api/v1/documents로 새로 제출).",
-                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
-                            examples = @ExampleObject(name = "COMMON4221", value = EX_COMMON4221)))
-    })
-    @PostMapping("/{publicId}/retry")
-    public ApiResponse<SubmissionResponse> retry(
-            @CurrentUserPublicId String userPublicId,
-            @Parameter(description = "문서 식별자(UUID). dev 시드 ...0002=FAILED(재요청→200, ANALYZING 전환)",
-                    example = "00000000-0000-0000-0000-000000000002")
-            @PathVariable String publicId) {
-        return ApiResponse.success(documentSubmissionService.retry(userPublicId, publicId));
     }
 }

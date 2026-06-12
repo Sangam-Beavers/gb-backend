@@ -20,7 +20,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * ({@link com.gb.document.global.security.CurrentUserPublicId} 참고). 인증 미구현 시절의
  * {@code X-User-Public-Id} 헤더 임시 처리를 대체한다(member/wallet/community와 동일 전환 — CLAUDE.md §9).
  *
- * <p>모든 document 비즈니스 엔드포인트(제출/상태/결과/목록/재요청/챗봇)는 인증 필요. 문서/헬스체크만 공개.
+ * <p>모든 document 비즈니스 엔드포인트(제출/상태/결과/목록/챗봇)는 인증 필요. 문서/헬스체크만 공개.
  */
 @Configuration
 @EnableWebSecurity

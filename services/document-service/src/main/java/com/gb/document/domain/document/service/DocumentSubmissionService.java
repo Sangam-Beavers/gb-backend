@@ -10,7 +10,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 /**
- * 분석 요청/조회/재요청 비즈니스 로직 진입점. 1단계 범위(SQS Consumer 제외).
+ * 분석 요청/조회 비즈니스 로직 진입점. 1단계 범위(SQS Consumer 제외).
  */
 public interface DocumentSubmissionService {
 
@@ -25,6 +25,4 @@ public interface DocumentSubmissionService {
      * null/빈 리스트면 전체 조회, 잘못된 값이면 COMMON4001.
      */
     Page<DocumentSummaryResponse> list(String userPublicId, List<String> statuses, Pageable pageable);
-
-    SubmissionResponse retry(String userPublicId, String publicId);
 }

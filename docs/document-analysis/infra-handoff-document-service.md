@@ -49,13 +49,12 @@
 ```
 S3:
   s3:PutObject  on arn:aws:s3:::gb-document-bucket/original/*     (presigned PUT 발급)
-  s3:GetObject  on arn:aws:s3:::gb-document-bucket/*              (masked/ presigned GET + retry HeadObject)
+  s3:GetObject  on arn:aws:s3:::gb-document-bucket/*              (masked/ presigned GET)
 
 SQS (결과큐, 계정 A):
   sqs:ReceiveMessage, sqs:DeleteMessage(+Batch), sqs:GetQueueUrl,
   sqs:GetQueueAttributes, sqs:ChangeMessageVisibility(+Batch)
     on arn:aws:sqs:ap-northeast-2:<계정A>:gb-analysis-results-{stage|prod}
-  (요청큐 구현 시: sqs:SendMessage on <요청큐>)
 
 Lambda (챗봇, 계정 B):
   lambda:InvokeFunctionUrl on arn:aws:lambda:ap-northeast-2:<계정B>:function:<챗봇함수>

@@ -28,8 +28,8 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>두 가지 용도:
  * <ol>
  *   <li>챗봇(R1) 권한 검증용 — DEMO_DOCUMENT_PUBLIC_ID로 COMPLETED 문서를 박아 둔다.</li>
- *   <li>분석 조회 API 4종(P2) 동작 확인용 — FAILED 문서와 결과 미생성 ANALYZING 문서도 시드해
- *       /status, /result(COMPLETED는 결과, ANALYZING은 422), /list, /retry(FAILED→ANALYZING)를
+ *   <li>분석 조회 API 동작 확인용 — FAILED 문서와 결과 미생성 ANALYZING 문서도 시드해
+ *       /status, /result(COMPLETED는 결과, ANALYZING은 422), /list를
  *       SQS Consumer 없이 검증할 수 있게 한다.</li>
  * </ol>
  */
