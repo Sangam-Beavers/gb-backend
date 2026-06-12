@@ -1,0 +1,20 @@
+# stage 프로파일 — 모든 값은 환경변수로 주입 (실제 값 절대 기재 금지)
+# DB: SM(sb/stage/admin/db) → ESO → k8s Secret(admin-secrets)
+# admin-service는 Redis/Kafka/Mail 미사용. 인증(OAuth2)도 의도적으로 비활성(로그인 없음 — SecurityConfig permitAll).
+# 다른 서비스 health/internal URL과 Grafana/ArgoCD base URL은 base application.yaml의
+#   ${ENV:default}를 ConfigMap(admin-config) env로 덮어쓴다(여기 재정의 불필요).
+spring:
+  datasource:
+    url: jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}?serverTimezone=UTC&characterEncoding=UTF-8
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      # stage 검증 한정(자동 스키마 생성) — 타 서비스 stage와 동일 정책. prod는 validate + 수동 DDL/마이그레이션.
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: false
+    show-sql: false
