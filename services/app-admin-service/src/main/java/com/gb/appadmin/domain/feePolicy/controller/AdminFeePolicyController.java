@@ -27,7 +27,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Fee Policies (Admin)", description = "수수료 정책 관리")
 @RestController
-@RequestMapping("/api/v1/admin/app/fee-policies")
+@RequestMapping("/api/v1/app-admin/admin/fee-policies")
 @RequiredArgsConstructor
 public class AdminFeePolicyController {
 

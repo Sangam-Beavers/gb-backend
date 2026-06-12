@@ -26,7 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Service Settings (Admin)", description = "서비스 설정 관리")
 @RestController
-@RequestMapping("/api/v1/admin/app/settings")
+@RequestMapping("/api/v1/app-admin/admin/settings")
 @RequiredArgsConstructor
 public class AdminServiceSettingController {
 
