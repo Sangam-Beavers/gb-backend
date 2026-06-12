@@ -29,7 +29,7 @@ spring:
       password: ${SPRING_DATA_REDIS_PASSWORD}
       database: 0
       ssl:
-        enabled: true
+        enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:true}  # SM: tls — wallet stage와 동일 패턴(기본 TLS, env로 제어)
 
   security:
     oauth2:
