@@ -44,8 +44,11 @@ import software.amazon.awssdk.services.cognitoidentityprovider.model.UserType;
  * <p>public_id를 토큰 claim으로 노출하는 것은 Cognito Pre Token Generation Lambda가 담당한다
  * (custom:public_id → public_id claim). 이 클라이언트는 custom:public_id 저장까지만 책임진다.
  *
- * <p>에러 매핑: username(=email) 중복 → {@link MemberErrorCode#EMAIL_ALREADY_EXISTS}(MEMBER4002, 409),
- * 그 외 Cognito 예외/연결 실패 → {@link CommonErrorCode#INTERNAL_SERVER_ERROR}(COMMON5000).
+ * <p>에러 매핑({@link RealIdpUserClient}의 idpStatusToError와 동일 정책 — 같은 실패가 dev/stage에서
+ * 400/500으로 갈리지 않게 한다): username(=email) 중복 → {@link MemberErrorCode#EMAIL_ALREADY_EXISTS}
+ * (MEMBER4002, 409), 그 외 4xx(비밀번호 정책 위반·파라미터 오류 등 클라이언트 입력 문제) →
+ * {@link CommonErrorCode#INVALID_REQUEST}(COMMON4001, 400), 5xx·연결 실패 →
+ * {@link CommonErrorCode#INTERNAL_SERVER_ERROR}(COMMON5000).
  */
 @Slf4j
 @Component
@@ -89,7 +92,7 @@ public class CognitoIdpUserClient implements IdpUserClient {
             throw new BusinessException(MemberErrorCode.EMAIL_ALREADY_EXISTS);
         } catch (CognitoIdentityProviderException e) {
             log.error("Cognito 사용자 생성 실패: email={}, msg={}", email, e.getMessage());
-            throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+            throw cognitoToError(e);
         }
 
         // 2) 영구 비밀번호 설정. 실패 시 방금 만든 사용자를 보상 삭제(고아 방지) 후 원래 에러 전파.
@@ -104,7 +107,7 @@ public class CognitoIdpUserClient implements IdpUserClient {
             log.error("Cognito 비밀번호 설정 실패(사용자 생성 직후) — 보상 삭제 시도: email={}, msg={}",
                     email, e.getMessage());
             deleteByUsernameBestEffort(email);
-            throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+            throw cognitoToError(e);
         }
 
         return sub;
@@ -146,7 +149,7 @@ public class CognitoIdpUserClient implements IdpUserClient {
                     .build());
         } catch (CognitoIdentityProviderException e) {
             log.error("Cognito 비밀번호 변경 실패: email={}, msg={}", email, e.getMessage());
-            throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+            throw cognitoToError(e);
         }
     }
 
@@ -172,8 +175,19 @@ public class CognitoIdpUserClient implements IdpUserClient {
             throw e;
         } catch (CognitoIdentityProviderException e) {
             log.error("Cognito 사용자 비활성화 실패: sub={}, msg={}", authProviderId, e.getMessage());
-            throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR);
+            throw cognitoToError(e);
         }
+    }
+
+    /**
+     * Cognito 예외를 본체 에러로 매핑한다: 4xx(비밀번호 정책 위반·파라미터 오류 등 클라이언트 입력 문제)
+     * → COMMON4001(400), 5xx·기타 → COMMON5000(500). dev(Authentik) {@link RealIdpUserClient}의
+     * idpStatusToError와 동일 정책 — 같은 실패가 환경에 따라 400/500으로 갈리지 않게 한다.
+     */
+    private BusinessException cognitoToError(CognitoIdentityProviderException e) {
+        return new BusinessException(e.statusCode() >= 400 && e.statusCode() < 500
+                ? CommonErrorCode.INVALID_REQUEST
+                : CommonErrorCode.INTERNAL_SERVER_ERROR);
     }
 
     /**

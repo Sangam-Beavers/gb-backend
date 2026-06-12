@@ -10,12 +10,17 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: validate
+      # stage 검증 한정(자동 스키마 생성) — dev 및 타 3서비스 stage와 동일 정책으로 통일(스키마 드리프트 시
+      # member만 기동 실패하던 비대칭 제거). prod는 validate + 수동 DDL/마이그레이션.
+      ddl-auto: update
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
         format_sql: false
     show-sql: false
+  kafka:
+    # 기본값(localhost:9092) silent fallback 차단 — env 누락 시 placeholder 미해석으로 기동 실패(fail-fast).
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
 
   data:
     redis:
