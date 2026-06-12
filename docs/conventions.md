@@ -237,6 +237,17 @@
 | `ACCOUNT4006` | 403 | 인증되지 않은 계좌입니다. |
 | `ACCOUNT4007` | 422 | 충전 한도를 초과했습니다. |
 
+### 커뮤니티 (COMMUNITY)
+| code | HTTP | 의미 |
+| --- | --- | --- |
+| `COMMUNITY4001` | 404 | 존재하지 않는 게시글입니다. |
+| `COMMUNITY4002` | 404 | 존재하지 않는 댓글입니다. |
+| `COMMUNITY4003` | 400 | 지원하지 않는 언어입니다. (번역 화이트리스트 외) |
+| `COMMUNITY4004` | 400 | 본문이 너무 깁니다. (번역 비용 캡 초과) |
+| `COMMUNITY4005` | 403 | 커뮤니티 활동이 제한된 계정입니다. |
+| `COMMUNITY4006` | 409 | 이미 신고한 콘텐츠입니다. (중복 신고 — reporter+targetType+targetId 유니크 위반) |
+| `COMMUNITY4007` | 400 | 지원하지 않는 신고 사유입니다. (SPAM/ABUSE/FRAUD/SEXUAL/ETC 외 값) |
+
 ### 문서 (DOCUMENT)
 | code | HTTP | 의미 |
 | --- | --- | --- |

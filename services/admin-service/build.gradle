@@ -18,8 +18,8 @@ dependencies {
 
     runtimeOnly 'com.mysql:mysql-connector-j'
 
-    // 테스트 전용 인메모리 DB. spring-boot-starter-test는 루트 build.gradle subprojects에서 이미 적용됨.
-    testRuntimeOnly 'com.h2database:h2'
+    // 인메모리 DB — 테스트 및 mock-clients 로컬 실행용.
+    runtimeOnly 'com.h2database:h2'
     // 컨트롤러 슬라이스 테스트에서 jwt() 요청 후처리기로 인증 주체를 주입하기 위해 필요(spring-boot-starter-test 미포함).
     testImplementation 'org.springframework.security:spring-security-test'
 }

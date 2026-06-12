@@ -26,14 +26,15 @@ public class AdminCommunityController {
 
     private final AdminCommunityService adminCommunityService;
 
-    @Operation(summary = "신고 게시글 목록",
-            description = "카테고리(SPAM/ABUSE 등) 필터. Phase 1은 Mock fixture.")
+    @Operation(summary = "신고 콘텐츠 목록",
+            description = "status(PENDING/RESOLVED_DELETED/DISMISSED) 및 reason(SPAM/ABUSE/FRAUD/SEXUAL/ETC) 필터. 미지정 시 전체.")
     @GetMapping("/reports")
     public ApiResponse<AdminReportPageResponse> reports(
-            @Parameter(description = "신고 카테고리") @RequestParam(required = false) String category,
+            @Parameter(description = "신고 처리 상태") @RequestParam(required = false) String status,
+            @Parameter(description = "신고 사유") @RequestParam(required = false) String reason,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return ApiResponse.success(adminCommunityService.reports(category, page, size));
+        return ApiResponse.success(adminCommunityService.reports(status, reason, page, size));
     }
 
     @Operation(summary = "게시글 숨김",

@@ -37,11 +37,12 @@ public class RealCommunityAdminClient implements CommunityAdminClient {
     }
 
     @Override
-    public Page<AdminReportSummary> reports(String category, int page, int size) {
+    public Page<AdminReportSummary> reports(String status, String reason, int page, int size) {
         try {
             UriComponentsBuilder b = UriComponentsBuilder.fromUriString(baseUrl + "/api/v1/internal/admin/reports")
                     .queryParam("page", page).queryParam("size", size);
-            if (category != null && !category.isBlank()) b.queryParam("category", category);
+            if (status != null && !status.isBlank()) b.queryParam("status", status);
+            if (reason != null && !reason.isBlank()) b.queryParam("reason", reason);
             InternalApiEnvelope<ReportPagePayload> env = restClient.get().uri(b.build().toUri())
                     .retrieve()
                     .body(new ParameterizedTypeReference<InternalApiEnvelope<ReportPagePayload>>() {});
@@ -56,7 +57,9 @@ public class RealCommunityAdminClient implements CommunityAdminClient {
                             r.authorPublicId(),
                             null, // nickname enrich
                             r.reportCount(),
-                            r.category(),
+                            r.reason(),
+                            r.targetType(),
+                            r.status(),
                             r.lastReportedAt()))
                     .collect(Collectors.toList());
             return new PageImpl<>(mapped, PageRequest.of(p.page(), Math.max(p.size(), 1)), p.totalElements());
@@ -118,7 +121,9 @@ public class RealCommunityAdminClient implements CommunityAdminClient {
             @JsonProperty("post_public_id") String postPublicId,
             @JsonProperty("post_title") String postTitle,
             @JsonProperty("author_public_id") String authorPublicId,
-            @JsonProperty("category") String category,
+            @JsonProperty("category") String reason,       // community 응답은 category 필드명 유지, 값은 ReportReason
+            @JsonProperty("target_type") String targetType,
+            @JsonProperty("status") String status,
             @JsonProperty("report_count") long reportCount,
             @JsonProperty("last_reported_at") LocalDateTime lastReportedAt) {
     }
