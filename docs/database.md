@@ -548,6 +548,12 @@
 | 게시글 조회수 *(계획 — 미구현)* | `view:post:{postPublicId}` | `INCR` (배치로 DB 동기화) | — |
 | 환율 캐시 | `rate:{from}-{to}` | `SET ... <rate> EX 60` | 60초 |
 | 전일 환율 백업 (stage/prod, 등락률 계산) | `rate:KRW-{currency}:prev` | exchange-updater가 매일 자정 새 값을 쓰기 전 직전 값을 이 키로 백업. 위젯 등락률 = 현재값 vs prev 비교(없으면 0 처리) | updater 정책 의존 |
+
+> ⚠️ **stage/prod 환율 운영 전제(13E)**: `RealExchangeRateClient`(@Profile stage·prod)는 외부
+> **gb-mcp-servers/exchange-updater**가 매일 자정 적재하는 `rate:KRW-{currency}`(·`:prev`) 키에 전적으로 의존한다
+> (본체에 폴백 없음). 키 부재 시 환전·송금(TRANSFER4002)뿐 아니라 **비KRW 잔액 보유자의 `GET /wallets/me`·환율
+> 위젯까지 광역 실패**하므로, stage/prod 개통·Redis 교체 시 updater 가동을 먼저 확인한다. dev는 Mock 고정환율
+> (USD 1380·PHP 24.5·VND 0.054, 등락률 0)이라 updater 비의존 — 의도된 환경 차이.
 | 세션 캐시 *(계획 — 미구현)* | `session:{id}` | TTL 30분. 방식 B(stateless 검증)라 도입 여부 미정 | 30분 |
 
 > ⚠️ 잔액(balance)은 Redis에 캐싱하지 않는다.
