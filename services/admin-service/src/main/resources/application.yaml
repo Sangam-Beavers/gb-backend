@@ -61,22 +61,21 @@ admin:
     embeds:
       grafana:
         base-url: ${GRAFANA_BASE_URL:http://localhost:3000}
+        # UID는 stage Grafana에 실제 프로비저닝된 대시보드 기준(docs/monitoring/grafana-prometheus-setup.md §3-1).
+        # AWS RDS는 미사용(CloudWatch 미도입)이라 제거. Redis는 직접 exporter 대시보드.
         dashboards:
           - name: kubernetes_cluster
             label: Kubernetes Cluster
-            path: /d/kubernetes-cluster/kubernetes-cluster?kiosk=tv&theme=dark
+            path: /d/efa86fd1d0c121a26444b636a3f509a8/kubernetes-compute-resources-cluster?kiosk=tv&theme=dark
           - name: jvm
             label: JVM Micrometer
-            path: /d/jvm-micrometer/jvm-micrometer?kiosk=tv&theme=dark
+            path: /d/0829a2c7-6bad-4fc7-97b9-badb9568c87e/jvm-micrometer?kiosk=tv&theme=dark
           - name: spring_boot
             label: Spring Boot HTTP
-            path: /d/spring-boot-statistics/spring-boot-statistics?kiosk=tv&theme=dark
-          - name: rds
-            label: AWS RDS
-            path: /d/aws-rds/aws-rds?kiosk=tv&theme=dark
+            path: /d/X09JGT7Gz/java-springboot-apm?kiosk=tv&theme=dark
           - name: redis
             label: Redis
-            path: /d/redis/redis?kiosk=tv&theme=dark
+            path: /d/e008bc3f-81a2-40f9-baf2-a33fd8dec7ec/redis-dashboard-for-prometheus-redis-exporter-1-x?kiosk=tv&theme=dark
       argocd:
         base-url: ${ARGOCD_BASE_URL:http://localhost:8080}
         path: /applications?showSidebar=false
