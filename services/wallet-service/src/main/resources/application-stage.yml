@@ -1,6 +1,6 @@
 # stage 프로파일 — 모든 값은 환경변수로 주입 (실제 값 절대 기재 금지)
 # DB 접속 정보(host/port/dbname/user/pass)는 AWS Secrets Manager → ESO → k8s Secret 경유
-# Cognito issuer URI는 ConfigMap(gb-infra values-stage.yaml)에서 주입
+# Cognito issuer URI(AUTH_ISSUER_URI)는 Parameter Store(/sb/stage/member) → ESO → k8s Secret 경유
 spring:
   datasource:
     # DB_HOST / DB_PORT / DB_NAME 은 SM secret(sb/stage/wallet/db)에서 ESO가 주입
@@ -10,7 +10,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: update        # stage/prod에서는 validate (update 금지 — 스키마는 Flyway/수동 관리)
+      ddl-auto: update        # stage 검증 한정(자동 스키마 생성). 실제값은 ConfigMap SPRING_JPA_HIBERNATE_DDL_AUTO(=values-stage ddlAuto)가 덮어씀. prod는 validate + 마이그레이션.
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
@@ -19,7 +19,7 @@ spring:
 
   data:
     redis:
-      # REDIS_HOST 는 ConfigMap, SPRING_DATA_REDIS_PASSWORD 는 SM secret(sb/stage/redis/auth)
+      # REDIS_HOST/PORT/PASSWORD/SSL 모두 SM secret(sb/stage/redis/auth) → ESO → k8s Secret
       host: ${REDIS_HOST}
       port: ${REDIS_PORT}
       password: ${SPRING_DATA_REDIS_PASSWORD}
@@ -31,7 +31,7 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          # AUTH_ISSUER_URI = Cognito issuer (ConfigMap에서 주입)
+          # AUTH_ISSUER_URI = Cognito issuer (Parameter Store /sb/stage/member → k8s Secret)
           issuer-uri: ${AUTH_ISSUER_URI}
 
 # 외부 Mock 은행 base URL — BANK_API_BASE_URL (ConfigMap)
