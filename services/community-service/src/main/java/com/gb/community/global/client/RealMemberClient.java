@@ -123,7 +123,7 @@ public class RealMemberClient implements MemberClient {
                             ? member.trustGrade() : MemberInfo.DEFAULT_TRUST_GRADE;
                     result.put(member.publicId(),
                             new MemberInfo(member.nickname(), member.isVerified(),
-                                    member.profileImageUrl(), trustGrade));
+                                    member.profileImageUrl(), trustGrade, member.avatarHue()));
                 }
             }
         } catch (RuntimeException e) {
@@ -198,6 +198,7 @@ public class RealMemberClient implements MemberClient {
             @JsonProperty("nickname") String nickname,
             @JsonProperty("is_verified") boolean isVerified,
             @JsonProperty("profile_image_url") String profileImageUrl,
-            @JsonProperty("trust_grade") String trustGrade) {
+            @JsonProperty("trust_grade") String trustGrade,
+            @JsonProperty("avatar_hue") int avatarHue) {
     }
 }

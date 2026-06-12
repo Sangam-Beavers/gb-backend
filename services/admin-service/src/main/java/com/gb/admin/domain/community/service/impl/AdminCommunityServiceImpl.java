@@ -20,8 +20,8 @@ public class AdminCommunityServiceImpl implements AdminCommunityService {
     private final AuditLogService auditLogService;
 
     @Override
-    public AdminReportPageResponse reports(String category, int page, int size) {
-        Page<AdminReportSummary> result = communityAdminClient.reports(category, page, size);
+    public AdminReportPageResponse reports(String status, String reason, int page, int size) {
+        Page<AdminReportSummary> result = communityAdminClient.reports(status, reason, page, size);
         return AdminReportPageResponse.from(result.map(AdminReportResponse::from));
     }
 

@@ -51,17 +51,16 @@
 [분석 중] 진행 상태 폴링  GET /api/v1/documents/{id}/status
    → { status: ANALYZING }  →  반복
    → { status: COMPLETED } 되면 결과 조회로 이동
-   → { status: FAILED } 면 재요청 안내
+   → { status: FAILED } 면 재제출 안내
    │
 분석 결과 상세  GET /api/v1/documents/{id}/result
    → 면책 문구 + 위험 항목 + 급여 요약 + 번역 전문 표시
 ```
 
-### 실패/재요청
+### 실패
 ```
 status=FAILED 일 때
-분석 재요청  POST /api/v1/documents/{id}/retry
-   → 새 분석 트리거 (S3 원본이 유지된 경우 재사용, 아니면 재업로드)
+   → 사용자에게 실패를 알리고 새로 제출(POST /api/v1/documents)하도록 안내
 ```
 
 ---
@@ -92,7 +91,7 @@ status=FAILED 일 때
 
 ## 5. 예외 처리 포인트
 
-- Pre-signed URL 만료 후 업로드 시도 → 업로드 실패 → 재요청 유도.
+- Pre-signed URL 만료 후 업로드 시도 → 업로드 실패 → 새로 제출(POST /documents) 유도.
 - 분석 미완료 상태에서 결과 조회 → `COMMON4221`(처리 불가) 또는 status로 안내.
 - 권한 없는 문서 조회 → `COMMON4031`(403).
 - 존재하지 않는 문서 → `DOCUMENT4001`(404).

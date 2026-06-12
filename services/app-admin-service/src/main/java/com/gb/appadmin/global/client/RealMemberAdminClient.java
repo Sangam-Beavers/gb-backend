@@ -7,7 +7,10 @@ import com.gb.appadmin.domain.member.dto.response.AppMemberResponse;
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -89,6 +92,32 @@ public class RealMemberAdminClient implements MemberAdminClient {
                     .toBodilessEntity();
         } catch (RuntimeException e) {
             log.error("[RealMemberAdminClient] setCommunityBan 실패: {}", e.getMessage());
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
+    }
+
+    @Override
+    public Optional<AppMemberResponse> getMemberByPublicId(String userPublicId) {
+        try {
+            Envelope<MemberWire> env = memberRestClient.get()
+                    .uri("/api/v1/internal/admin/members/{id}", userPublicId)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+            MemberWire m = env == null ? null : env.data();
+            if (m == null) return Optional.empty();
+            return Optional.of(new AppMemberResponse(
+                    m.userPublicId(), m.email(), m.name(), m.nickname(),
+                    m.nationality(),
+                    m.status() != null ? m.status() : "ACTIVE",
+                    m.kycStatus() != null ? m.kycStatus() : "NOT_SUBMITTED",
+                    m.communityBanned(),
+                    m.joinedAt() != null ? m.joinedAt().toString() : null));
+        } catch (HttpClientErrorException e) {
+            if (e.getStatusCode() == HttpStatus.NOT_FOUND) return Optional.empty();
+            log.error("[RealMemberAdminClient] getMemberByPublicId 실패 id={}: {}", userPublicId, e.getMessage());
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        } catch (RuntimeException e) {
+            log.error("[RealMemberAdminClient] getMemberByPublicId 실패 id={}: {}", userPublicId, e.getMessage());
             throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
         }
     }

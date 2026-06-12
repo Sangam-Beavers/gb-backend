@@ -4,7 +4,7 @@ import com.gb.admin.domain.community.dto.response.AdminReportPageResponse;
 
 public interface AdminCommunityService {
 
-    AdminReportPageResponse reports(String category, int page, int size);
+    AdminReportPageResponse reports(String status, String reason, int page, int size);
 
     void hidePost(String postPublicId, String adminPublicId, String ipAddress);
 

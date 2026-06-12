@@ -36,6 +36,10 @@ dependencies {
     // 결과 수신은 위 starter-sqs(@SqsListener)가 SqsAsyncClient를 auto-config로 만들어 처리.
     implementation 'software.amazon.awssdk:s3'
     implementation 'software.amazon.awssdk:sqs'
+    // IRSA(웹아이덴티티) 자격증명용 — 없으면 DefaultCredentialsProvider가 AssumeRoleWithWebIdentity를
+    // 조용히 건너뛰고 IMDS(노드 롤)로 폴백한다. stage/prod에서 SA IRSA로 SQS/S3/Lambda를 호출하려면 필수.
+    // (Spring Cloud AWS 기본 자격증명 체인 + ChatbotLambdaClientImpl의 DefaultCredentialsProvider 둘 다 해당)
+    implementation 'software.amazon.awssdk:sts'
 
     runtimeOnly 'com.mysql:mysql-connector-j'
 

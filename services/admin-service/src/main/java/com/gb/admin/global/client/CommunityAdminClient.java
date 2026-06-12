@@ -4,7 +4,7 @@ import org.springframework.data.domain.Page;
 
 public interface CommunityAdminClient {
 
-    Page<AdminReportSummary> reports(String category, int page, int size);
+    Page<AdminReportSummary> reports(String status, String reason, int page, int size);
 
     void hidePost(String postPublicId, String adminPublicId);
 

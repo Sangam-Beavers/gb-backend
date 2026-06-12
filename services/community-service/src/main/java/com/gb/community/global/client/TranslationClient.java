@@ -4,13 +4,16 @@ package com.gb.community.global.client;
  * 계정 B 번역 Lambda(Bedrock Claude Haiku)를 호출하는 클라이언트 계약.
  *
  * <p>MSA 경계를 넘는 외부 호출이라 CLAUDE.md §7의 client 패턴을 따른다:
- * 인터페이스를 먼저 정의하고 구현체를 프로파일로 분리한다. Service는 본 인터페이스에만 의존하므로
+ * 인터페이스를 먼저 정의하고 구현체를 분리한다. 선택 축은 프로파일이 아니라 {@code translation.client}
+ * 프로퍼티(dev·stage 모두 bedrock 가능)다. Service는 본 인터페이스에만 의존하므로
  * Mock ↔ Bedrock 전환에 Service 코드는 변경되지 않는다.
  *
  * <p>구현체:
  * <ul>
- *   <li>{@link MockTranslationClient} — {@code @Profile({"dev","test"})}. Bedrock 호출 없이 단순 프리픽스 반환.</li>
- *   <li>{@link BedrockTranslationClient} — {@code @Profile("!dev & !test")}. AWS SDK SigV4로 Lambda Function URL POST.</li>
+ *   <li>{@link MockTranslationClient} — {@code @ConditionalOnProperty(translation.client=mock, matchIfMissing=true)}.
+ *       Bedrock 호출 없이 단순 프리픽스 반환.</li>
+ *   <li>{@link BedrockTranslationClient} — {@code @ConditionalOnProperty(translation.client=bedrock)}.
+ *       AWS SDK SigV4로 Lambda Function URL POST.</li>
  * </ul>
  *
  * <p>실패 정책 = <b>fail-fast (폴백 없음)</b>: 번역은 표시용이지만 "잘못된 번역"보다 "에러 표시"가 안전하다

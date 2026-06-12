@@ -3,6 +3,8 @@ package com.gb.appadmin.global.client;
 import com.gb.appadmin.domain.member.dto.response.UserActivityResponse;
 import com.gb.appadmin.domain.member.dto.response.UserCommentView;
 import com.gb.appadmin.domain.member.dto.response.UserPostView;
+import com.gb.appadmin.domain.report.dto.response.MemberReportItemResponse;
+import com.gb.appadmin.domain.report.dto.response.ReportedAuthorSummary;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -50,6 +52,37 @@ public class MockCommunityAdminClient implements CommunityAdminClient {
                 posts, 0, size, posts.size(),
                 comments, 0, size, comments.size()
         );
+    }
+
+    // uid-001(Juan), uid-003(Siti) 신고당한 픽스처
+    private static final List<ReportedAuthorSummary> REPORTED_AUTHORS = List.of(
+            new ReportedAuthorSummary("uid-001", null, null, 5L, 2L),
+            new ReportedAuthorSummary("uid-003", null, null, 3L, 1L)
+    );
+
+    private static final Map<String, List<MemberReportItemResponse>> MEMBER_REPORTS = Map.of(
+            "uid-001", List.of(
+                    new MemberReportItemResponse("post-uid-001", "비자 연장 신청 방법 질문",
+                            "uid-001", "POST", "SPAM", 3, "PENDING", now(-3)),
+                    new MemberReportItemResponse("post-uid-002", "서울 생활 꿀팁 공유",
+                            "uid-001", "POST", "ABUSE", 2, "PENDING", now(-1))
+            ),
+            "uid-003", List.of(
+                    new MemberReportItemResponse("post-uid-003", "공장 일자리 추천 부탁드려요",
+                            "uid-003", "POST", "FRAUD", 3, "PENDING", now(-5))
+            )
+    );
+
+    @Override
+    public List<ReportedAuthorSummary> getReportedAuthors(int page, int size) {
+        log.info("[MockCommunityAdminClient] getReportedAuthors page={}, size={}", page, size);
+        return REPORTED_AUTHORS;
+    }
+
+    @Override
+    public List<MemberReportItemResponse> getMemberReports(String authorPublicId) {
+        log.info("[MockCommunityAdminClient] getMemberReports authorPublicId={}", authorPublicId);
+        return MEMBER_REPORTS.getOrDefault(authorPublicId, List.of());
     }
 
     private static String now(int daysOffset) {

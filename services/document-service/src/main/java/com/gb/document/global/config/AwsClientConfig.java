@@ -7,9 +7,7 @@ import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.regions.providers.AwsRegionProvider;
-import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
-import software.amazon.awssdk.services.sqs.SqsClient;
 
 /**
  * 전 프로파일 공통 AWS 클라이언트 빈.
@@ -23,7 +21,7 @@ import software.amazon.awssdk.services.sqs.SqsClient;
  * <p>v1.1 — 결과 수신용 {@code spring-cloud-aws-starter-sqs}가 {@code SqsAsyncClient}를 auto-config로
  * 만든다. 그 starter도 컨테이너의 {@link AwsCredentialsProvider}/{@link AwsRegionProvider} 빈을
  * {@code @ConditionalOnMissingBean}으로 우선 사용하므로, 여기서 두 빈을 노출해 <b>설정 소스를 한 곳</b>으로
- * 모은다(우리가 만든 동기 {@link SqsClient}/{@link S3Presigner} ↔ starter가 만든 비동기 SqsAsyncClient가
+ * 모은다(우리가 만든 {@link S3Presigner} ↔ starter가 만든 비동기 SqsAsyncClient가
  * 같은 자격증명/리전을 공유). 상세: {@code docs/document-analysis/result-queue-routing.md} §3.
  */
 @Configuration
@@ -55,25 +53,6 @@ public class AwsClientConfig {
     public S3Presigner s3Presigner(AwsCredentialsProvider credentialsProvider,
                                    AwsRegionProvider regionProvider) {
         return S3Presigner.builder()
-                .region(regionProvider.getRegion())
-                .credentialsProvider(credentialsProvider)
-                .build();
-    }
-
-    @Bean
-    public SqsClient sqsClient(AwsCredentialsProvider credentialsProvider,
-                               AwsRegionProvider regionProvider) {
-        return SqsClient.builder()
-                .region(regionProvider.getRegion())
-                .credentialsProvider(credentialsProvider)
-                .build();
-    }
-
-    /** retry의 원본 존재 확인(HeadObject)용 — {@code RealS3ObjectClient}가 사용한다. */
-    @Bean
-    public S3Client s3Client(AwsCredentialsProvider credentialsProvider,
-                             AwsRegionProvider regionProvider) {
-        return S3Client.builder()
                 .region(regionProvider.getRegion())
                 .credentialsProvider(credentialsProvider)
                 .build();

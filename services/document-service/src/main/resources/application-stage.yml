@@ -9,7 +9,8 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: validate
+      # stage 검증 한정 — 자동 스키마 생성(테이블 미생성 상태에서도 기동). prod는 validate + 마이그레이션(Flyway/Liquibase)으로 전환.
+      ddl-auto: update
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
@@ -30,16 +31,21 @@ spring:
         # stage/prod에서는 SQS Consumer 활성화
         enabled: ${GB_ANALYSIS_CONSUMER_ENABLED:true}
 
+  kafka:
+    # 기본값(localhost:9092) silent fallback 차단 — env 누락 시 placeholder 미해석으로 기동 실패(fail-fast).
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+
 # AI 분석 파이프라인 — 모두 ConfigMap에서 주입 (비밀 아닌 인프라 참조값)
 gb:
   analysis:
     source: production                                        # stage/prod는 production 계열 SQS 경유
     result-queue-arn: ${GB_ANALYSIS_RESULT_QUEUE_ARN}
-    request-queue-url: ${GB_ANALYSIS_REQUEST_QUEUE_URL}
     upload-bucket: ${GB_ANALYSIS_UPLOAD_BUCKET}
     upload-url-expires-seconds: ${GB_ANALYSIS_UPLOAD_URL_EXPIRES_SECONDS:600}
     aws-region: ${GB_ANALYSIS_AWS_REGION:ap-northeast-2}
-    consumer-enabled: true
+    # spring.cloud.aws.sqs.enabled와 반드시 같은 환경변수로 묶는다(base yaml 불변식) — 한쪽만 꺼지면
+    # 리스너 빈이 SqsAsyncClient 부재로 기동 실패한다.
+    consumer-enabled: ${GB_ANALYSIS_CONSUMER_ENABLED:true}
     consumer-queue-name: ${GB_ANALYSIS_CONSUMER_QUEUE_NAME}  # stage용 SQS 큐 이름
 
 # AI 챗봇 Lambda — CHATBOT_FUNCTION_URL (ConfigMap), stage에서 IAM 서명 활성
@@ -48,3 +54,7 @@ chatbot:
   aws-region: ${CHATBOT_AWS_REGION:ap-northeast-2}
   auth-enabled: true                                         # stage에서는 IAM 서명 사용
   request-timeout-seconds: 120
+  # 챗봇 페이로드 메타(ai-chatbot-mcp.md §환경 매핑 SSOT: stage→production/stage).
+  # 미지정 시 @Value 기본값(development/dev)이 실려 Lambda가 MCP 호출을 dev 인프라로 라우팅한다.
+  source: production
+  environment: stage

@@ -53,10 +53,14 @@ public class MemberDisplayResponse {
             nullable = true)
     private final String profileImageUrl;
 
+    @Schema(description = "프로필 아바타 색조 회전 각도(0~359°). 커뮤니티 작성자 아바타 색 표시용. 미설정 시 0",
+            example = "120")
+    private final int avatarHue;
+
     @Builder
     private MemberDisplayResponse(String publicId, String name, String nickname,
                                   String nationality, Boolean isVerified, String trustGrade,
-                                  String profileImageUrl) {
+                                  String profileImageUrl, int avatarHue) {
         this.publicId = publicId;
         this.name = name;
         this.nickname = nickname;
@@ -64,6 +68,7 @@ public class MemberDisplayResponse {
         this.isVerified = isVerified;
         this.trustGrade = trustGrade;
         this.profileImageUrl = profileImageUrl;
+        this.avatarHue = avatarHue;
     }
 
     public static MemberDisplayResponse from(Member member) {
@@ -76,6 +81,7 @@ public class MemberDisplayResponse {
                 .trustGrade(member.getTrustGrade().name())
                 // 이미지 도메인 미구현 — 항상 null. 컬럼/업로드 구현 시 member.getProfileImageUrl()로 교체.
                 .profileImageUrl(null)
+                .avatarHue(member.getAvatarHue())
                 .build();
     }
 }

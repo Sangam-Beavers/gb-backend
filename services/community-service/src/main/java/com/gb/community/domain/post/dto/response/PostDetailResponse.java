@@ -65,6 +65,10 @@ public class PostDetailResponse {
             allowableValues = {"NEWCOMER", "VERIFIED", "CONNECTED", "TRUSTED"}, example = "VERIFIED")
     private final String authorTrustGrade;
 
+    @Schema(description = "작성자 아바타 색조 회전 각도(0~359°). 마이페이지 '색깔 변경' 저장값. 미설정·폴백 시 0",
+            example = "120")
+    private final int authorAvatarHue;
+
     @Schema(description = "요청자가 작성자 본인인지 여부(수정·삭제 버튼 노출 판단용)", example = "false")
     private final Boolean isAuthor;
 
@@ -88,7 +92,7 @@ public class PostDetailResponse {
     private PostDetailResponse(String publicId, String category, String title, String content,
                               String language, String authorPublicId, String authorNickname,
                               String authorProfileImageUrl, boolean authorIsVerified,
-                              String authorTrustGrade, Boolean isAuthor,
+                              String authorTrustGrade, int authorAvatarHue, Boolean isAuthor,
                               Boolean isLiked, Integer likeCount, Integer commentCount, String createdAt,
                               String updatedAt) {
         this.publicId = publicId;
@@ -101,6 +105,7 @@ public class PostDetailResponse {
         this.authorProfileImageUrl = authorProfileImageUrl;
         this.authorIsVerified = authorIsVerified;
         this.authorTrustGrade = authorTrustGrade;
+        this.authorAvatarHue = authorAvatarHue;
         this.isAuthor = isAuthor;
         this.isLiked = isLiked;
         this.likeCount = likeCount;
@@ -129,6 +134,7 @@ public class PostDetailResponse {
                 .authorProfileImageUrl(author.profileImageUrl())
                 .authorIsVerified(author.isVerified())
                 .authorTrustGrade(author.trustGrade())
+                .authorAvatarHue(author.avatarHue())
                 .isAuthor(post.getUserPublicId().equals(requesterUserPublicId))
                 .isLiked(isLiked)
                 .likeCount(post.getLikeCount())

@@ -1,6 +1,8 @@
 package com.gb.member.domain.member.dto.request;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
@@ -30,4 +32,10 @@ public class ProfileUpdateRequest {
     @Schema(description = "자기소개(한 줄 소개). 선택값", nullable = true, example = "안녕하세요.")
     @Size(max = 200, message = "자기소개는 200자 이내여야 합니다")
     private String bio;
+
+    // 아바타 색조(hue) 회전 각도(0~359°). 선택값 — 미전송(null)이면 Service에서 기존 값을 유지한다.
+    @Schema(description = "프로필 아바타 색조 회전 각도(0~359°). 선택값", nullable = true, example = "120")
+    @Min(value = 0, message = "색조 값은 0 이상이어야 합니다")
+    @Max(value = 359, message = "색조 값은 359 이하여야 합니다")
+    private Integer avatarHue;
 }

@@ -52,13 +52,16 @@ public class ProfileResponse {
     @Schema(description = "프로필 사진 URL. 미설정 시 null", nullable = true)
     private final String profileImageUrl;
 
+    @Schema(description = "프로필 아바타 색조 회전 각도(0~359°). 미설정 시 0", example = "120")
+    private final int avatarHue;
+
     @Schema(description = "가입 일시(ISO 8601, UTC Z)", example = "2026-06-03T18:21:08Z")
     private final String createdAt;
 
     @Builder
     private ProfileResponse(String publicId, String email, String nickname, String nationality,
                             String language, String bio, Boolean isVerified, String trustGrade,
-                            String profileImageUrl, String createdAt) {
+                            String profileImageUrl, int avatarHue, String createdAt) {
         this.publicId = publicId;
         this.email = email;
         this.nickname = nickname;
@@ -68,6 +71,7 @@ public class ProfileResponse {
         this.isVerified = isVerified;
         this.trustGrade = trustGrade;
         this.profileImageUrl = profileImageUrl;
+        this.avatarHue = avatarHue;
         this.createdAt = createdAt;
     }
 
@@ -84,6 +88,7 @@ public class ProfileResponse {
                 .isVerified(member.isVerified())
                 .trustGrade(member.getTrustGrade().name())
                 .profileImageUrl(null)
+                .avatarHue(member.getAvatarHue())
                 .createdAt(toUtcZ(member.getCreatedAt()))
                 .build();
     }

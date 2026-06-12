@@ -14,9 +14,7 @@ import com.gb.document.domain.document.entity.ProcessingStatus;
 import com.gb.document.domain.document.repository.DocumentRepository;
 import com.gb.document.domain.document.repository.DocumentResultRepository;
 import com.gb.document.domain.document.service.DocumentSubmissionService;
-import com.gb.document.global.client.s3.S3ObjectClient;
 import com.gb.document.global.client.s3.S3PresignedUrlClient;
-import com.gb.document.global.client.sqs.AnalysisRequestPublisher;
 import com.gb.document.global.config.AnalysisProperties;
 import com.gb.document.global.exception.code.DocumentErrorCode;
 import java.time.Duration;
@@ -42,15 +40,13 @@ public class DocumentSubmissionServiceImpl implements DocumentSubmissionService 
     private final DocumentRepository documentRepository;
     private final DocumentResultRepository documentResultRepository;
     private final S3PresignedUrlClient s3PresignedUrlClient;
-    private final S3ObjectClient s3ObjectClient;
-    private final AnalysisRequestPublisher analysisRequestPublisher;
     private final AnalysisProperties analysisProperties;
 
     @Override
     @Transactional
     public SubmissionResponse submit(String userPublicId, SubmitRequest request) {
         String publicId = UUID.randomUUID().toString();
-        // 키를 발급 시점에 확정해 엔티티에 저장 — retry가 날짜로 재조립하면 다른 날 retry 시 키가 어긋난다.
+        // 발급 시점에 키를 확정해 엔티티에 저장 — 어떤 키로 업로드를 받았는지 기록(추적·디버깅).
         String s3Key = buildS3Key(publicId, request.fileName());
         Document document = Document.builder()
                 .publicId(publicId)
@@ -141,42 +137,6 @@ public class DocumentSubmissionServiceImpl implements DocumentSubmissionService 
         } catch (IllegalArgumentException e) {
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
-    }
-
-    /**
-     * 분석 재요청 — api-spec.md §5. <b>S3에 원본이 존재할 때만</b> 같은 키로 Lambda A를 재트리거한다.
-     * 원본 미존재(URL만 발급받고 미업로드 → sweep이 FAILED 처리)면 422(COMMON4221) — 이 건은 재시도
-     * 대상이 아니며, 사용자는 {@code POST /api/v1/documents}로 새로 제출한다.
-     */
-    @Override
-    @Transactional
-    public SubmissionResponse retry(String userPublicId, String publicId) {
-        Document document = loadOwned(userPublicId, publicId);
-        if (document.getStatus() != DocumentStatus.FAILED) {
-            throw new BusinessException(CommonErrorCode.UNPROCESSABLE_ENTITY);
-        }
-        String s3Key = resolveS3Key(document);
-        if (!s3ObjectClient.objectExists(s3Key)) {
-            // 원본 미존재 — 재트리거할 대상이 없다. 새 제출(POST /documents)로 유도.
-            throw new BusinessException(CommonErrorCode.UNPROCESSABLE_ENTITY);
-        }
-
-        document.markAnalyzing(); // updatedAt 갱신 → stale sweep 유예 시간 재시작
-        // S3 원본 재사용 — 최초 제출 때 사용한 동일 키로 Lambda A 재트리거.
-        analysisRequestPublisher.publishRetry(document.getPublicId(), userPublicId, s3Key);
-        return SubmissionResponse.forRetry(document);
-    }
-
-    /**
-     * 저장된 s3Key를 우선 사용하고, s3_key 컬럼 도입 이전 행(null)은 제출일(createdAt) 날짜로 복원한다.
-     * 제출 당시 {@link #buildS3Key}가 그날 날짜로 키를 만들었으므로 createdAt 날짜와 일치한다.
-     */
-    private String resolveS3Key(Document document) {
-        if (document.getS3Key() != null) {
-            return document.getS3Key();
-        }
-        String date = document.getCreatedAt().toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE);
-        return "original/%s/%s/%s".formatted(date, document.getPublicId(), document.getFileName());
     }
 
     /** publicId로 문서를 조회 + 소유자 검증. 없으면 404, 다른 소유자면 403. */

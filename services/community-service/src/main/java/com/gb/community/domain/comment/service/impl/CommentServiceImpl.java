@@ -93,7 +93,13 @@ public class CommentServiceImpl implements CommentService {
         // HTTP를 기다리지 않는다(10D community-1). NOT_SUPPORTED로 클래스 readOnly tx도 차단해 이 메서드
         // 전체가 무트랜잭션임을 명시한다(wallet TransferServiceImpl.execute와 동일 구조).
 
-        // 커뮤니티 활동 제한 회원 차단 — member-service HTTP 호출(fail-fast). DB 쓰기 전에 검증한다.
+        // 게시글 존재 확인 먼저 — 외부 HTTP 호출 전 fast-fail (없는 글에 댓글 금지, COMMUNITY4001).
+        // NOT_SUPPORTED라 트랜잭션 없이 호출되나, 읽기 단일 SELECT는 트랜잭션 불요.
+        // createCommentTx에서도 재검증하지만 ban 체크보다 먼저 실행해 불필요한 네트워크 비용 방지.
+        postRepository.findByPublicIdAndDeletedAtIsNull(postPublicId)
+                .orElseThrow(() -> new BusinessException(CommunityErrorCode.POST_NOT_FOUND));
+
+        // 커뮤니티 활동 제한 회원 차단 — 게시글 존재 확인 통과 후 member-service HTTP 호출.
         if (memberClient.isCommunityBanned(userPublicId)) {
             throw new BusinessException(CommunityErrorCode.COMMUNITY_BANNED);
         }

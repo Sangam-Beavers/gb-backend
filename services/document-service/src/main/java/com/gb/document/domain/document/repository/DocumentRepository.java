@@ -40,7 +40,7 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
 
     /**
      * 특정 상태로 기준 시각보다 오래 머문 문서를 찾는다 — 미업로드/결과 유실 건 FAILED 정리 스케줄러용
-     * ({@code StaleSubmissionSweeper}). updatedAt 기준이라 retry로 ANALYZING 복귀 시 유예가 다시 시작된다.
+     * ({@code StaleSubmissionSweeper}). updatedAt(상태가 마지막으로 바뀐 시점) 기준으로 임계를 잰다.
      */
     List<Document> findAllByStatusAndUpdatedAtBefore(DocumentStatus status, LocalDateTime threshold);
 

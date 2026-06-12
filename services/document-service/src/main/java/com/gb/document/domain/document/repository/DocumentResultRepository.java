@@ -16,7 +16,7 @@ public interface DocumentResultRepository extends JpaRepository<DocumentResult, 
 
     /**
      * Consumer 멱등성 처리용 — submission_id UNIQUE이라 같은 submission의 결과가 1건만 존재.
-     * 동일 메시지 재수신(at-least-once) 또는 retry 후 성공 시 UPDATE 분기 진입에 사용.
+     * 동일 메시지 재수신(at-least-once) 시 UPDATE 분기 진입에 사용.
      */
     Optional<DocumentResult> findBySubmission_Id(Long submissionId);
 

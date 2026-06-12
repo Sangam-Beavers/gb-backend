@@ -237,6 +237,17 @@
 | `ACCOUNT4006` | 403 | 인증되지 않은 계좌입니다. |
 | `ACCOUNT4007` | 422 | 충전 한도를 초과했습니다. |
 
+### 커뮤니티 (COMMUNITY)
+| code | HTTP | 의미 |
+| --- | --- | --- |
+| `COMMUNITY4001` | 404 | 존재하지 않는 게시글입니다. |
+| `COMMUNITY4002` | 404 | 존재하지 않는 댓글입니다. |
+| `COMMUNITY4003` | 400 | 지원하지 않는 언어입니다. (번역 화이트리스트 외) |
+| `COMMUNITY4004` | 400 | 본문이 너무 깁니다. (번역 비용 캡 초과) |
+| `COMMUNITY4005` | 403 | 커뮤니티 활동이 제한된 계정입니다. |
+| `COMMUNITY4006` | 409 | 이미 신고한 콘텐츠입니다. (중복 신고 — reporter+targetType+targetId 유니크 위반) |
+| `COMMUNITY4007` | 400 | 지원하지 않는 신고 사유입니다. (SPAM/ABUSE/FRAUD/SEXUAL/ETC 외 값) |
+
 ### 문서 (DOCUMENT)
 | code | HTTP | 의미 |
 | --- | --- | --- |
@@ -356,6 +367,10 @@ com.gb.common
 **인증은 OAuth2 Resource Server(검표원)로 구현됐다.** 외부 IdP(개발=Authentik, 운영/스테이징=Cognito)가 토큰을 발급하고, 각 서비스는 `common-security` 기반으로 토큰을 **검증만** 한다. `SecurityConfig`에서 `oauth2ResourceServer(jwt)` + 공개경로(`/swagger-ui/**`, `/v3/api-docs/**`, `/actuator/**`)만 permitAll, 나머지는 `authenticated()`. `issuer-uri`는 환경변수 `AUTH_ISSUER_URI`로 주입한다(env yml; 커밋되는 `application.yaml`엔 넣지 않음).
 
 본인 식별자(`userPublicId`)는 토큰 custom claim **`public_id`**(UUID)에서 추출한다. 토큰 `sub`↔`public_id` 매핑은 회원가입 시 IdP attribute(`attributes.public_id`)로 해결됨. 컨트롤러는 서비스별 `global/security`의 ArgumentResolver로 받는다.
+
+> **환경별 `public_id` claim 노출 경로(인프라 전제 — 백엔드 코드 밖):**
+> - **dev(Authentik)**: 가입 시 `attributes.public_id` 저장(백엔드) + Provider **Property Mapping**이 claim으로 노출. subject mode는 UUID 기반으로 설정해야 `authProviderId`↔`sub`가 일치한다(`RealIdpUserClient` 주석 참고).
+> - **stage/prod(Cognito)**: 백엔드(`CognitoIdpUserClient`)는 `custom:public_id` **attribute 저장까지만** 책임진다. claim 노출은 User Pool의 **Pre Token Generation Lambda** 소관(`custom:public_id` → `public_id`). **풀 요구사항 체크리스트**: ① 커스텀 attribute `custom:public_id` 정의(미정의 시 `AdminCreateUser` 자체가 실패 → 가입 전부 COMMON5000) ② Pre Token Generation Lambda 연결(미설정 시 토큰에 claim이 없어 **모든 `@CurrentUserPublicId` 엔드포인트가 AUTH4011**) ③ 환경 개통 시 가입→로그인→`GET /api/v1/members/me` 스모크로 claim 노출을 확인한다.
 
 ```java
 @CurrentUserPublicId String userPublicId   // = jwt.getClaimAsString("public_id")

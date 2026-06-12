@@ -1,6 +1,6 @@
 # stage 프로파일 — 모든 값은 환경변수로 주입 (실제 값 절대 기재 금지)
 # DB 접속 정보(host/port/dbname/user/pass)는 AWS Secrets Manager → ESO → k8s Secret 경유
-# Cognito issuer URI는 ConfigMap(gb-infra values-stage.yaml)에서 주입
+# Cognito issuer URI(AUTH_ISSUER_URI)는 Parameter Store(/sb/stage/member) → ESO → k8s Secret 경유
 spring:
   datasource:
     # DB_HOST / DB_PORT / DB_NAME 은 SM secret(sb/stage/wallet/db)에서 ESO가 주입
@@ -10,27 +10,39 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: validate        # stage/prod에서는 validate (update 금지 — 스키마는 Flyway/수동 관리)
+      ddl-auto: update        # stage 검증 한정(자동 스키마 생성). 실제값은 ConfigMap SPRING_JPA_HIBERNATE_DDL_AUTO(=values-stage ddlAuto)가 덮어씀. prod는 validate + 마이그레이션.
+    defer-datasource-initialization: true # banks 시드(data-dev.sql)를 JPA 테이블 생성 이후에 실행
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
         format_sql: false
     show-sql: false             # 운영 환경에서는 SQL 로그 끔
+  # banks 마스터 시드 — dev와 동일 파일(data-dev.sql)을 stage에서도 실행해 마스터 데이터를 정합화.
+  # ON DUPLICATE KEY UPDATE 멱등이라 재기동/멀티 레플리카에 안전. prod 전환 시 마이그레이션 도구로 대체.
+  sql:
+    init:
+      mode: always
+      data-locations: classpath:data-dev.sql
+      continue-on-error: true
+  kafka:
+    # 기본값(localhost:9092) silent fallback 차단 — env 누락 시 placeholder 미해석으로 기동 실패(fail-fast).
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
 
   data:
     redis:
-      # REDIS_HOST 는 ConfigMap, SPRING_DATA_REDIS_PASSWORD 는 SM secret(sb/stage/redis/auth)
+      # REDIS_HOST/PORT/PASSWORD/SSL 모두 SM secret(sb/stage/redis/auth) → ESO → k8s Secret
       host: ${REDIS_HOST}
       port: ${REDIS_PORT}
       password: ${SPRING_DATA_REDIS_PASSWORD}
       database: 0
-      timeout: 3s
+      ssl:
+        enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:true}  # SM: tls
 
   security:
     oauth2:
       resourceserver:
         jwt:
-          # AUTH_ISSUER_URI = Cognito issuer (ConfigMap에서 주입)
+          # AUTH_ISSUER_URI = Cognito issuer (Parameter Store /sb/stage/member → k8s Secret)
           issuer-uri: ${AUTH_ISSUER_URI}
 
 # 외부 Mock 은행 base URL — BANK_API_BASE_URL (ConfigMap)
@@ -42,3 +54,9 @@ bank:
 member:
   api:
     base-url: ${MEMBER_API_BASE_URL}
+
+# app-admin-service 수수료 정책 조회 — APP_ADMIN_API_BASE_URL (ConfigMap)
+# base yaml의 localhost:8086 기본값을 덮어 env 누락 시 기동 실패(fail-fast)로 드러나게 한다.
+app-admin:
+  api:
+    base-url: ${APP_ADMIN_API_BASE_URL}

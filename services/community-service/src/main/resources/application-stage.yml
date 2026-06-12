@@ -1,5 +1,6 @@
 # stage 프로파일 — 모든 값은 환경변수로 주입 (실제 값 절대 기재 금지)
-# DB: SM(sb/stage/community/db) → ESO → k8s Secret
+# DB:    SM(sb/stage/community/db)  → ESO → k8s Secret
+# Auth:  PS(/sb/stage/community/AUTH_ISSUER_URI) → ESO → k8s Secret
 spring:
   datasource:
     url: jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}?serverTimezone=UTC&characterEncoding=UTF-8
@@ -8,17 +9,24 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: validate
+      ddl-auto: update
     properties:
       hibernate:
         format_sql: false
     show-sql: false
 
+  # Redis 설정 없음 — community는 data-redis 의존성 자체가 제거됨(build.gradle 주석 참고).
+  # 조회수 Redis 카운터(database.md §7) 도입 시 의존성과 함께 dev/stage 설정을 같이 복원한다.
+
+  kafka:
+    # 기본값(localhost:9092) silent fallback 차단 — env 누락 시 placeholder 미해석으로 기동 실패(fail-fast).
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+
   security:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: ${AUTH_ISSUER_URI}
+          issuer-uri: ${AUTH_ISSUER_URI}  # PS: /sb/stage/community/AUTH_ISSUER_URI
 
 # member-service 내부 호출 — MEMBER_API_BASE_URL (ConfigMap)
 member:
