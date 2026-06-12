@@ -11,11 +11,22 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update        # stage 검증 한정(자동 스키마 생성). 실제값은 ConfigMap SPRING_JPA_HIBERNATE_DDL_AUTO(=values-stage ddlAuto)가 덮어씀. prod는 validate + 마이그레이션.
+    defer-datasource-initialization: true # banks 시드(data-dev.sql)를 JPA 테이블 생성 이후에 실행
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
         format_sql: false
     show-sql: false             # 운영 환경에서는 SQL 로그 끔
+  # banks 마스터 시드 — dev와 동일 파일(data-dev.sql)을 stage에서도 실행해 마스터 데이터를 정합화.
+  # ON DUPLICATE KEY UPDATE 멱등이라 재기동/멀티 레플리카에 안전. prod 전환 시 마이그레이션 도구로 대체.
+  sql:
+    init:
+      mode: always
+      data-locations: classpath:data-dev.sql
+      continue-on-error: true
+  kafka:
+    # 기본값(localhost:9092) silent fallback 차단 — env 누락 시 placeholder 미해석으로 기동 실패(fail-fast).
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
 
   data:
     redis:
@@ -43,3 +54,9 @@ bank:
 member:
   api:
     base-url: ${MEMBER_API_BASE_URL}
+
+# app-admin-service 수수료 정책 조회 — APP_ADMIN_API_BASE_URL (ConfigMap)
+# base yaml의 localhost:8086 기본값을 덮어 env 누락 시 기동 실패(fail-fast)로 드러나게 한다.
+app-admin:
+  api:
+    base-url: ${APP_ADMIN_API_BASE_URL}

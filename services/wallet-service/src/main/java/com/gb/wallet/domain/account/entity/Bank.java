@@ -17,7 +17,7 @@ import lombok.NoArgsConstructor;
  *
  * <p><b>BaseEntity 미상속 — 의도된 예외</b>. 사유:
  * <ul>
- *   <li>{@code banks}는 {@code data.sql}로 주입되는 정적 마스터 데이터라 변경 추적이 불필요하다.</li>
+ *   <li>{@code banks}는 {@code data-dev.sql}(dev·stage 공통 시드)로 주입되는 정적 마스터 데이터라 변경 추적이 불필요하다.</li>
  *   <li>{@code docs/database.md} §3 {@code banks} 스키마에 {@code created_at/updated_at} 컬럼이 정의돼 있지 않다.</li>
  * </ul>
  * 다른 엔티티({@code bank_accounts}, {@code wallets} 등)는 {@link com.gb.wallet.global.common.entity.BaseEntity}
