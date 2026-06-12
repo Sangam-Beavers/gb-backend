@@ -9,7 +9,8 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: validate
+      # stage 검증 한정 — 자동 스키마 생성(테이블 미생성 상태에서도 기동). prod는 validate + 마이그레이션(Flyway/Liquibase)으로 전환.
+      ddl-auto: update
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
