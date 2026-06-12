@@ -53,6 +53,7 @@ import com.gb.wallet.global.exception.code.TransferErrorCode;
 import com.gb.wallet.global.config.TransferRateLimitProperties;
 import com.gb.wallet.global.event.MilestoneAchieved;
 import com.gb.wallet.global.event.MilestoneType;
+import com.gb.wallet.global.event.TransferStampEarned;
 import com.gb.wallet.global.exception.code.WalletErrorCode;
 import com.gb.wallet.global.redis.DistributedLockHelper;
 import com.gb.wallet.global.redis.IdempotencyCacheHelper;
@@ -941,6 +942,11 @@ public class TransferServiceImpl implements TransferService {
                         senderWallet.getUserPublicId(), MilestoneType.TRANSACTION_FIVE_COMPLETED));
             }
 
+            // (10) #215 — 송금 적립 스탬프 이벤트(송금 전용 — 충전 제외). 마일스톤(신뢰등급)과 별개 이벤트로,
+            //      커밋 후 TransferStampEventListener가 받아 적립 + 쿠폰 발급(멱등)을 수행한다.
+            eventPublisher.publishEvent(new TransferStampEarned(
+                    senderWallet.getUserPublicId(), transaction.getPublicId(), transferType));
+
             return TransferExecuteResponse.from(transaction);
         }
     }
@@ -1156,6 +1162,11 @@ public class TransferServiceImpl implements TransferService {
             eventPublisher.publishEvent(new MilestoneAchieved(
                     senderWallet.getUserPublicId(), MilestoneType.TRANSACTION_FIVE_COMPLETED));
         }
+
+        // (13) #215 — 송금 적립 스탬프 이벤트(현금화도 적립 대상). 커밋 후 TransferStampEventListener가
+        //      받아 적립 + 쿠폰 발급(멱등). 마일스톤(신뢰등급)과 별개 이벤트.
+        eventPublisher.publishEvent(new TransferStampEarned(
+                senderWallet.getUserPublicId(), transaction.getPublicId(), TransactionType.REMITTANCE));
 
         return TransferExecuteResponse.from(transaction);
     }
