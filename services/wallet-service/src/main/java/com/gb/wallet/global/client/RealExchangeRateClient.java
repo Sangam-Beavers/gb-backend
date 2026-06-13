@@ -6,6 +6,7 @@ import java.math.RoundingMode;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBucket;
 import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.StringCodec;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Profile;
@@ -82,7 +83,12 @@ public class RealExchangeRateClient implements ExchangeRateClient {
      * 직전 환율은 등락률 0).
      */
     private BigDecimal readKrwRate(String key) {
-        RBucket<String> bucket = redissonClient.getBucket(key);
+        // exchange-updater(Python) / mcp-exchange 는 값을 순수 UTF-8 문자열("18.5")로 쓴다.
+        // Redisson 의 기본 코덱은 Kryo5Codec 이라 그냥 getBucket(key) 로 읽으면 평문 문자열을
+        // Kryo 객체로 역직렬화하려다 KryoException("unregistered class ID")으로 깨진다(→ 500).
+        // 전역 코덱을 바꾸면 송금 멱등성/락 등 다른 Redisson 사용처가 영향받으므로, 환율 버킷에만
+        // per-bucket StringCodec 을 지정해 평문 문자열 그대로 읽는다(writer 측 포맷과 일치).
+        RBucket<String> bucket = redissonClient.getBucket(key, StringCodec.INSTANCE);
         String value = bucket.get();
 
         if (value == null) {
