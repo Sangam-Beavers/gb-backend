@@ -19,11 +19,12 @@ dependencies {
     // 2.8.15~2.8.17은 swagger-initializer.js 경로 패턴 회귀 버그로 기동 실패 → 2.8.14가 2.8 계열 마지막 정상 버전.
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.14'
 
-    // 번역 Lambda(계정 B) 호출용 AWS SigV4 서명 — Lambda Function URL의 AuthType: AWS_IAM 통과.
-    // (BedrockTranslationClient는 stage·prod에서만 활성화되지만, dev에서도 클래스패스 컴파일은 필요하므로
-    // implementation으로 둔다. Mock 프로파일에서는 빈이 생성되지 않아 자격증명 조회도 일어나지 않는다.)
-    implementation 'software.amazon.awssdk:auth:2.28.16'
-    implementation 'software.amazon.awssdk:http-client-spi:2.28.16'
+    // 번역 Lambda(계정 B) 호출 — 표준 Lambda Invoke API(lambda:InvokeFunction).
+    // EKS에서 Function URL(.on.aws) 경로가 인가 거부되는 이슈로 SigV4 직접 서명(auth/http-client-spi) 대신
+    // LambdaClient.invoke()를 쓴다. apache-client = SDK 동기 HTTP 구현체(미지정 시 런타임 No HTTP impl 오류).
+    // (BedrockTranslationClient는 translation.client=bedrock에서만 활성화되지만, dev 컴파일 위해 implementation.)
+    implementation 'software.amazon.awssdk:lambda:2.28.16'
+    implementation 'software.amazon.awssdk:apache-client:2.28.16'
 
     runtimeOnly 'com.mysql:mysql-connector-j'
 

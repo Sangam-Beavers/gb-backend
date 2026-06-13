@@ -40,6 +40,11 @@ dependencies {
     // 조용히 건너뛰고 IMDS(노드 롤)로 폴백한다. stage/prod에서 SA IRSA로 SQS/S3/Lambda를 호출하려면 필수.
     // (Spring Cloud AWS 기본 자격증명 체인 + ChatbotLambdaClientImpl의 DefaultCredentialsProvider 둘 다 해당)
     implementation 'software.amazon.awssdk:sts'
+    // 챗봇 Lambda 호출 — 표준 Lambda Invoke API(EKS에서 Function URL .on.aws 경로 인가 거부 이슈로 전환).
+    //   - 스트리밍: LambdaAsyncClient.invokeWithResponseStream → netty-nio-client(비동기 HTTP 구현체) 필수.
+    //   - 이력(GET /history): LambdaClient.invoke(동기) — 동기 HTTP 구현체는 spring-cloud-aws가 이미 제공.
+    implementation 'software.amazon.awssdk:lambda'
+    implementation 'software.amazon.awssdk:netty-nio-client'
 
     runtimeOnly 'com.mysql:mysql-connector-j'
 

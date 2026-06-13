@@ -23,12 +23,12 @@ gb:
 server:
   port: 8082
 
-# 계정 B 번역 Lambda(Bedrock Claude Haiku) — stage·prod에서만 실제 호출.
+# 계정 B 번역 Lambda(gb-community-translator) — 표준 Lambda Invoke API로 호출(stage·prod).
 # dev/test는 MockTranslationClient가 활성화돼 본 설정을 읽지 않는다(빈 값이어도 무방).
 translation:
   lambda:
-    # 환경별 yml(application-{stage|prod}.yml) 또는 환경변수 TRANSLATION_LAMBDA_URL로 주입.
-    url: ${TRANSLATION_LAMBDA_URL:}
+    # 함수명만 있으면 됨(URL 불필요). 환경변수 TRANSLATION_LAMBDA_FUNCTION_NAME로 덮어쓰기 가능.
+    function-name: ${TRANSLATION_LAMBDA_FUNCTION_NAME:gb-community-translator}
   aws:
     region: ${TRANSLATION_AWS_REGION:ap-northeast-2}
 

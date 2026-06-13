@@ -1,99 +1,123 @@
 package com.gb.document.domain.chat.service.impl;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gb.document.domain.chat.dto.request.ChatbotPayload;
 import com.gb.document.domain.chat.dto.response.ChatHistoryResponse;
 import com.gb.document.domain.chat.service.ChatStreamListener;
 import com.gb.document.domain.chat.service.ChatbotLambdaClient;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
-import software.amazon.awssdk.auth.signer.Aws4Signer;
-import software.amazon.awssdk.auth.signer.params.Aws4SignerParams;
-import software.amazon.awssdk.http.ContentStreamProvider;
-import software.amazon.awssdk.http.SdkHttpFullRequest;
-import software.amazon.awssdk.http.SdkHttpMethod;
+import software.amazon.awssdk.core.SdkBytes;
+import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient;
 import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.lambda.LambdaAsyncClient;
+import software.amazon.awssdk.services.lambda.LambdaClient;
+import software.amazon.awssdk.services.lambda.model.InvokeRequest;
+import software.amazon.awssdk.services.lambda.model.InvokeResponse;
+import software.amazon.awssdk.services.lambda.model.InvokeResponseStreamUpdate;
+import software.amazon.awssdk.services.lambda.model.InvokeWithResponseStreamCompleteEvent;
+import software.amazon.awssdk.services.lambda.model.InvokeWithResponseStreamRequest;
+import software.amazon.awssdk.services.lambda.model.InvokeWithResponseStreamResponseHandler;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
-import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 /**
- * {@link ChatbotLambdaClient} 구현.
+ * {@link ChatbotLambdaClient} 구현 — 챗봇 Lambda(계정 B, gb-chatbot)를 <b>표준 Lambda Invoke API</b>로 호출한다.
  *
- * <p>흐름:
+ * <p><b>왜 Function URL이 아니라 Invoke API인가:</b> EKS 파드에서 Lambda Function URL(`*.lambda-url...on.aws`)을
+ * IAM(SigV4)으로 호출하면 인가가 거부(403)되는 환경 이슈가 확인됐다(2026-06-13 인시던트). 같은 역할·같은 파드로
+ * 표준 Lambda Invoke API는 정상이라 전송을 전환한다. <b>Lambda 코드(FastAPI + Lambda Web Adapter)는 무수정</b> —
+ * 핸들러가 기대하는 Function URL v2 이벤트 형태로 페이로드를 감싸 invoke하면, LWA가 그대로 HTTP로 해석한다
+ * (파드에서 invokeWithResponseStream으로 토큰 스트리밍 동작 검증 완료).
+ *
+ * <p>흐름(스트리밍):
  * <ol>
- *   <li>페이로드를 JSON 직렬화(전역 SNAKE_CASE 적용)</li>
- *   <li>localhost가 아니면 AWS SDK v2 {@link Aws4Signer}로 SigV4 서명 (signing name = "lambda")</li>
- *   <li>Java 17 {@link HttpClient}로 POST, {@code BodyHandlers.ofInputStream()}으로 스트림 수신</li>
- *   <li>SSE 프레임을 라인 단위로 파싱해 {@code event:token} → onToken, {@code event:done} → onDone</li>
+ *   <li>{@link ChatbotPayload}를 JSON 직렬화(전역 SNAKE_CASE) → Function URL v2 이벤트의 {@code body}로 래핑</li>
+ *   <li>{@link LambdaAsyncClient#invokeWithResponseStream}로 호출(IAM = lambda:InvokeFunction). 응답 청크를
+ *       블로킹 {@link InputStream}으로 브리지</li>
+ *   <li>스트림 맨 앞 <b>prelude</b>({@code {"statusCode":200,...}} + null 8바이트 구분자)를 스킵 —
+ *       RESPONSE_STREAM(LWA) 응답이 직접 invoke로 올 때만 붙는 메타 헤더</li>
+ *   <li>이후 바이트를 기존 {@link #parseSseStream} 그대로 흘려 {@code event:token} → onToken,
+ *       {@code event:done} → onDone, {@code event:error} → onError</li>
  * </ol>
+ * 이력 조회는 {@link LambdaClient#invoke}(동기)로 GET /history 이벤트를 보내 {@code {statusCode, body}} 봉투에서 파싱.
  *
- * <p>R1 PoC 단계에서는 더미 Lambda(poc/r1-stream/index.mjs) 또는 로컬 모킹 서버
- * (poc/r1-stream/local-mock-server.py)와 연동해 토큰 점진 표시 동작만 검증한다.
+ * <p>자격 증명은 {@link DefaultCredentialsProvider} — EKS Pod의 Pod Identity/IRSA 자격을 자동 사용.
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class ChatbotLambdaClientImpl implements ChatbotLambdaClient {
 
     private final ObjectMapper objectMapper;
+    private final String functionName;
+    private final LambdaAsyncClient lambdaAsyncClient;
+    private final LambdaClient lambdaClient;
 
-    @Value("${chatbot.function-url}")
-    private String functionUrl;
-
-    @Value("${chatbot.aws-region:ap-northeast-2}")
-    private String awsRegion;
-
-    /** false로 두면 localhost 여부와 무관하게 서명 스킵. 운영에선 반드시 true. */
-    @Value("${chatbot.auth-enabled:true}")
-    private boolean authEnabled;
-
-    /** HTTP 요청 전체 타임아웃(스트림 종료까지). 챗봇 답변 길이를 감안해 넉넉히. */
-    @Value("${chatbot.request-timeout-seconds:120}")
-    private long requestTimeoutSeconds;
-
-    // Spring 빈으로 등록되는 동안 재사용. HttpClient는 thread-safe.
-    // ⚠️ HTTP/1.1 강제 — Java HttpClient 11+ 기본은 HTTP/2이고, HTTP/2에서는 Host 헤더가 :authority
-    // 의사헤더로 대체된다. AWS SigV4는 SignedHeaders=host;... 으로 서명했는데 실제 와이어에
-    // Host 헤더가 없으면 검증이 깨질 수 있다 (특히 일부 Lambda Function URL 경로). HTTP/1.1을 강제하면
-    // Host 헤더가 그대로 박혀 SDK가 서명에 쓴 host와 정확히 일치한다.
-    private final HttpClient http = HttpClient.newBuilder()
-            .version(HttpClient.Version.HTTP_1_1)
-            .connectTimeout(Duration.ofSeconds(10))
-            .build();
+    public ChatbotLambdaClientImpl(
+            ObjectMapper objectMapper,
+            @Value("${chatbot.function-name:gb-chatbot}") String functionName,
+            @Value("${chatbot.aws-region:ap-northeast-2}") String awsRegion,
+            @Value("${chatbot.request-timeout-seconds:120}") long requestTimeoutSeconds) {
+        this.objectMapper = objectMapper;
+        this.functionName = functionName;
+        Region region = Region.of(awsRegion);
+        // 스트리밍은 비동기 HTTP 구현체(netty) 필수. 챗봇 답변 길이를 감안해 read/write 타임아웃을 넉넉히.
+        this.lambdaAsyncClient = LambdaAsyncClient.builder()
+                .region(region)
+                .credentialsProvider(DefaultCredentialsProvider.create())
+                .httpClient(NettyNioAsyncHttpClient.builder()
+                        .readTimeout(Duration.ofSeconds(requestTimeoutSeconds))
+                        .writeTimeout(Duration.ofSeconds(requestTimeoutSeconds))
+                        .build())
+                .build();
+        // 이력(GET /history)은 동기 — 동기 HTTP 구현체는 spring-cloud-aws가 클래스패스에 제공.
+        this.lambdaClient = LambdaClient.builder()
+                .region(region)
+                .credentialsProvider(DefaultCredentialsProvider.create())
+                .build();
+    }
 
     @Override
     public void streamChat(ChatbotPayload payload, ChatStreamListener listener) {
+        ResponseStreamBridge bridge = new ResponseStreamBridge();
         try {
-            byte[] body = objectMapper.writeValueAsBytes(payload);
-            HttpRequest request = buildRequest(body);
+            byte[] event = wrapFunctionUrlEvent("POST", "/", null, objectMapper.writeValueAsBytes(payload));
+            InvokeWithResponseStreamRequest request = InvokeWithResponseStreamRequest.builder()
+                    .functionName(functionName)
+                    .payload(SdkBytes.fromByteArray(event))
+                    .build();
 
-            HttpResponse<InputStream> response = http.send(
-                    request, HttpResponse.BodyHandlers.ofInputStream());
+            InvokeWithResponseStreamResponseHandler handler = InvokeWithResponseStreamResponseHandler.builder()
+                    .subscriber(streamEvent -> {
+                        // 타입은 subscriber(Consumer<T>)의 T로 추론된다(베이스 타입을 직접 명명하지 않음).
+                        if (streamEvent instanceof InvokeResponseStreamUpdate update) {
+                            bridge.offer(update.payload().asByteArray());
+                        } else if (streamEvent instanceof InvokeWithResponseStreamCompleteEvent) {
+                            bridge.complete();
+                        }
+                    })
+                    .onError(bridge::fail)
+                    .build();
 
-            if (response.statusCode() / 100 != 2) {
-                String errMsg = readErrorBody(response.body());
-                listener.onError(new IllegalStateException(
-                        "Chatbot Lambda HTTP " + response.statusCode() + " — " + errMsg));
-                return;
-            }
+            // 비동기 호출 시작 — 청크는 위 subscriber가 bridge로 흘린다(완료/에러도 bridge가 read 시점에 전달).
+            lambdaAsyncClient.invokeWithResponseStream(request, handler);
 
-            parseSseStream(response.body(), listener);
+            InputStream in = bridge.inputStream();
+            skipPrelude(in);                  // {statusCode,...} + null*8 제거 → 스트림이 event: 로 시작
+            parseSseStream(in, listener);     // 기존 SSE 파서 그대로 재사용
         } catch (Exception e) {
             log.warn("streamChat failed", e);
             listener.onError(e);
@@ -104,15 +128,31 @@ public class ChatbotLambdaClientImpl implements ChatbotLambdaClient {
     public ChatHistoryResponse fetchHistory(String userPublicId, String documentPublicId,
                                             int limit, String cursor) {
         try {
-            HttpRequest request = buildHistoryRequest(userPublicId, documentPublicId, limit, cursor);
-            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() / 100 != 2) {
-                throw new IllegalStateException(
-                        "Chatbot Lambda history HTTP " + response.statusCode()
-                                + " — " + truncateForLog(response.body()));
+            StringBuilder qs = new StringBuilder()
+                    .append("user_public_id=").append(enc(userPublicId))
+                    .append("&document_public_id=").append(enc(documentPublicId))
+                    .append("&limit=").append(limit);
+            if (cursor != null && !cursor.isBlank()) {
+                qs.append("&cursor=").append(enc(cursor));
             }
-            return objectMapper.readValue(response.body(), ChatHistoryResponse.class);
+            byte[] event = wrapFunctionUrlEvent("GET", "/history", qs.toString(), null);
+
+            InvokeResponse response = lambdaClient.invoke(InvokeRequest.builder()
+                    .functionName(functionName)
+                    .payload(SdkBytes.fromByteArray(event))
+                    .build());
+            if (response.functionError() != null) {
+                throw new IllegalStateException("Chatbot Lambda history functionError: " + response.functionError());
+            }
+
+            JsonNode root = objectMapper.readTree(response.payload().asUtf8String());
+            int statusCode = root.path("statusCode").asInt(0);
+            String body = root.path("body").isMissingNode() ? null : root.path("body").asText(null);
+            if (statusCode != 200 || body == null) {
+                throw new IllegalStateException(
+                        "Chatbot Lambda history HTTP " + statusCode + " — " + truncateForLog(body));
+            }
+            return objectMapper.readValue(body, ChatHistoryResponse.class);
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
@@ -120,54 +160,38 @@ public class ChatbotLambdaClientImpl implements ChatbotLambdaClient {
         }
     }
 
-    /* ─────────── 요청 빌드 + 서명 ─────────── */
+    /* ─────────── invoke 페이로드(Function URL v2 이벤트) 래핑 ─────────── */
 
     /**
-     * {@code GET /history} 요청 빌드. 쿼리 인코딩 불일치로 인한 SignatureDoesNotMatch를 피하려고
-     * 쿼리 조립을 SDK에 맡긴다 — {@link SdkHttpFullRequest}에 raw 쿼리 파라미터를 넣고, 서명 후
-     * {@code signed.getUri()}(SDK가 canonical 인코딩한 URI)를 실제 요청 URI로 그대로 사용한다.
-     * 서명이 본 쿼리 문자열과 와이어에 나가는 쿼리 문자열이 항상 동일해진다.
+     * 백엔드 요청을 Function URL v2 이벤트로 감싼다. Lambda(LWA/FastAPI)가 이를 HTTP 요청으로 해석하므로
+     * <b>Lambda 코드 무수정</b>으로 직접 invoke와 호환된다.
+     *
+     * @param method         GET/POST
+     * @param path           rawPath (예: "/", "/history")
+     * @param rawQueryString null 가능 (GET 쿼리)
+     * @param body           null 가능 (POST 본문 바이트)
      */
-    private HttpRequest buildHistoryRequest(String userPublicId, String documentPublicId,
-                                            int limit, String cursor) {
-        URI base = URI.create(functionUrl.endsWith("/") ? functionUrl + "history" : functionUrl + "/history");
-        boolean local = isLocalHost(base.getHost());
+    private byte[] wrapFunctionUrlEvent(String method, String path, String rawQueryString, byte[] body)
+            throws IOException {
+        Map<String, Object> http = new LinkedHashMap<>();
+        http.put("method", method);
+        http.put("path", path);
 
-        SdkHttpFullRequest.Builder unsignedBuilder = SdkHttpFullRequest.builder()
-                .method(SdkHttpMethod.GET)
-                .uri(base)
-                // GET은 body가 없으므로 빈 페이로드 hash를 명시(POST 경로와 동일한 이유 — applySigV4 주석 참고)
-                .putHeader("x-amz-content-sha256", sha256Hex(new byte[0]))
-                .putRawQueryParameter("user_public_id", userPublicId)
-                .putRawQueryParameter("document_public_id", documentPublicId)
-                .putRawQueryParameter("limit", String.valueOf(limit));
-        if (cursor != null && !cursor.isBlank()) {
-            unsignedBuilder.putRawQueryParameter("cursor", cursor);
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("version", "2.0");
+        event.put("rawPath", path);
+        event.put("rawQueryString", rawQueryString != null ? rawQueryString : "");
+        event.put("requestContext", Map.of("http", http));
+        event.put("headers", Map.of("content-type", "application/json"));
+        if (body != null) {
+            event.put("body", new String(body, StandardCharsets.UTF_8));
+            event.put("isBase64Encoded", false);
         }
-        SdkHttpFullRequest unsigned = unsignedBuilder.build();
+        return objectMapper.writeValueAsBytes(event);
+    }
 
-        SdkHttpFullRequest effective = unsigned;
-        if (authEnabled && !local) {
-            Aws4SignerParams params = Aws4SignerParams.builder()
-                    .awsCredentials(DefaultCredentialsProvider.create().resolveCredentials())
-                    .signingName("lambda")
-                    .signingRegion(Region.of(awsRegion))
-                    .build();
-            effective = Aws4Signer.create().sign(unsigned, params);
-        } else {
-            log.debug("history signing skipped (host={}, authEnabled={})", base.getHost(), authEnabled);
-        }
-
-        HttpRequest.Builder builder = HttpRequest.newBuilder(effective.getUri())
-                .timeout(Duration.ofSeconds(requestTimeoutSeconds))
-                .GET();
-        for (Map.Entry<String, List<String>> entry : effective.headers().entrySet()) {
-            if (isRestrictedByJavaHttpClient(entry.getKey())) continue;
-            for (String value : entry.getValue()) {
-                builder.header(entry.getKey(), value);
-            }
-        }
-        return builder.build();
+    private static String enc(String v) {
+        return URLEncoder.encode(v == null ? "" : v, StandardCharsets.UTF_8);
     }
 
     private static String truncateForLog(String body) {
@@ -175,101 +199,103 @@ public class ChatbotLambdaClientImpl implements ChatbotLambdaClient {
         return body.length() > 2000 ? body.substring(0, 2000) : body;
     }
 
-    private HttpRequest buildRequest(byte[] body) {
-        URI uri = URI.create(functionUrl);
-        boolean local = isLocalHost(uri.getHost());
+    /* ─────────── 응답 스트림 브리지 (비동기 청크 → 블로킹 InputStream) ─────────── */
 
-        HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
-                .timeout(Duration.ofSeconds(requestTimeoutSeconds))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+    /** EOF 신호용 센티넬(빈 배열, 참조 동등으로 구분). */
+    private static final byte[] SENTINEL = new byte[0];
 
-        if (!authEnabled || local) {
-            // 로컬 모킹: 서명 없이 전송 (poc/r1-stream/local-mock-server.py 검증용).
-            log.debug("Function URL signing skipped (host={}, authEnabled={})",
-                    uri.getHost(), authEnabled);
-            return builder.build();
+    /**
+     * invokeWithResponseStream의 비동기 청크를 블로킹 {@link InputStream}으로 잇는 브리지.
+     * SDK 콜백 스레드가 {@link #offer}/{@link #complete}/{@link #fail}로 채우고,
+     * 호출 스레드가 {@link #inputStream}을 읽는다. 전송 에러는 read 시점에 {@link IOException}으로 표면화된다.
+     */
+    private static final class ResponseStreamBridge {
+        private final BlockingQueue<byte[]> queue = new LinkedBlockingQueue<>();
+        private volatile Throwable error;
+
+        void offer(byte[] bytes) {
+            if (bytes != null && bytes.length > 0) {
+                queue.add(bytes);
+            }
         }
 
-        applySigV4(builder, uri, body);
-        return builder.build();
+        void complete() {
+            queue.add(SENTINEL);
+        }
+
+        void fail(Throwable t) {
+            this.error = t;
+            queue.add(SENTINEL);
+        }
+
+        InputStream inputStream() {
+            return new InputStream() {
+                private byte[] cur;
+                private int pos;
+                private boolean done;
+
+                @Override
+                public int read() throws IOException {
+                    if (!ensure()) return -1;
+                    return cur[pos++] & 0xff;
+                }
+
+                @Override
+                public int read(byte[] b, int off, int len) throws IOException {
+                    if (!ensure()) return -1;
+                    int n = Math.min(len, cur.length - pos);
+                    System.arraycopy(cur, pos, b, off, n);
+                    pos += n;
+                    return n;
+                }
+
+                private boolean ensure() throws IOException {
+                    while (cur == null || pos >= cur.length) {
+                        if (done) return false;
+                        byte[] next;
+                        try {
+                            next = queue.take();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new IOException("interrupted while reading chatbot stream", e);
+                        }
+                        if (next == SENTINEL) {
+                            done = true;
+                            if (error != null) {
+                                throw new IOException("chatbot stream transport error", error);
+                            }
+                            return false;
+                        }
+                        cur = next;
+                        pos = 0;
+                    }
+                    return true;
+                }
+            };
+        }
     }
 
     /**
-     * AWS SDK v2 Aws4Signer로 SigV4 서명 → 결과 헤더를 HttpRequest에 복사.
-     *
-     * <p>주의:
-     * <ul>
-     *   <li>signing name은 {@code "lambda"} (Function URL은 Lambda 서비스의 자원)</li>
-     *   <li>Java {@link HttpClient}는 일부 헤더(Host, Content-Length 등) 직접 설정을 금지하므로 필터링</li>
-     *   <li>Host는 URI에서 자동 설정되며 SigV4가 서명한 값과 동일하므로 문제 없음</li>
-     * </ul>
+     * Lambda Response Streaming(LWA)을 직접 invokeWithResponseStream으로 받을 때 본문 앞에 붙는 prelude를 스킵.
+     * 형식: {@code {"statusCode":200,"headers":{...},"cookies":[]}} + null 바이트 8개 구분자 + 실제 본문(SSE).
+     * SSE 본문에는 null 바이트가 없으므로 "최초의 연속 null 8바이트"까지 읽어 버리면 스트림이 {@code event:} 로 시작한다.
      */
-    private void applySigV4(HttpRequest.Builder builder, URI uri, byte[] body) {
-        // ⚠️ payload SHA256을 우리가 직접 박는다.
-        // 이유: SDK v2 Aws4Signer + contentStreamProvider 조합은 일부 경로에서 payload hash를
-        // 빈 페이로드(또는 UNSIGNED-PAYLOAD)로 계산해 서명한다. 그러면 AWS가 실제 body로 계산한
-        // hash와 불일치 → 403 SignatureDoesNotMatch. x-amz-content-sha256를 명시 박으면 SDK는
-        // 그 값을 그대로 SignedHeaders에 포함시켜 서명하므로, AWS가 받는 body와 hash가 일치한다.
-        String payloadHash = sha256Hex(body);
-
-        // ContentStreamProvider는 람다 폼이 모든 SDK v2 버전 호환(static factory 부재 시에도 안전).
-        SdkHttpFullRequest unsigned = SdkHttpFullRequest.builder()
-                .method(SdkHttpMethod.POST)
-                .uri(uri)
-                .putHeader("Content-Type", "application/json")
-                .putHeader("x-amz-content-sha256", payloadHash)
-                .contentStreamProvider(() -> new ByteArrayInputStream(body))
-                .build();
-
-        Aws4SignerParams params = Aws4SignerParams.builder()
-                .awsCredentials(DefaultCredentialsProvider.create().resolveCredentials())
-                .signingName("lambda")
-                .signingRegion(Region.of(awsRegion))
-                .build();
-
-        SdkHttpFullRequest signed = Aws4Signer.create().sign(unsigned, params);
-        Map<String, List<String>> headers = signed.headers();
-        for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
-            String name = entry.getKey();
-            if (isRestrictedByJavaHttpClient(name)) continue;
-            for (String value : entry.getValue()) {
-                builder.header(name, value);
+    private static void skipPrelude(InputStream in) throws IOException {
+        int nullRun = 0;
+        int b;
+        while ((b = in.read()) != -1) {
+            if (b == 0) {
+                if (++nullRun == 8) {
+                    return;
+                }
+            } else {
+                nullRun = 0;
             }
         }
+        // 구분자 없이 EOF — 본문 없음(정상 응답이면 발생하지 않음). parseSseStream이 onDone("")로 마무리.
     }
 
-    private static boolean isLocalHost(String host) {
-        if (host == null) return false;
-        return "localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host);
-    }
-
-    /** body의 hex 인코딩된 SHA-256. SigV4 payload hash 계산용. */
-    private static String sha256Hex(byte[] data) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] digest = md.digest(data);
-            StringBuilder sb = new StringBuilder(digest.length * 2);
-            for (byte b : digest) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 algorithm not available", e);
-        }
-    }
-
-    /** Java HttpClient가 setHeader/header()로 설정을 금지하는 헤더 목록. */
-    private static boolean isRestrictedByJavaHttpClient(String name) {
-        String lower = name.toLowerCase();
-        return lower.equals("host")
-                || lower.equals("content-length")
-                || lower.equals("connection")
-                || lower.equals("expect")
-                || lower.equals("upgrade");
-    }
-
-    /* ─────────── SSE 파서 ─────────── */
+    /* ─────────── SSE 파서 (원본 유지) ─────────── */
 
     /**
      * SSE 스펙 단순 구현:
@@ -337,21 +363,6 @@ public class ChatbotLambdaClientImpl implements ChatbotLambdaClient {
             return objectMapper.readTree(dataJson).path("session_id").asText("");
         } catch (Exception e) {
             return "";
-        }
-    }
-
-    private String readErrorBody(InputStream is) {
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(is, StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            int max = 2000;
-            while ((line = reader.readLine()) != null && sb.length() < max) {
-                sb.append(line).append('\n');
-            }
-            return sb.toString().trim();
-        } catch (Exception e) {
-            return "(no body)";
         }
     }
 }
