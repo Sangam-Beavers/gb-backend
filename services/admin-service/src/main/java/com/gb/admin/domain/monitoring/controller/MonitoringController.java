@@ -1,6 +1,7 @@
 package com.gb.admin.domain.monitoring.controller;
 
 import com.gb.admin.domain.monitoring.dto.response.AuthFailuresResponse;
+import com.gb.admin.domain.monitoring.dto.response.BusinessAnalyticsResponse;
 import com.gb.admin.domain.monitoring.dto.response.ConfigResponse;
 import com.gb.admin.domain.monitoring.dto.response.DomainSloResponse;
 import com.gb.admin.domain.monitoring.dto.response.EmbedsResponse;
@@ -61,5 +62,12 @@ public class MonitoringController {
     @GetMapping("/embeds")
     public ApiResponse<EmbedsResponse> embeds() {
         return ApiResponse.success(monitoringService.embeds());
+    }
+
+    @Operation(summary = "비즈니스 분석",
+            description = "사용자 인구통계(성별/연령대/국적) + 매출/사용 지표. member·wallet stats 조합(fail-open).")
+    @GetMapping("/business-analytics")
+    public ApiResponse<BusinessAnalyticsResponse> businessAnalytics() {
+        return ApiResponse.success(monitoringService.businessAnalytics());
     }
 }

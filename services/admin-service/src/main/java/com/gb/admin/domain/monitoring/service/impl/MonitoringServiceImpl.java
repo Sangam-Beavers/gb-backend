@@ -1,6 +1,10 @@
 package com.gb.admin.domain.monitoring.service.impl;
 
 import com.gb.admin.domain.monitoring.dto.response.AuthFailuresResponse;
+import com.gb.admin.domain.monitoring.dto.response.BusinessAnalyticsResponse;
+import com.gb.admin.domain.monitoring.dto.response.BusinessAnalyticsResponse.Bucket;
+import com.gb.admin.domain.monitoring.dto.response.BusinessAnalyticsResponse.Demographics;
+import com.gb.admin.domain.monitoring.dto.response.BusinessAnalyticsResponse.Revenue;
 import com.gb.admin.domain.monitoring.dto.response.ConfigResponse;
 import com.gb.admin.domain.monitoring.dto.response.ConfigResponse.Config;
 import com.gb.admin.domain.monitoring.dto.response.DomainSloResponse;
@@ -13,6 +17,7 @@ import com.gb.admin.domain.monitoring.dto.response.QueuesResponse.Queue;
 import com.gb.admin.domain.monitoring.dto.response.ServiceHealthResponse;
 import com.gb.admin.domain.monitoring.dto.response.ServiceHealthResponse.ServiceHealth;
 import com.gb.admin.domain.monitoring.service.MonitoringService;
+import com.gb.admin.global.client.AdminMemberDemographics;
 import com.gb.admin.global.client.AdminMemberStats;
 import com.gb.admin.global.client.AdminWalletStats;
 import com.gb.admin.global.client.CommunityAdminClient;
@@ -25,6 +30,7 @@ import com.gb.admin.global.config.MonitoringConfigProperties;
 import com.gb.admin.global.config.ServiceHealthProperties;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -258,6 +264,80 @@ public class MonitoringServiceImpl implements MonitoringService {
                 : nullSafe(argocdCfg.baseUrl()) + nullSafe(argocdCfg.path());
         ArgoEmbed argocd = new ArgoEmbed(argocdUrl);
         return new EmbedsResponse(grafana, argocd);
+    }
+
+    @Override
+    public BusinessAnalyticsResponse businessAnalytics() {
+        // 인프라 헬스와 분리된 비즈니스 카테고리. member 인구통계 + wallet 사용/매출을 합쳐 내려준다.
+        // 각 client 호출은 fail-open — 한쪽이 죽어도 나머지 값은 화면에 표시된다(발표 안정성).
+
+        // ── 인구통계 (member-service) ──
+        List<Bucket> gender = List.of();
+        List<Bucket> age = List.of();
+        List<Bucket> nationality = List.of();
+        try {
+            AdminMemberDemographics d = memberAdminClient.demographics();
+            gender = toBuckets(d.genderDistribution());
+            age = toBuckets(d.ageDistribution());
+            nationality = toBuckets(d.nationalityDistribution());
+        } catch (RuntimeException e) {
+            log.warn("[MonitoringService] demographics 실패(fail-open): {}", e.getMessage());
+        }
+
+        // ── 회원 규모 (member-service) ──
+        long totalMembers = 0L;
+        long newMembersToday = 0L;
+        try {
+            AdminMemberStats ms = memberAdminClient.stats();
+            totalMembers = ms.totalMembers();
+            newMembersToday = ms.newMembersToday();
+        } catch (RuntimeException e) {
+            log.warn("[MonitoringService] businessAnalytics.memberStats 실패(fail-open): {}", e.getMessage());
+        }
+
+        // ── 거래/매출 (wallet-service) ──
+        long dailyActiveUsers = 0L;
+        Map<String, String> todayTransactionsTotal = new LinkedHashMap<>();
+        List<Bucket> transactionsByAction = new ArrayList<>();
+        try {
+            AdminWalletStats ws = walletAdminClient.stats();
+            dailyActiveUsers = ws.dailyActiveUsers();
+            if (ws.todayTransactionsTotal() != null) {
+                // 금액은 String 전송(CLAUDE §5). BigDecimal → toPlainString.
+                for (Map.Entry<String, BigDecimal> e : ws.todayTransactionsTotal().entrySet()) {
+                    BigDecimal amount = e.getValue() == null ? BigDecimal.ZERO : e.getValue();
+                    todayTransactionsTotal.put(e.getKey(), amount.toPlainString());
+                }
+            }
+            if (ws.byAction() != null) {
+                for (Map.Entry<String, Long> e : ws.byAction().entrySet()) {
+                    transactionsByAction.add(new Bucket(e.getKey(),
+                            e.getValue() == null ? 0L : e.getValue()));
+                }
+            }
+        } catch (RuntimeException e) {
+            log.warn("[MonitoringService] businessAnalytics.walletStats 실패(fail-open): {}", e.getMessage());
+        }
+
+        // ── 매출원: 환전 수수료율 (admin config mirror) ──
+        Map<String, String> rawConfigs = monitoringConfigProperties.configs();
+        String exchangeFeeRate = rawConfigs == null
+                ? "0"
+                : rawConfigs.getOrDefault("wallet-exchange-fee-rate", "0");
+
+        return new BusinessAnalyticsResponse(
+                new Demographics(gender, age, nationality),
+                new Revenue(totalMembers, newMembersToday, dailyActiveUsers,
+                        todayTransactionsTotal, transactionsByAction, exchangeFeeRate));
+    }
+
+    private static List<Bucket> toBuckets(List<AdminMemberDemographics.Bucket> src) {
+        if (src == null) return List.of();
+        List<Bucket> out = new ArrayList<>(src.size());
+        for (AdminMemberDemographics.Bucket b : src) {
+            out.add(new Bucket(b.key(), b.count()));
+        }
+        return out;
     }
 
     private static String nullSafe(String s) {

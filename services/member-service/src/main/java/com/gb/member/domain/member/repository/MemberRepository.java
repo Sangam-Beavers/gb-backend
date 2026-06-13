@@ -64,4 +64,31 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     long countByDeletedAtIsNull();
 
     long countByDeletedAtIsNullAndCreatedAtBetween(LocalDateTime from, LocalDateTime to);
+
+    // ===== 인구통계 집계 (Admin business-analytics) =====
+    // 탈퇴자·관리자 계정은 제외(실 사용자 모수만). group-by 한 번으로 집계해 N+1을 피한다.
+    // 반환은 Object[]{enum 또는 String, Long} — Service에서 버킷 DTO로 매핑한다
+    // (aggregation은 Service 조합 허용, CLAUDE §4 Repository).
+
+    @Query("""
+            SELECT m.gender, COUNT(m) FROM Member m
+            WHERE m.deletedAt IS NULL AND m.isAdmin = false
+            GROUP BY m.gender
+            """)
+    List<Object[]> countGroupByGender();
+
+    @Query("""
+            SELECT m.ageRange, COUNT(m) FROM Member m
+            WHERE m.deletedAt IS NULL AND m.isAdmin = false
+            GROUP BY m.ageRange
+            """)
+    List<Object[]> countGroupByAgeRange();
+
+    @Query("""
+            SELECT m.nationality, COUNT(m) FROM Member m
+            WHERE m.deletedAt IS NULL AND m.isAdmin = false
+            GROUP BY m.nationality
+            ORDER BY COUNT(m) DESC
+            """)
+    List<Object[]> countGroupByNationality();
 }

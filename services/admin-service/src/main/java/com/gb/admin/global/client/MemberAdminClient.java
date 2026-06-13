@@ -24,4 +24,7 @@ public interface MemberAdminClient {
     java.util.Map<String, AdminMemberMini> lookup(java.util.Collection<String> userPublicIds);
 
     AdminMemberStats stats();
+
+    /** 성별/연령대/국적 분포(business-analytics용). 실패 시 호출 측이 fail-open 처리. */
+    AdminMemberDemographics demographics();
 }

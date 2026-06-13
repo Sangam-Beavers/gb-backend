@@ -97,4 +97,28 @@ public class MockMemberAdminClient implements MemberAdminClient {
     public AdminMemberStats stats() {
         return new AdminMemberStats(12430L, 25L, 4L, 1L, "0.8000", 38L);
     }
+
+    @Override
+    public AdminMemberDemographics demographics() {
+        // 발표용 fixture — 외국인 근로자 플랫폼 특성을 반영한 분포(남성 다수, 20~30대 중심, 동남아 국적 상위).
+        return new AdminMemberDemographics(
+                List.of(
+                        new AdminMemberDemographics.Bucket("MALE", 7890L),
+                        new AdminMemberDemographics.Bucket("FEMALE", 4540L)),
+                List.of(
+                        new AdminMemberDemographics.Bucket("TEENS", 210L),
+                        new AdminMemberDemographics.Bucket("TWENTIES", 5120L),
+                        new AdminMemberDemographics.Bucket("THIRTIES", 4380L),
+                        new AdminMemberDemographics.Bucket("FORTIES", 1860L),
+                        new AdminMemberDemographics.Bucket("FIFTIES", 690L),
+                        new AdminMemberDemographics.Bucket("SIXTIES_PLUS", 170L)),
+                List.of(
+                        new AdminMemberDemographics.Bucket("VN", 4120L),
+                        new AdminMemberDemographics.Bucket("CN", 2980L),
+                        new AdminMemberDemographics.Bucket("PH", 1840L),
+                        new AdminMemberDemographics.Bucket("KH", 1230L),
+                        new AdminMemberDemographics.Bucket("NP", 980L),
+                        new AdminMemberDemographics.Bucket("TH", 760L),
+                        new AdminMemberDemographics.Bucket("ID", 520L)));
+    }
 }

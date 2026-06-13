@@ -5,6 +5,7 @@ import com.gb.member.domain.admin.dto.request.KycRejectAdminRequest;
 import com.gb.member.domain.admin.dto.response.AdminMemberLookupResponse;
 import com.gb.member.domain.admin.dto.response.AdminMemberPageResponse;
 import com.gb.member.domain.admin.dto.response.AdminMemberView;
+import com.gb.member.domain.admin.dto.response.MemberDemographicsResponse;
 import com.gb.member.domain.admin.dto.response.MemberStatsResponse;
 import com.gb.member.domain.admin.service.MemberAdminInternalService;
 import com.gb.member.domain.member.entity.MemberStatus;
@@ -113,5 +114,12 @@ public class MemberAdminInternalController {
     @GetMapping("/stats/members")
     public ApiResponse<MemberStatsResponse> stats() {
         return ApiResponse.success(memberAdminInternalService.getStats());
+    }
+
+    @Operation(summary = "[Internal] 회원 인구통계",
+            description = "성별/연령대/국적 분포(business-analytics용). 탈퇴자·관리자 제외.")
+    @GetMapping("/stats/demographics")
+    public ApiResponse<MemberDemographicsResponse> demographics() {
+        return ApiResponse.success(memberAdminInternalService.getDemographics());
     }
 }

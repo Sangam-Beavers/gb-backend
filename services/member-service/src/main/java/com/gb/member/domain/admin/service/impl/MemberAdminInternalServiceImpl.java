@@ -5,8 +5,12 @@ import com.gb.member.domain.admin.dto.response.AdminMemberLookupResponse;
 import com.gb.member.domain.admin.dto.response.AdminMemberMini;
 import com.gb.member.domain.admin.dto.response.AdminMemberPageResponse;
 import com.gb.member.domain.admin.dto.response.AdminMemberView;
+import com.gb.member.domain.admin.dto.response.MemberDemographicsResponse;
+import com.gb.member.domain.admin.dto.response.MemberDemographicsResponse.Bucket;
 import com.gb.member.domain.admin.dto.response.MemberStatsResponse;
 import com.gb.member.domain.admin.service.MemberAdminInternalService;
+import com.gb.member.domain.member.entity.AgeRange;
+import com.gb.member.domain.member.entity.Gender;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.entity.MemberStatus;
 import com.gb.member.domain.member.repository.MemberRepository;
@@ -170,6 +174,47 @@ public class MemberAdminInternalServiceImpl implements MemberAdminInternalServic
         LocalDateTime endOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MAX);
         long newToday = memberRepository.countByDeletedAtIsNullAndCreatedAtBetween(startOfDay, endOfDay);
         return new MemberStatsResponse(total, pending, approved, rejected, passRate, newToday);
+    }
+
+    @Override
+    public MemberDemographicsResponse getDemographics() {
+        // 성별/연령대는 enum 선언 순서대로 0 포함 전체 버킷을 채워 차트가 안정적으로 그려지게 한다.
+        Map<String, Long> genderCounts = toCountMap(memberRepository.countGroupByGender());
+        List<Bucket> gender = new java.util.ArrayList<>();
+        for (Gender g : Gender.values()) {
+            gender.add(new Bucket(g.name(), genderCounts.getOrDefault(g.name(), 0L)));
+        }
+
+        Map<String, Long> ageCounts = toCountMap(memberRepository.countGroupByAgeRange());
+        List<Bucket> age = new java.util.ArrayList<>();
+        for (AgeRange a : AgeRange.values()) {
+            age.add(new Bucket(a.name(), ageCounts.getOrDefault(a.name(), 0L)));
+        }
+
+        // 국적은 종류가 가변적이라 존재하는 값만(많은 순, 쿼리 ORDER BY) 그대로 노출한다.
+        List<Bucket> nationality = memberRepository.countGroupByNationality().stream()
+                .map(row -> new Bucket(asString(row[0]), asLong(row[1])))
+                .toList();
+
+        return new MemberDemographicsResponse(gender, age, nationality);
+    }
+
+    /** group-by 결과(Object[]{key, Long})를 key→count 맵으로. key는 enum 또는 String 모두 수용. */
+    private static Map<String, Long> toCountMap(List<Object[]> rows) {
+        Map<String, Long> map = new HashMap<>();
+        for (Object[] row : rows) {
+            map.put(asString(row[0]), asLong(row[1]));
+        }
+        return map;
+    }
+
+    private static String asString(Object o) {
+        if (o == null) return "UNKNOWN";
+        return o instanceof Enum<?> e ? e.name() : o.toString();
+    }
+
+    private static long asLong(Object o) {
+        return o instanceof Number n ? n.longValue() : 0L;
     }
 
     private static VerificationStatus parseStatus(String kycStatus) {

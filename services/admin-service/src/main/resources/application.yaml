@@ -62,19 +62,28 @@ admin:
       grafana:
         base-url: ${GRAFANA_BASE_URL:http://localhost:3000}
         # UID는 stage Grafana에 실제 프로비저닝된 대시보드 기준(docs/monitoring/grafana-prometheus-setup.md §3-1).
-        # AWS RDS는 미사용(CloudWatch 미도입)이라 제거. Redis는 직접 exporter 대시보드.
+        # AWS RDS는 미사용(CloudWatch 미도입)이라 제거. Redis(ElastiCache)는 직접 exporter 대시보드.
+        # ⚠️ 순서 = 앱 운영 중요도순(프론트가 받은 순서대로 위→아래로 렌더). 앱 자체 헬스에
+        #    가장 가까운 것부터: Spring Boot HTTP(요청량/에러/지연) → JVM(힙/GC) → K8s 클러스터(자원) → Redis 캐시.
         dashboards:
-          - name: kubernetes_cluster
-            label: Kubernetes Cluster
-            path: /d/efa86fd1d0c121a26444b636a3f509a8/kubernetes-compute-resources-cluster?kiosk=tv&theme=dark
+          - name: spring_boot
+            label: Spring Boot HTTP (APM)
+            path: /d/X09JGT7Gz/java-springboot-apm?kiosk=tv&theme=dark
           - name: jvm
             label: JVM Micrometer
             path: /d/0829a2c7-6bad-4fc7-97b9-badb9568c87e/jvm-micrometer?kiosk=tv&theme=dark
-          - name: spring_boot
-            label: Spring Boot HTTP
-            path: /d/X09JGT7Gz/java-springboot-apm?kiosk=tv&theme=dark
+          - name: kubernetes_cluster
+            label: Kubernetes Cluster
+            path: /d/efa86fd1d0c121a26444b636a3f509a8/kubernetes-compute-resources-cluster?kiosk=tv&theme=dark
+          # 데이터 계층(AWS 매니지드) — YACE→Prometheus. UID는 gb-infra 대시보드 JSON에 고정(추측 불필요).
+          - name: rds
+            label: AWS RDS / Aurora
+            path: /d/gb-aws-rds/aws-rds-aurora?kiosk=tv&theme=dark
+          - name: elasticache
+            label: AWS ElastiCache
+            path: /d/gb-aws-elasticache/aws-elasticache?kiosk=tv&theme=dark
           - name: redis
-            label: Redis
+            label: Redis (exporter)
             path: /d/e008bc3f-81a2-40f9-baf2-a33fd8dec7ec/redis-dashboard-for-prometheus-redis-exporter-1-x?kiosk=tv&theme=dark
       argocd:
         base-url: ${ARGOCD_BASE_URL:http://localhost:8080}

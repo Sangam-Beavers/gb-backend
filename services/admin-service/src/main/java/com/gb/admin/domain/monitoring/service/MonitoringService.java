@@ -1,6 +1,7 @@
 package com.gb.admin.domain.monitoring.service;
 
 import com.gb.admin.domain.monitoring.dto.response.AuthFailuresResponse;
+import com.gb.admin.domain.monitoring.dto.response.BusinessAnalyticsResponse;
 import com.gb.admin.domain.monitoring.dto.response.ConfigResponse;
 import com.gb.admin.domain.monitoring.dto.response.DomainSloResponse;
 import com.gb.admin.domain.monitoring.dto.response.EmbedsResponse;
@@ -20,4 +21,6 @@ public interface MonitoringService {
     ConfigResponse config();
 
     EmbedsResponse embeds();
+
+    BusinessAnalyticsResponse businessAnalytics();
 }

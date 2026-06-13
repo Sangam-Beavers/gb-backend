@@ -145,6 +145,36 @@ public class RealMemberAdminClient implements MemberAdminClient {
         }
     }
 
+    @Override
+    public AdminMemberDemographics demographics() {
+        try {
+            InternalApiEnvelope<DemographicsPayload> env = restClient.get()
+                    .uri(baseUrl + "/api/v1/internal/admin/stats/demographics")
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<InternalApiEnvelope<DemographicsPayload>>() {});
+            if (env == null || env.data() == null) {
+                throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+            }
+            DemographicsPayload p = env.data();
+            return new AdminMemberDemographics(
+                    toBuckets(p.genderDistribution()),
+                    toBuckets(p.ageDistribution()),
+                    toBuckets(p.nationalityDistribution()));
+        } catch (BusinessException be) {
+            throw be;
+        } catch (RuntimeException e) {
+            log.error("[RealMemberAdminClient] demographics 실패: {}", e.getMessage());
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
+    }
+
+    private static List<AdminMemberDemographics.Bucket> toBuckets(List<BucketWire> wires) {
+        if (wires == null) return List.of();
+        return wires.stream()
+                .map(b -> new AdminMemberDemographics.Bucket(b.key(), b.count()))
+                .collect(Collectors.toList());
+    }
+
     private static AdminMemberSummary toSummary(MemberWire m) {
         KycStatus kyc;
         try {
@@ -211,5 +241,18 @@ public class RealMemberAdminClient implements MemberAdminClient {
             @JsonProperty("rejected_kyc_count") long rejectedKycCount,
             @JsonProperty("kyc_pass_rate") String kycPassRate,
             @JsonProperty("new_members_today") long newMembersToday) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record DemographicsPayload(
+            @JsonProperty("gender_distribution") List<BucketWire> genderDistribution,
+            @JsonProperty("age_distribution") List<BucketWire> ageDistribution,
+            @JsonProperty("nationality_distribution") List<BucketWire> nationalityDistribution) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record BucketWire(
+            @JsonProperty("key") String key,
+            @JsonProperty("count") long count) {
     }
 }

@@ -3,6 +3,7 @@ package com.gb.member.domain.admin.service;
 import com.gb.member.domain.admin.dto.response.AdminMemberLookupResponse;
 import com.gb.member.domain.admin.dto.response.AdminMemberPageResponse;
 import com.gb.member.domain.admin.dto.response.AdminMemberView;
+import com.gb.member.domain.admin.dto.response.MemberDemographicsResponse;
 import com.gb.member.domain.admin.dto.response.MemberStatsResponse;
 import com.gb.member.domain.member.entity.MemberStatus;
 import java.util.Collection;
@@ -26,4 +27,6 @@ public interface MemberAdminInternalService {
     AdminMemberLookupResponse lookup(Collection<String> userPublicIds);
 
     MemberStatsResponse getStats();
+
+    MemberDemographicsResponse getDemographics();
 }
