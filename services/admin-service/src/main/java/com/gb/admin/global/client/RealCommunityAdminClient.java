@@ -94,6 +94,18 @@ public class RealCommunityAdminClient implements CommunityAdminClient {
     }
 
     @Override
+    public void dismissReports(String postPublicId, String adminPublicId) {
+        try {
+            restClient.post()
+                    .uri(baseUrl + "/api/v1/internal/admin/posts/{id}/dismiss", postPublicId)
+                    .retrieve().toBodilessEntity();
+        } catch (RuntimeException e) {
+            log.error("[RealCommunityAdminClient] dismissReports 실패: {}", e.getMessage());
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
+    }
+
+    @Override
     public long pendingReportCount() {
         try {
             InternalApiEnvelope<ReportStatsPayload> env = restClient.get()

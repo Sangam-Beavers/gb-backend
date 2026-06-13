@@ -134,6 +134,17 @@ public class CommunityAdminInternalServiceImpl implements CommunityAdminInternal
 
     @Override
     @Transactional
+    public void dismissPostReports(String publicId) {
+        // 신고 거부(기각): 게시글은 그대로 두고, 연관 신고만 DISMISSED로. (운영자가 "문제없음" 판단)
+        Post post = postRepository.findByPublicIdAndDeletedAtIsNull(publicId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND));
+        reportRepository.updateStatusByTarget(
+                ReportTargetType.POST, post.getId(), ReportStatus.DISMISSED);
+        log.info("[Admin] dismissPostReports: post={}", publicId);
+    }
+
+    @Override
+    @Transactional
     public void deleteComment(String commentPublicId) {
         Comment comment = commentRepository.findByPublicIdAndDeletedAtIsNull(commentPublicId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND));

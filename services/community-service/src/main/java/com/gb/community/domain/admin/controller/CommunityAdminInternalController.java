@@ -67,6 +67,13 @@ public class CommunityAdminInternalController {
         return ApiResponse.success(null);
     }
 
+    @Operation(summary = "[Internal] 신고 거부(기각) → 게시글 유지 + 연관 reports DISMISSED")
+    @PostMapping("/posts/{publicId}/dismiss")
+    public ApiResponse<Void> dismiss(@PathVariable String publicId) {
+        communityAdminInternalService.dismissPostReports(publicId);
+        return ApiResponse.success(null);
+    }
+
     @Operation(summary = "[Internal] 댓글 삭제 → soft-delete + 연관 reports RESOLVED_DELETED (신규)")
     @DeleteMapping("/comments/{commentPublicId}")
     public ApiResponse<Void> deleteComment(@PathVariable String commentPublicId) {

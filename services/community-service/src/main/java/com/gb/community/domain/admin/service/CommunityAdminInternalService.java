@@ -18,6 +18,9 @@ public interface CommunityAdminInternalService {
     /** 게시글 삭제 → soft-delete + 연관 reports RESOLVED_DELETED 처리. */
     void deletePost(String publicId);
 
+    /** 신고 거부(기각) → 게시글은 유지, 연관 reports만 DISMISSED 처리. */
+    void dismissPostReports(String publicId);
+
     /** 댓글 삭제 → soft-delete + 연관 reports RESOLVED_DELETED 처리 (신규). */
     void deleteComment(String commentPublicId);
 

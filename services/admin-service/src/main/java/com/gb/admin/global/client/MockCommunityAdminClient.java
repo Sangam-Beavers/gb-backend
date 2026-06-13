@@ -60,6 +60,12 @@ public class MockCommunityAdminClient implements CommunityAdminClient {
     }
 
     @Override
+    public void dismissReports(String postPublicId, String adminPublicId) {
+        log.info("[MockCommunityAdminClient] dismissReports 시뮬레이션: post={}, admin={}, at={}",
+                postPublicId, adminPublicId, LocalDateTime.now(ZoneOffset.UTC));
+    }
+
+    @Override
     public long pendingReportCount() {
         return 17L;
     }

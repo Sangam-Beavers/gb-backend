@@ -9,4 +9,6 @@ public interface AdminCommunityService {
     void hidePost(String postPublicId, String adminPublicId, String ipAddress);
 
     void deletePost(String postPublicId, String adminPublicId, String ipAddress);
+
+    void dismissReport(String postPublicId, String adminPublicId, String ipAddress);
 }

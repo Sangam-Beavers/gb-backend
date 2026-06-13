@@ -48,4 +48,17 @@ public class AdminCommunityServiceImpl implements AdminCommunityService {
                 "{\"visibility\":\"DELETED\"}"
         );
     }
+
+    @Override
+    @Transactional
+    public void dismissReport(String postPublicId, String adminPublicId, String ipAddress) {
+        // 신고 거부(기각): 게시글은 유지, 연관 신고만 DISMISSED. 운영자 행동은 audit_log에 남긴다.
+        communityAdminClient.dismissReports(postPublicId, adminPublicId);
+        auditLogService.record(
+                adminPublicId, "REPORT_DISMISS", "POST", postPublicId,
+                ipAddress,
+                "{\"reportStatus\":\"PENDING\"}",
+                "{\"reportStatus\":\"DISMISSED\"}"
+        );
+    }
 }

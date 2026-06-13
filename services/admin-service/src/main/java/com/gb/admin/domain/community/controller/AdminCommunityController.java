@@ -58,4 +58,15 @@ public class AdminCommunityController {
         adminCommunityService.deletePost(publicId, adminPublicId, ClientIpResolver.resolve(request));
         return ApiResponse.success(null);
     }
+
+    @Operation(summary = "신고 거부(기각)",
+            description = "게시글은 유지하고 연관 신고만 DISMISSED 처리 + audit_log를 남긴다.")
+    @PostMapping("/posts/{publicId}/dismiss")
+    public ApiResponse<Void> dismiss(
+            @PathVariable String publicId,
+            @CurrentAdminPublicId String adminPublicId,
+            HttpServletRequest request) {
+        adminCommunityService.dismissReport(publicId, adminPublicId, ClientIpResolver.resolve(request));
+        return ApiResponse.success(null);
+    }
 }

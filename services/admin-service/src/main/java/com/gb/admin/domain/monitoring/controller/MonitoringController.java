@@ -4,6 +4,7 @@ import com.gb.admin.domain.monitoring.dto.response.AuthFailuresResponse;
 import com.gb.admin.domain.monitoring.dto.response.BusinessAnalyticsResponse;
 import com.gb.admin.domain.monitoring.dto.response.ConfigResponse;
 import com.gb.admin.domain.monitoring.dto.response.DomainSloResponse;
+import com.gb.admin.domain.monitoring.dto.response.InfraAlertsResponse;
 import com.gb.admin.domain.monitoring.dto.response.EmbedsResponse;
 import com.gb.admin.domain.monitoring.dto.response.QueuesResponse;
 import com.gb.admin.domain.monitoring.dto.response.ServiceHealthResponse;
@@ -69,5 +70,12 @@ public class MonitoringController {
     @GetMapping("/business-analytics")
     public ApiResponse<BusinessAnalyticsResponse> businessAnalytics() {
         return ApiResponse.success(monitoringService.businessAnalytics());
+    }
+
+    @Operation(summary = "인프라 경보",
+            description = "Prometheus(YACE) 지표 기준 RDS/ElastiCache 위험 조건. prometheus base-url 미설정/실패 시 빈 목록(fail-soft).")
+    @GetMapping("/infra-alerts")
+    public ApiResponse<InfraAlertsResponse> infraAlerts() {
+        return ApiResponse.success(monitoringService.infraAlerts());
     }
 }

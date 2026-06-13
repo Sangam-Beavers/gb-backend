@@ -1,7 +1,5 @@
 package com.gb.admin.global.security;
 
-import com.gb.common.exception.AuthErrorCode;
-import com.gb.common.exception.BusinessException;
 import org.springframework.core.MethodParameter;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -21,14 +19,19 @@ import org.springframework.web.method.support.ModelAndViewContainer;
  * 여기서 {@link Jwt}를 꺼내 custom claim {@code public_id}(관리자 대외 식별자, UUID)를 읽어 컨트롤러에
  * {@code String adminPublicId}로 바인딩한다.
  *
- * <p>인증이 없거나(=보호 경로인데 토큰 없음) claim이 비어 있으면(=IdP Property Mapping 누락) {@code AUTH4011}로
- * fail-fast 한다. 조용히 null을 흘려보내 도메인 로직에서 엉뚱한 에러로 번지지 않게 한다.
+ * <p><b>현재(no-login 콘솔)</b>: admin-service는 SecurityConfig에서 OAuth2 검증이 비활성(permitAll)이라
+ * SecurityContext에 JWT가 없다. 이때 fail-fast(AUTH4011)하면 삭제·숨김·KYC 등 운영 액션이 전부 401이 되므로,
+ * 토큰이 없으면 {@link #FALLBACK_ADMIN_PUBLIC_ID}(placeholder 운영자)로 폴백한다 — 액션은 수행되고 audit_log엔
+ * placeholder가 남는다. 인증(OAuth2)을 다시 켜면 실제 토큰의 {@code public_id} claim이 그대로 흐른다.
  */
 @Component
 public class CurrentAdminPublicIdArgumentResolver implements HandlerMethodArgumentResolver {
 
     /** IdP가 토큰에 실어 보내는 회원 식별 claim 이름(정확히 일치해야 함). */
     public static final String CLAIM_PUBLIC_ID = "public_id";
+
+    /** no-login 콘솔에서 토큰이 없을 때 audit_log에 남길 placeholder 운영자 ID(UUID 형식 sentinel). */
+    public static final String FALLBACK_ADMIN_PUBLIC_ID = "00000000-0000-0000-0000-000000000000";
 
     @Override
     public boolean supportsParameter(MethodParameter parameter) {
@@ -44,14 +47,15 @@ public class CurrentAdminPublicIdArgumentResolver implements HandlerMethodArgume
             WebDataBinderFactory binderFactory) {
 
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        // no-login 콘솔: JWT가 없으면 placeholder 운영자로 폴백(액션 수행 가능). 인증 재활성 시 실제 claim이 흐름.
         if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
-            throw new BusinessException(AuthErrorCode.UNAUTHORIZED);
+            return FALLBACK_ADMIN_PUBLIC_ID;
         }
 
         Jwt jwt = jwtAuthentication.getToken();
         String adminPublicId = jwt.getClaimAsString(CLAIM_PUBLIC_ID);
         if (!StringUtils.hasText(adminPublicId)) {
-            throw new BusinessException(AuthErrorCode.UNAUTHORIZED);
+            return FALLBACK_ADMIN_PUBLIC_ID;
         }
         return adminPublicId;
     }

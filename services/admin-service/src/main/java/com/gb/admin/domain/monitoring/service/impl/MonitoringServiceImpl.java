@@ -11,6 +11,8 @@ import com.gb.admin.domain.monitoring.dto.response.DomainSloResponse;
 import com.gb.admin.domain.monitoring.dto.response.DomainSloResponse.Slo;
 import com.gb.admin.domain.monitoring.dto.response.EmbedsResponse;
 import com.gb.admin.domain.monitoring.dto.response.EmbedsResponse.ArgoEmbed;
+import com.gb.admin.domain.monitoring.dto.response.InfraAlertsResponse;
+import com.gb.admin.domain.monitoring.dto.response.InfraAlertsResponse.Alert;
 import com.gb.admin.domain.monitoring.dto.response.EmbedsResponse.GrafanaEmbed;
 import com.gb.admin.domain.monitoring.dto.response.QueuesResponse;
 import com.gb.admin.domain.monitoring.dto.response.QueuesResponse.Queue;
@@ -24,6 +26,8 @@ import com.gb.admin.global.client.CommunityAdminClient;
 import com.gb.admin.global.client.DocumentAdminClient;
 import com.gb.admin.global.client.DocumentStats;
 import com.gb.admin.global.client.MemberAdminClient;
+import com.gb.admin.global.client.PrometheusClient;
+import com.gb.admin.global.client.PrometheusClient.PromSample;
 import com.gb.admin.global.client.WalletAdminClient;
 import com.gb.admin.global.config.EmbedsProperties;
 import com.gb.admin.global.config.MonitoringConfigProperties;
@@ -55,6 +59,7 @@ public class MonitoringServiceImpl implements MonitoringService {
     private final MemberAdminClient memberAdminClient;
     private final DocumentAdminClient documentAdminClient;
     private final CommunityAdminClient communityAdminClient;
+    private final PrometheusClient prometheusClient;
 
     /** 헬스체크 호출 순서를 고정한다(member→wallet→document→community). 발표 화면 안정성. */
     private static final List<String> SERVICE_ORDER = List.of("member", "wallet", "document", "community");
@@ -329,6 +334,48 @@ public class MonitoringServiceImpl implements MonitoringService {
                 new Demographics(gender, age, nationality),
                 new Revenue(totalMembers, newMembersToday, dailyActiveUsers,
                         todayTransactionsTotal, transactionsByAction, exchangeFeeRate));
+    }
+
+    @Override
+    public InfraAlertsResponse infraAlerts() {
+        // Prometheus(YACE) 지표 기준 인프라 경보. PromQL에 임계 조건을 넣어 결과 시리즈=발화 경보로 본다.
+        // base-url 미설정/호출 실패 시 PrometheusClient가 빈 리스트 → 경보 0건(fail-soft).
+        List<Alert> alerts = new ArrayList<>();
+        evalRule(alerts, "aws_rds_cpuutilization_average{dimension_DBInstanceIdentifier!=\"\"} > 80",
+                "critical", "RDS", "dimension_DBInstanceIdentifier", "RDS CPU 높음", "%");
+        evalRule(alerts, "aws_rds_aurora_replica_lag_average{dimension_DBInstanceIdentifier!=\"\"} > 1000",
+                "warning", "RDS", "dimension_DBInstanceIdentifier", "Aurora replica lag 높음", "ms");
+        evalRule(alerts, "aws_rds_freeable_memory_average{dimension_DBInstanceIdentifier!=\"\"} < 536870912",
+                "warning", "RDS", "dimension_DBInstanceIdentifier", "RDS 가용 메모리 낮음", " bytes");
+        evalRule(alerts, "aws_elasticache_database_memory_usage_percentage_average{dimension_CacheClusterId!=\"\"} > 80",
+                "warning", "ELASTICACHE", "dimension_CacheClusterId", "ElastiCache 메모리 사용률 높음", "%");
+        evalRule(alerts, "aws_elasticache_evictions_sum{dimension_CacheClusterId!=\"\"} > 0",
+                "warning", "ELASTICACHE", "dimension_CacheClusterId", "ElastiCache eviction 발생", "건");
+        return new InfraAlertsResponse(alerts);
+    }
+
+    /** PromQL 조건을 평가해 반환된 각 시리즈를 경보로 변환한다. */
+    private void evalRule(List<Alert> dest, String promql, String level, String source,
+                          String labelKey, String label, String unit) {
+        for (PromSample s : prometheusClient.query(promql)) {
+            String instance = s.labels().getOrDefault(labelKey, "?");
+            String value = formatPromValue(s.value());
+            dest.add(new Alert(level, source, label + " — " + instance + " " + value + unit));
+        }
+    }
+
+    /** Prometheus 값 문자열을 소수 1자리로 정리(정수면 정수로). */
+    private static String formatPromValue(String raw) {
+        if (raw == null || raw.isBlank()) return "?";
+        try {
+            double v = Double.parseDouble(raw);
+            if (v == Math.floor(v) && !Double.isInfinite(v)) {
+                return String.valueOf((long) v);
+            }
+            return String.format("%.1f", v);
+        } catch (NumberFormatException e) {
+            return raw;
+        }
     }
 
     private static List<Bucket> toBuckets(List<AdminMemberDemographics.Bucket> src) {

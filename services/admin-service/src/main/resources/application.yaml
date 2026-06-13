@@ -30,6 +30,10 @@ management:
 # 모니터링 — 다른 서비스의 /actuator/health 호출 base URL. dev 기본값은 로컬 포트.
 # 환경별 yml에서 덮어쓴다(stage/prod는 k8s 내부 DNS 등).
 admin:
+  # 인프라 경보용 Prometheus instant query base-url. 비우면 infra-alerts는 빈 목록(fail-soft).
+  # stage: monitoring 네임스페이스의 kube-prometheus-stack Prometheus 서비스(크로스 NS DNS).
+  prometheus:
+    base-url: ${PROMETHEUS_BASE_URL:}
   service-health:
     urls:
       member: ${MEMBER_HEALTH_URL:http://localhost:8081}
@@ -62,16 +66,17 @@ admin:
       grafana:
         base-url: ${GRAFANA_BASE_URL:http://localhost:3000}
         # UID는 stage Grafana에 실제 프로비저닝된 대시보드 기준(docs/monitoring/grafana-prometheus-setup.md §3-1).
-        # AWS RDS는 미사용(CloudWatch 미도입)이라 제거. Redis(ElastiCache)는 직접 exporter 대시보드.
         # ⚠️ 순서 = 앱 운영 중요도순(프론트가 받은 순서대로 위→아래로 렌더). 앱 자체 헬스에
-        #    가장 가까운 것부터: Spring Boot HTTP(요청량/에러/지연) → JVM(힙/GC) → K8s 클러스터(자원) → Redis 캐시.
+        #    가장 가까운 것부터: Spring Boot HTTP(요청량/에러/지연) → JVM(힙/GC) → K8s 클러스터(자원) → AWS 데이터계층.
+        # ⚠️ gnetId 임포트 대시보드(spring_boot/jvm)는 재프로비저닝 시 UID가 바뀔 수 있다 → "Not found"면 실제 UID로 갱신.
+        # Redis(exporter)·ArgoCD 임베드는 제거: ElastiCache는 AWS 임베드(YACE)가 대체, ArgoCD는 물리서버 별도 운영.
         dashboards:
           - name: spring_boot
             label: Spring Boot HTTP (APM)
             path: /d/X09JGT7Gz/java-springboot-apm?kiosk=tv&theme=dark
           - name: jvm
             label: JVM Micrometer
-            path: /d/0829a2c7-6bad-4fc7-97b9-badb9568c87e/jvm-micrometer?kiosk=tv&theme=dark
+            path: /d/751f8ea6-6a45-42f4-b1e5-5fb8fedea2d7/jvm-micrometer?var-application=admin-service&kiosk=tv&theme=dark
           - name: kubernetes_cluster
             label: Kubernetes Cluster
             path: /d/efa86fd1d0c121a26444b636a3f509a8/kubernetes-compute-resources-cluster?kiosk=tv&theme=dark
@@ -82,9 +87,6 @@ admin:
           - name: elasticache
             label: AWS ElastiCache
             path: /d/gb-aws-elasticache/aws-elasticache?kiosk=tv&theme=dark
-          - name: redis
-            label: Redis (exporter)
-            path: /d/e008bc3f-81a2-40f9-baf2-a33fd8dec7ec/redis-dashboard-for-prometheus-redis-exporter-1-x?kiosk=tv&theme=dark
       argocd:
         base-url: ${ARGOCD_BASE_URL:http://localhost:8080}
         path: /applications?showSidebar=false

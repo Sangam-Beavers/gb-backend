@@ -10,5 +10,8 @@ public interface CommunityAdminClient {
 
     void deletePost(String postPublicId, String adminPublicId);
 
+    /** 신고 거부(기각) — 게시글 유지, 연관 신고만 DISMISSED. */
+    void dismissReports(String postPublicId, String adminPublicId);
+
     long pendingReportCount();
 }
