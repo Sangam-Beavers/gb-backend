@@ -1,5 +1,6 @@
 package com.gb.community.domain.admin.service;
 
+import com.gb.community.domain.admin.dto.response.AdminPostDetailResponse;
 import com.gb.community.domain.admin.dto.response.AdminReportPageResponse;
 import com.gb.community.domain.admin.dto.response.AdminReportedAuthorDetailResponse;
 import com.gb.community.domain.admin.dto.response.AdminReportedAuthorView;
@@ -20,6 +21,9 @@ public interface CommunityAdminInternalService {
 
     /** 신고 거부(기각) → 게시글은 유지, 연관 reports만 DISMISSED 처리. */
     void dismissPostReports(String publicId);
+
+    /** 게시글 단건 본문 조회 (신고 처리 "보기"용). */
+    AdminPostDetailResponse getPostDetail(String publicId);
 
     /** 댓글 삭제 → soft-delete + 연관 reports RESOLVED_DELETED 처리 (신규). */
     void deleteComment(String commentPublicId);

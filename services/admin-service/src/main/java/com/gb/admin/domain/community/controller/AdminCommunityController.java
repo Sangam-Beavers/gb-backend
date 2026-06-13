@@ -1,5 +1,6 @@
 package com.gb.admin.domain.community.controller;
 
+import com.gb.admin.domain.community.dto.response.AdminPostDetailResponse;
 import com.gb.admin.domain.community.dto.response.AdminReportPageResponse;
 import com.gb.admin.domain.community.service.AdminCommunityService;
 import com.gb.admin.global.common.util.ClientIpResolver;
@@ -68,5 +69,12 @@ public class AdminCommunityController {
             HttpServletRequest request) {
         adminCommunityService.dismissReport(publicId, adminPublicId, ClientIpResolver.resolve(request));
         return ApiResponse.success(null);
+    }
+
+    @Operation(summary = "게시글 단건 본문 조회",
+            description = "신고 처리 화면 '보기' — 게시글 제목·본문을 community-service에서 가져와 반환한다.")
+    @GetMapping("/posts/{publicId}")
+    public ApiResponse<AdminPostDetailResponse> postDetail(@PathVariable String publicId) {
+        return ApiResponse.success(adminCommunityService.postDetail(publicId));
     }
 }

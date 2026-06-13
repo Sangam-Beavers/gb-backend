@@ -1,5 +1,6 @@
 package com.gb.admin.domain.community.service;
 
+import com.gb.admin.domain.community.dto.response.AdminPostDetailResponse;
 import com.gb.admin.domain.community.dto.response.AdminReportPageResponse;
 
 public interface AdminCommunityService {
@@ -11,4 +12,6 @@ public interface AdminCommunityService {
     void deletePost(String postPublicId, String adminPublicId, String ipAddress);
 
     void dismissReport(String postPublicId, String adminPublicId, String ipAddress);
+
+    AdminPostDetailResponse postDetail(String postPublicId);
 }

@@ -106,6 +106,27 @@ public class RealCommunityAdminClient implements CommunityAdminClient {
     }
 
     @Override
+    public AdminPostDetail postDetail(String postPublicId) {
+        try {
+            InternalApiEnvelope<PostDetailPayload> env = restClient.get()
+                    .uri(baseUrl + "/api/v1/internal/admin/posts/{id}", postPublicId)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<InternalApiEnvelope<PostDetailPayload>>() {});
+            if (env == null || env.data() == null) {
+                throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+            }
+            PostDetailPayload p = env.data();
+            return new AdminPostDetail(p.postPublicId(), p.userPublicId(), p.title(),
+                    p.content(), p.language(), p.createdAt());
+        } catch (BusinessException be) {
+            throw be;
+        } catch (RuntimeException e) {
+            log.error("[RealCommunityAdminClient] postDetail 실패: {}", e.getMessage());
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
+    }
+
+    @Override
     public long pendingReportCount() {
         try {
             InternalApiEnvelope<ReportStatsPayload> env = restClient.get()
@@ -143,5 +164,15 @@ public class RealCommunityAdminClient implements CommunityAdminClient {
     @JsonIgnoreProperties(ignoreUnknown = true)
     record ReportStatsPayload(
             @JsonProperty("pending_report_count") long pendingReportCount) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record PostDetailPayload(
+            @JsonProperty("post_public_id") String postPublicId,
+            @JsonProperty("user_public_id") String userPublicId,
+            @JsonProperty("title") String title,
+            @JsonProperty("content") String content,
+            @JsonProperty("language") String language,
+            @JsonProperty("created_at") LocalDateTime createdAt) {
     }
 }
