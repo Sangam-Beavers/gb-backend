@@ -1,6 +1,7 @@
 package com.gb.admin.domain.community.service.impl;
 
 import com.gb.admin.domain.auditLog.service.AuditLogService;
+import com.gb.admin.domain.community.dto.response.AdminPostDetailResponse;
 import com.gb.admin.domain.community.dto.response.AdminReportPageResponse;
 import com.gb.admin.domain.community.dto.response.AdminReportResponse;
 import com.gb.admin.domain.community.service.AdminCommunityService;
@@ -47,6 +48,11 @@ public class AdminCommunityServiceImpl implements AdminCommunityService {
                 "{\"visibility\":\"VISIBLE\"}",
                 "{\"visibility\":\"DELETED\"}"
         );
+    }
+
+    @Override
+    public AdminPostDetailResponse postDetail(String postPublicId) {
+        return AdminPostDetailResponse.from(communityAdminClient.postDetail(postPublicId));
     }
 
     @Override

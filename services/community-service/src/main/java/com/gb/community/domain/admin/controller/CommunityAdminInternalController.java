@@ -1,6 +1,7 @@
 package com.gb.community.domain.admin.controller;
 
 import com.gb.common.response.ApiResponse;
+import com.gb.community.domain.admin.dto.response.AdminPostDetailResponse;
 import com.gb.community.domain.admin.dto.response.AdminReportPageResponse;
 import com.gb.community.domain.admin.dto.response.AdminReportedAuthorDetailResponse;
 import com.gb.community.domain.admin.dto.response.AdminReportedAuthorView;
@@ -72,6 +73,12 @@ public class CommunityAdminInternalController {
     public ApiResponse<Void> dismiss(@PathVariable String publicId) {
         communityAdminInternalService.dismissPostReports(publicId);
         return ApiResponse.success(null);
+    }
+
+    @Operation(summary = "[Internal] 게시글 단건 본문 조회 (신고 처리 보기용)")
+    @GetMapping("/posts/{publicId}")
+    public ApiResponse<AdminPostDetailResponse> postDetail(@PathVariable String publicId) {
+        return ApiResponse.success(communityAdminInternalService.getPostDetail(publicId));
     }
 
     @Operation(summary = "[Internal] 댓글 삭제 → soft-delete + 연관 reports RESOLVED_DELETED (신규)")

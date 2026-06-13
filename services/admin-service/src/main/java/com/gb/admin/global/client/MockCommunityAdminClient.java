@@ -66,6 +66,17 @@ public class MockCommunityAdminClient implements CommunityAdminClient {
     }
 
     @Override
+    public AdminPostDetail postDetail(String postPublicId) {
+        return new AdminPostDetail(
+                postPublicId,
+                "77777777-7777-7777-7777-777777777777",
+                "신고된 게시글 제목(목업)",
+                "신고된 게시글 본문입니다. 실제 환경에서는 community-service에서 원문을 가져옵니다.\n\n— Mock 데이터",
+                "ko",
+                LocalDateTime.of(2026, 6, 7, 8, 0, 0));
+    }
+
+    @Override
     public long pendingReportCount() {
         return 17L;
     }

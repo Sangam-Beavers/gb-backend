@@ -2,6 +2,7 @@ package com.gb.community.domain.admin.service.impl;
 
 import com.gb.common.exception.BusinessException;
 import com.gb.common.exception.CommonErrorCode;
+import com.gb.community.domain.admin.dto.response.AdminPostDetailResponse;
 import com.gb.community.domain.admin.dto.response.AdminReportPageResponse;
 import com.gb.community.domain.admin.dto.response.AdminReportView;
 import com.gb.community.domain.admin.dto.response.AdminReportedAuthorDetailResponse;
@@ -130,6 +131,13 @@ public class CommunityAdminInternalServiceImpl implements CommunityAdminInternal
         post.softDelete();
         reportRepository.updateStatusByTarget(
                 ReportTargetType.POST, post.getId(), ReportStatus.RESOLVED_DELETED);
+    }
+
+    @Override
+    public AdminPostDetailResponse getPostDetail(String publicId) {
+        Post post = postRepository.findByPublicIdAndDeletedAtIsNull(publicId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND));
+        return AdminPostDetailResponse.from(post);
     }
 
     @Override

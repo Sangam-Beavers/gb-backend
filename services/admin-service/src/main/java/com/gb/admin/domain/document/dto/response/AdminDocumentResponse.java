@@ -28,4 +28,14 @@ public record AdminDocumentResponse(
                 s.analyzedAt()
         );
     }
+
+    /** member lookup으로 보강한 표시 이름(userName)으로 매핑. */
+    public static AdminDocumentResponse from(AdminDocumentSummary s, String userName) {
+        return new AdminDocumentResponse(
+                s.documentPublicId(), s.userPublicId(), userName,
+                s.analysisDocumentType(), s.language(),
+                s.overallRiskLevel(), s.followUpAction(),
+                s.analyzedAt()
+        );
+    }
 }
