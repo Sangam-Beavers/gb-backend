@@ -11,7 +11,7 @@ import java.math.BigDecimal;
  * <p>구현체:
  * <ul>
  *   <li>{@link MockAppAdminClient} — {@code @Profile("dev | test")}: 고정 값 반환 (연동 없음).</li>
- *   <li>{@link RealAppAdminClient} — {@code @Profile("!dev & !test")}: {@code GET /api/v1/app/fee-policies} 호출.</li>
+ *   <li>{@link RealAppAdminClient} — {@code @Profile("!dev & !test")}: {@code GET /api/v1/app-admin/app/fee-policies} 호출.</li>
  * </ul>
  */
 public interface AppAdminClient {

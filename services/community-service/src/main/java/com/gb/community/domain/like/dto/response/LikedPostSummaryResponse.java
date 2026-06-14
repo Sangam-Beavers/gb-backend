@@ -40,8 +40,24 @@ public class LikedPostSummaryResponse {
     @Schema(description = "작성 언어 코드(ko/en/vi/fil)", example = "ko")
     private final String language;
 
+    @Schema(description = "작성자 식별자(UUID). 사진 미설정 시 기본 아바타 시드로 사용",
+            example = "11111111-1111-1111-1111-111111111111")
+    private final String authorPublicId;
+
     @Schema(description = "작성자 닉네임", example = "Minh")
     private final String authorNickname;
+
+    @Schema(description = "작성자 프로필 사진 URL. 미설정 시 null(프론트는 기본 아바타로 대체)",
+            example = "null", nullable = true)
+    private final String authorProfileImageUrl;
+
+    @Schema(description = "작성자 신뢰등급(마일스톤 기반 — 이슈 #194). 표시정보 조회 실패·누락 시 NEWCOMER 폴백",
+            allowableValues = {"NEWCOMER", "VERIFIED", "CONNECTED", "TRUSTED"}, example = "VERIFIED")
+    private final String authorTrustGrade;
+
+    @Schema(description = "작성자 아바타 색조 회전 각도(0~359°). 마이페이지 '색깔 변경' 저장값. 미설정·폴백 시 0",
+            example = "120")
+    private final int authorAvatarHue;
 
     @Schema(description = "좋아요 수", example = "3")
     private final Integer likeCount;
@@ -57,7 +73,8 @@ public class LikedPostSummaryResponse {
 
     @Builder
     private LikedPostSummaryResponse(String publicId, String category, String title, String contentPreview,
-                                     String language, String authorNickname,
+                                     String language, String authorPublicId, String authorNickname,
+                                     String authorProfileImageUrl, String authorTrustGrade, int authorAvatarHue,
                                      Integer likeCount, Integer commentCount,
                                      String createdAt, String likedAt) {
         this.publicId = publicId;
@@ -65,7 +82,11 @@ public class LikedPostSummaryResponse {
         this.title = title;
         this.contentPreview = contentPreview;
         this.language = language;
+        this.authorPublicId = authorPublicId;
         this.authorNickname = authorNickname;
+        this.authorProfileImageUrl = authorProfileImageUrl;
+        this.authorTrustGrade = authorTrustGrade;
+        this.authorAvatarHue = authorAvatarHue;
         this.likeCount = likeCount;
         this.commentCount = commentCount;
         this.createdAt = createdAt;
@@ -79,7 +100,11 @@ public class LikedPostSummaryResponse {
                 .title(post.getTitle())
                 .contentPreview(preview(post.getContent()))
                 .language(post.getLanguage())
+                .authorPublicId(post.getUserPublicId())
                 .authorNickname(author.nickname())
+                .authorProfileImageUrl(author.profileImageUrl())
+                .authorTrustGrade(author.trustGrade())
+                .authorAvatarHue(author.avatarHue())
                 .likeCount(post.getLikeCount())
                 .commentCount(post.getCommentCount())
                 .createdAt(UtcTime.toUtcZ(post.getCreatedAt()))
