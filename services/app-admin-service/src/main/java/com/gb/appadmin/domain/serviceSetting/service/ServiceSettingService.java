@@ -8,6 +8,7 @@ import java.util.List;
 public interface ServiceSettingService {
     List<ServiceSettingResponse> listAll();
     ServiceSettingResponse getByPublicId(String publicId);
+    ServiceSettingResponse getBySettingKey(String settingKey);
     ServiceSettingResponse create(ServiceSettingCreateRequest request);
     ServiceSettingResponse update(String publicId, ServiceSettingUpdateRequest request);
 }
