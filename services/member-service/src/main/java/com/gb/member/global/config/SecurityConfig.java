@@ -52,6 +52,8 @@ public class SecurityConfig {
                         // TODO(다음 스프린트): mTLS·NetworkPolicy로 격리. 현재는 admin-service가 JWT 없이
                         //   호출할 수 있도록 임시 permitAll. 외부 노출 금지 — Ingress에서 /internal 경로 차단.
                         .requestMatchers("/api/v1/internal/admin/**").permitAll()
+                        // document-service 크레딧 조회/차감 내부 API(이슈 #244). 동일 임시 permitAll.
+                        .requestMatchers("/api/v1/internal/members/**").permitAll()
                         // 그 외 전부 인증 필요(로그아웃, /members/me* 등)
                         .anyRequest().authenticated())
                 // 검표원: issuer-uri의 JWKS로 RS256 토큰 검증. 실패(만료·위조·서명 불일치) 시 AUTH4011.

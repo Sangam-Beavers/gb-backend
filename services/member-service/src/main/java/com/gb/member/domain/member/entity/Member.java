@@ -217,8 +217,23 @@ public class Member extends BaseEntity {
     @ColumnDefault("false")
     private boolean communityBanned = false;
 
+    // 서류 분석 크레딧(이슈 #244). 가입 시 app-admin의 DOC_ANALYSIS_CREDIT 설정값으로 초기화된다.
+    // 분석 제출 시 document-service가 PATCH /api/v1/internal/members/{id}/credit/use 를 호출해 1씩 차감하며,
+    // 0이면 MEMBER4007(422)으로 제출 불가. @ColumnDefault("3"): ddl-auto:update가 기존 행을 3으로 백필한다.
+    @Column(name = "doc_analysis_credit", nullable = false)
+    @ColumnDefault("3")
+    private int docAnalysisCredit = 3;
+
     /** 관리자 커뮤니티 활동 제한/해제. */
     public void setCommunityBanned(boolean communityBanned) {
         this.communityBanned = communityBanned;
+    }
+
+    /**
+     * 서류 분석 크레딧 초기화(이슈 #244). 가입 직후 app-admin에서 읽어온 초기값을 반영한다.
+     * 빌더에 포함하지 않아 기본값(3)이 유지되며, 서비스에서 가입 후 명시적으로 설정한다.
+     */
+    public void initCredit(int credit) {
+        this.docAnalysisCredit = credit;
     }
 }
