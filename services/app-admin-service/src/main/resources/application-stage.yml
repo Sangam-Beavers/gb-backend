@@ -25,3 +25,5 @@ spring:
         jwt:
           # AUTH_ISSUER_URI = Cognito issuer (PS /sb/stage/member/AUTH_ISSUER_URI → k8s Secret, member와 공용)
           issuer-uri: ${AUTH_ISSUER_URI}
+# 관리자 경로 /api/v1/app-admin/admin/** 는 SecurityConfig가 항상 Cognito admin 그룹(cognito:groups=admin)으로
+# 보호한다(플래그 불필요·fail-closed). 앱 사용자용 /api/v1/app-admin/app/** 는 공개 유지.
