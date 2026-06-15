@@ -19,6 +19,7 @@ import com.gb.member.domain.member.entity.Gender;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
 import com.gb.member.domain.member.service.MemberService;
+import com.gb.member.global.client.AppAdminClient;
 import com.gb.member.global.client.IdpUserClient;
 import com.gb.member.global.exception.code.MemberErrorCode;
 import com.gb.member.global.mail.EmailSender;
@@ -45,6 +46,7 @@ public class MemberServiceImpl implements MemberService {
 
     private final MemberRepository memberRepository;
     private final IdpUserClient idpUserClient;
+    private final AppAdminClient appAdminClient;
     private final PasswordResetTokenStore passwordResetTokenStore;
     private final PasswordResetRateLimiter passwordResetRateLimiter;
     private final EmailSender emailSender;
@@ -117,6 +119,11 @@ public class MemberServiceImpl implements MemberService {
                 .privacyAgreed(request.getPrivacyAgreed() == null || request.getPrivacyAgreed())
                 .consentAgreedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
+
+        // 서류 분석 크레딧 초기화(이슈 #244). IdP 프로비저닝 이후, DB INSERT 이전에 실행한다.
+        // fail-open: app-admin 장애 시 AppAdminClient가 기본값(3)을 반환하므로 가입이 중단되지 않는다.
+        member.initCredit(appAdminClient.getDocAnalysisCredit());
+
         Member savedMember;
         try {
             savedMember = memberRepository.saveAndFlush(member);
@@ -176,6 +183,9 @@ public class MemberServiceImpl implements MemberService {
                 .privacyAgreed(request.getPrivacyAgreed() == null || request.getPrivacyAgreed())
                 .consentAgreedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
+
+        // 서류 분석 크레딧 초기화(이슈 #244 — 이메일 가입과 동일 정책).
+        member.initCredit(appAdminClient.getDocAnalysisCredit());
 
         // saveAndFlush로 INSERT를 이 메서드 안에서 강제해, 위 existsBy를 통과한 동시 호출 race의 UNIQUE 위반
         // (publicId/email/nickname)을 contextual하게 잡는다(중앙 핸들러는 이제 DataIntegrityViolation을 500으로

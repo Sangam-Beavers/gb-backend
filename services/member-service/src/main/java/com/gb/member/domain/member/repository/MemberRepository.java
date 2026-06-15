@@ -8,6 +8,7 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -43,6 +44,24 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     // findByEmail과 달리 탈퇴자를 제외한다: 탈퇴 회원은 송금 수신자가 될 수 없으므로 "없음"으로
     // 응답해야 한다(재가입 차단용 findByEmail의 무필터 정책과 용도가 다름 — 위 주석 참고).
     Optional<Member> findByEmailAndDeletedAtIsNull(String email);
+
+    // ===== Credit (internal) =====
+
+    /**
+     * 크레딧을 원자적으로 1 차감한다(이슈 #244). DB UPDATE 레벨에서 race condition을 방지한다.
+     * doc_analysis_credit > 0 이고 활성 회원인 경우에만 차감하며, 영향받은 행 수(0 또는 1)를 반환한다.
+     * 0 반환 = 크레딧 부족 또는 회원 없음 — 호출 측에서 구분해 적절한 예외를 던진다.
+     * clearAutomatically = true: UPDATE 후 영속성 컨텍스트를 클리어해 이후 조회가 최신 값을 반환하게 한다.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("""
+            UPDATE Member m
+            SET m.docAnalysisCredit = m.docAnalysisCredit - 1
+            WHERE m.publicId = :publicId
+              AND m.deletedAt IS NULL
+              AND m.docAnalysisCredit > 0
+            """)
+    int decrementCreditIfPositive(@Param("publicId") String publicId);
 
     // ===== Admin internal API =====
 
