@@ -33,6 +33,14 @@ public class ServiceSettingServiceImpl implements ServiceSettingService {
     }
 
     @Override
+    public ServiceSettingResponse getBySettingKey(String settingKey) {
+        return ServiceSettingResponse.from(
+                settingRepository.findBySettingKey(settingKey)
+                        .orElseThrow(() -> new BusinessException(AppAdminErrorCode.SERVICE_SETTING_NOT_FOUND))
+        );
+    }
+
+    @Override
     @Transactional
     public ServiceSettingResponse create(ServiceSettingCreateRequest request) {
         ServiceSetting setting = ServiceSetting.builder()
