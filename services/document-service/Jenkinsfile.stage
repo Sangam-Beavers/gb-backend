@@ -192,6 +192,7 @@ pipeline {
               fi
               git add ${VALUES_PATH}
               git commit -m "ci: bump document-service image to ${IMAGE_TAG} (stage, multi-arch)"
+              git pull --rebase origin ${INFRA_BRANCH}
               git push origin ${INFRA_BRANCH}
             '''
           }
