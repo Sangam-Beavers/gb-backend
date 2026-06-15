@@ -79,15 +79,15 @@ public class RealCommunityAdminClient implements CommunityAdminClient {
                     .queryParam("size", size)
                     .build().toUriString();
 
-            Envelope<ByAuthorPagePayload> env = communityRestClient.get().uri(uri)
+            Envelope<List<AuthorAggWire>> env = communityRestClient.get().uri(uri)
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {});
 
-            ByAuthorPagePayload payload = env == null ? null : env.data();
-            if (payload == null || payload.authors() == null) {
+            List<AuthorAggWire> authors = env == null ? null : env.data();
+            if (authors == null) {
                 return List.of();
             }
-            return payload.authors().stream()
+            return authors.stream()
                     .map(a -> new ReportedAuthorSummary(
                             a.authorPublicId(), null, null,
                             a.totalReportCount(), a.reportedContentCount()))
@@ -101,12 +101,13 @@ public class RealCommunityAdminClient implements CommunityAdminClient {
     @Override
     public List<MemberReportItemResponse> getMemberReports(String authorPublicId) {
         try {
-            Envelope<List<AdminReportViewWire>> env = communityRestClient.get()
+            Envelope<AuthorDetailWire> env = communityRestClient.get()
                     .uri("/api/v1/internal/admin/reports/by-author/{id}", authorPublicId)
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {});
 
-            List<AdminReportViewWire> items = env == null ? null : env.data();
+            AuthorDetailWire detail = env == null ? null : env.data();
+            List<AdminReportViewWire> items = (detail == null) ? null : detail.reportedContents();
             if (items == null) {
                 return List.of();
             }
@@ -161,12 +162,9 @@ public class RealCommunityAdminClient implements CommunityAdminClient {
             @JsonProperty("created_at") String createdAt) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record ByAuthorPagePayload(
-            @JsonProperty("authors") List<AuthorAggWire> authors,
-            @JsonProperty("page") int page,
-            @JsonProperty("size") int size,
-            @JsonProperty("total_elements") long totalElements,
-            @JsonProperty("total_pages") int totalPages) {}
+    record AuthorDetailWire(
+            @JsonProperty("author_public_id") String authorPublicId,
+            @JsonProperty("reported_contents") List<AdminReportViewWire> reportedContents) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record AuthorAggWire(
@@ -181,7 +179,7 @@ public class RealCommunityAdminClient implements CommunityAdminClient {
             @JsonProperty("author_public_id") String authorPublicId,
             @JsonProperty("target_type") String targetType,
             @JsonProperty("category") String category,
-            @JsonProperty("report_count") int reportCount,
+            @JsonProperty("report_count") long reportCount,
             @JsonProperty("status") String status,
             @JsonProperty("last_reported_at") String lastReportedAt) {}
 }
