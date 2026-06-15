@@ -14,6 +14,7 @@ import com.gb.document.domain.document.entity.ProcessingStatus;
 import com.gb.document.domain.document.repository.DocumentRepository;
 import com.gb.document.domain.document.repository.DocumentResultRepository;
 import com.gb.document.domain.document.service.DocumentSubmissionService;
+import com.gb.document.global.client.member.MemberCreditClient;
 import com.gb.document.global.client.s3.S3PresignedUrlClient;
 import com.gb.document.global.config.AnalysisProperties;
 import com.gb.document.global.exception.code.DocumentErrorCode;
@@ -41,10 +42,14 @@ public class DocumentSubmissionServiceImpl implements DocumentSubmissionService 
     private final DocumentResultRepository documentResultRepository;
     private final S3PresignedUrlClient s3PresignedUrlClient;
     private final AnalysisProperties analysisProperties;
+    private final MemberCreditClient memberCreditClient;
 
     @Override
     @Transactional
     public SubmissionResponse submit(String userPublicId, SubmitRequest request) {
+        // 크레딧 차감 — 잔여 크레딧 0이면 DOCUMENT4002(422). DB 저장 전에 선행해 크레딧 소모 후 실패 방지.
+        memberCreditClient.useCredit(userPublicId);
+
         String publicId = UUID.randomUUID().toString();
         // 발급 시점에 키를 확정해 엔티티에 저장 — 어떤 키로 업로드를 받았는지 기록(추적·디버깅).
         String s3Key = buildS3Key(publicId, request.fileName());

@@ -44,6 +44,14 @@ management:
       slo:
         http.server.requests: 50ms, 100ms, 200ms, 500ms, 1s
 
+# member-service 내부 API 호출 설정 (크레딧 차감 등).
+# base-url은 환경변수 MEMBER_API_BASE_URL로 주입. 미설정 시 K8s 내부 서비스 DNS 기본값.
+member:
+  api:
+    base-url: ${MEMBER_API_BASE_URL:http://member-service:8081}
+    connect-timeout: ${MEMBER_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${MEMBER_API_READ_TIMEOUT:5s}
+
 # 챗봇 Lambda Function URL 호출 설정 (ai-chatbot-mcp.md §6).
 # 로컬 PoC: function-url을 localhost mock으로, auth-enabled=false로 두면 IAM 서명 스킵.
 # AWS 배포 후: 실제 Function URL + auth-enabled=true + 백엔드 EC2/EKS의 IAM 역할 사용.
