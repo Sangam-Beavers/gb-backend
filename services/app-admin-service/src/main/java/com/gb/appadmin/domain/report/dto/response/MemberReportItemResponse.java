@@ -10,7 +10,7 @@ public record MemberReportItemResponse(
         String authorPublicId,
         String targetType,
         String category,
-        int reportCount,
+        long reportCount,
         String status,
         String lastReportedAt
 ) {}
