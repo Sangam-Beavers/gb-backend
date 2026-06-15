@@ -1,8 +1,5 @@
 package com.gb.admin.global.security;
 
-import com.gb.admin.global.config.AdminSecurityPolicy;
-import com.gb.common.exception.AuthErrorCode;
-import com.gb.common.exception.BusinessException;
 import org.springframework.core.MethodParameter;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -22,15 +19,10 @@ import org.springframework.web.method.support.ModelAndViewContainer;
  * 여기서 {@link Jwt}를 꺼내 custom claim {@code public_id}(관리자 대외 식별자, UUID)를 읽어 컨트롤러에
  * {@code String adminPublicId}로 바인딩한다.
  *
- * <p><b>인가 활성 (stage/prod, {@link AdminSecurityPolicy#isAdminGroupEnforced()}):</b> 토큰이 없거나
- * {@code public_id} 가 비어 있으면 {@code AUTH4011} 로 fail-fast 한다 (member-service 리졸버와 동형). 보호
- * 경로 ({@code /api/v1/admin/**}) 는 필터에서 이미 인증·그룹을 막으므로 토큰 부재 분기는 사실상 도달 불가이며,
- * {@code public_id} 누락 (pre-token Lambda 미동작 등) 시 placeholder 운영자로 감사 로그가 오염되는 비대칭을
- * 막는다 (non-repudiation).
- *
- * <p><b>무인증 콘솔 (dev/local, 인가 비활성):</b> SecurityContext에 JWT가 없을 수 있으므로
- * {@link #FALLBACK_ADMIN_PUBLIC_ID} (placeholder 운영자) 로 폴백한다 — 액션은 수행되고 audit_log엔
- * placeholder가 남는다. 인가를 켜면 위의 fail-fast 경로로 전환된다.
+ * <p><b>현재(no-login 콘솔)</b>: admin-service는 SecurityConfig에서 OAuth2 검증이 비활성(permitAll)이라
+ * SecurityContext에 JWT가 없다. 이때 fail-fast(AUTH4011)하면 삭제·숨김·KYC 등 운영 액션이 전부 401이 되므로,
+ * 토큰이 없으면 {@link #FALLBACK_ADMIN_PUBLIC_ID}(placeholder 운영자)로 폴백한다 — 액션은 수행되고 audit_log엔
+ * placeholder가 남는다. 인증(OAuth2)을 다시 켜면 실제 토큰의 {@code public_id} claim이 그대로 흐른다.
  */
 @Component
 public class CurrentAdminPublicIdArgumentResolver implements HandlerMethodArgumentResolver {
@@ -40,12 +32,6 @@ public class CurrentAdminPublicIdArgumentResolver implements HandlerMethodArgume
 
     /** no-login 콘솔에서 토큰이 없을 때 audit_log에 남길 placeholder 운영자 ID(UUID 형식 sentinel). */
     public static final String FALLBACK_ADMIN_PUBLIC_ID = "00000000-0000-0000-0000-000000000000";
-
-    private final AdminSecurityPolicy securityPolicy;
-
-    public CurrentAdminPublicIdArgumentResolver(AdminSecurityPolicy securityPolicy) {
-        this.securityPolicy = securityPolicy;
-    }
 
     @Override
     public boolean supportsParameter(MethodParameter parameter) {
@@ -61,21 +47,14 @@ public class CurrentAdminPublicIdArgumentResolver implements HandlerMethodArgume
             WebDataBinderFactory binderFactory) {
 
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        // no-login 콘솔: JWT가 없으면 placeholder 운영자로 폴백(액션 수행 가능). 인증 재활성 시 실제 claim이 흐름.
         if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
-            // 인가 활성: 토큰 없으면 fail-fast(AUTH4011). 무인증 콘솔(dev): placeholder 운영자로 폴백.
-            if (securityPolicy.isAdminGroupEnforced()) {
-                throw new BusinessException(AuthErrorCode.UNAUTHORIZED);
-            }
             return FALLBACK_ADMIN_PUBLIC_ID;
         }
 
         Jwt jwt = jwtAuthentication.getToken();
         String adminPublicId = jwt.getClaimAsString(CLAIM_PUBLIC_ID);
         if (!StringUtils.hasText(adminPublicId)) {
-            // 토큰은 있으나 public_id 누락: 인가 활성 시 placeholder 귀속(감사 오염)을 막기 위해 fail-fast.
-            if (securityPolicy.isAdminGroupEnforced()) {
-                throw new BusinessException(AuthErrorCode.UNAUTHORIZED);
-            }
             return FALLBACK_ADMIN_PUBLIC_ID;
         }
         return adminPublicId;
