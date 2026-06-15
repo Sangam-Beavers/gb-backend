@@ -145,14 +145,12 @@ public class ChatbotLambdaClientImpl implements ChatbotLambdaClient {
                 throw new IllegalStateException("Chatbot Lambda history functionError: " + response.functionError());
             }
 
-            JsonNode root = objectMapper.readTree(response.payload().asUtf8String());
-            int statusCode = root.path("statusCode").asInt(0);
-            String body = root.path("body").isMissingNode() ? null : root.path("body").asText(null);
-            if (statusCode != 200 || body == null) {
+            HistoryEnvelope env = parseInvokePayload(response.payload().asByteArray());
+            if (env.statusCode() != 200 || env.body() == null || env.body().isBlank()) {
                 throw new IllegalStateException(
-                        "Chatbot Lambda history HTTP " + statusCode + " — " + truncateForLog(body));
+                        "Chatbot Lambda history HTTP " + env.statusCode() + " — " + truncateForLog(env.body()));
             }
-            return objectMapper.readValue(body, ChatHistoryResponse.class);
+            return objectMapper.readValue(env.body(), ChatHistoryResponse.class);
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
@@ -188,6 +186,41 @@ public class ChatbotLambdaClientImpl implements ChatbotLambdaClient {
             event.put("isBase64Encoded", false);
         }
         return objectMapper.writeValueAsBytes(event);
+    }
+
+    /** invoke 응답 봉투 — RESPONSE_STREAM prelude 처리 후의 (statusCode, body). */
+    private record HistoryEnvelope(int statusCode, String body) {}
+
+    /**
+     * 동기 invoke 응답 payload를 (statusCode, body)로 파싱한다.
+     *
+     * <p>이 함수는 RESPONSE_STREAM(LWA) 모드라, 동기 {@link LambdaClient#invoke}로 불러도 응답이
+     * 스트리밍과 동일한 wire format으로 온다: prelude({@code {"statusCode":200,"headers":{...},"cookies":[]}})
+     * + null 8바이트 구분자 + 실제 HTTP 본문. prelude에는 {@code body} 필드가 없으므로 그대로
+     * {@code readTree(...).path("body")}로 읽으면 항상 null이 되어 500으로 떨어진다(이력 조회 깨짐).
+     * 구분자를 찾아 prelude(→statusCode)와 본문을 분리한다. 구분자가 없으면 BUFFERED 모드의
+     * {@code {statusCode, body}} 봉투로 간주한다.
+     */
+    private HistoryEnvelope parseInvokePayload(byte[] raw) throws IOException {
+        int nullRun = 0;
+        for (int i = 0; i < raw.length; i++) {
+            if (raw[i] == 0) {
+                if (++nullRun == 8) {
+                    int preludeLen = i - 7;          // null 8개 시작 직전까지가 prelude
+                    int bodyStart = i + 1;
+                    JsonNode prelude = objectMapper.readTree(
+                            new String(raw, 0, preludeLen, StandardCharsets.UTF_8));
+                    String body = new String(raw, bodyStart, raw.length - bodyStart, StandardCharsets.UTF_8);
+                    return new HistoryEnvelope(prelude.path("statusCode").asInt(0), body);
+                }
+            } else {
+                nullRun = 0;
+            }
+        }
+        // 구분자 없음 — BUFFERED {statusCode, body} 봉투
+        JsonNode root = objectMapper.readTree(raw);
+        String body = root.path("body").isMissingNode() ? null : root.path("body").asText(null);
+        return new HistoryEnvelope(root.path("statusCode").asInt(0), body);
     }
 
     private static String enc(String v) {
