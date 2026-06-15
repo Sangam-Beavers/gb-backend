@@ -1,9 +1,17 @@
 # stage 프로파일 — 모든 값은 환경변수로 주입 (실제 값 절대 기재 금지)
-# DB: SM(sb/stage/admin/db) → ESO → k8s Secret(admin-secrets)
-# admin-service는 Redis/Kafka/Mail 미사용. 인증(OAuth2)도 의도적으로 비활성(로그인 없음 — SecurityConfig permitAll).
+# DB:   SM(sb/stage/admin/db)                → ESO → k8s Secret(admin-secrets)
+# Auth: PS(/sb/stage/member/AUTH_ISSUER_URI) → ESO → k8s Secret (member와 공용 Cognito issuer)
+# admin-service는 Redis/Kafka/Mail 미사용. stage는 Cognito 검표원 + admin 그룹 인가를 켠다
+#   (app.security.admin-group-enforced: true). dev/local은 무인증 콘솔(SecurityConfig permitAll) 유지.
 # 다른 서비스 health/internal URL과 Grafana/ArgoCD base URL은 base application.yaml의
 #   ${ENV:default}를 ConfigMap(admin-config) env로 덮어쓴다(여기 재정의 불필요).
 spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # AUTH_ISSUER_URI = Cognito issuer (PS /sb/stage/member/AUTH_ISSUER_URI → k8s Secret, member와 공용)
+          issuer-uri: ${AUTH_ISSUER_URI}
   datasource:
     url: jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}?serverTimezone=UTC&characterEncoding=UTF-8
     username: ${SPRING_DATASOURCE_USERNAME}
@@ -18,3 +26,9 @@ spring:
         dialect: org.hibernate.dialect.MySQLDialect
         format_sql: false
     show-sql: false
+
+# stage 한정 — Cognito admin 그룹(cognito:groups=admin) 보유자만 /api/v1/admin/** 접근 허용.
+# 플래그가 켜지면 SecurityConfig가 검표원(oauth2ResourceServer)도 함께 활성화한다(issuer-uri 필요).
+app:
+  security:
+    admin-group-enforced: true
