@@ -4,6 +4,7 @@ import com.gb.wallet.domain.admin.dto.response.AdminTransactionPageResponse;
 import com.gb.wallet.domain.admin.dto.response.ChargeAttemptPageResponse;
 import com.gb.wallet.domain.admin.dto.response.TransactionAuditLogPageResponse;
 import com.gb.wallet.domain.admin.dto.response.TransactionAuditTrailResponse;
+import com.gb.wallet.domain.admin.dto.response.RevenueStatsResponse;
 import com.gb.wallet.domain.admin.dto.response.TransactionStatsResponse;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -31,4 +32,7 @@ public interface WalletAdminInternalService {
             String status, String userPublicId, int page, int size);
 
     TransactionStatsResponse getStats(LocalDateTime from, LocalDateTime to);
+
+    /** 수익(환전/송금 수수료) 통계 — 누적·이번 달·통화별·월별 추이. */
+    RevenueStatsResponse getRevenue();
 }

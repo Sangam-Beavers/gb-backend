@@ -4,6 +4,7 @@ import com.gb.common.response.ApiResponse;
 import com.gb.wallet.domain.admin.dto.response.AdminTransactionPageResponse;
 import com.gb.wallet.domain.admin.dto.response.ChargeAttemptPageResponse;
 import com.gb.wallet.domain.admin.dto.response.TransactionAuditLogPageResponse;
+import com.gb.wallet.domain.admin.dto.response.RevenueStatsResponse;
 import com.gb.wallet.domain.admin.dto.response.TransactionAuditTrailResponse;
 import com.gb.wallet.domain.admin.dto.response.TransactionStatsResponse;
 import com.gb.wallet.domain.admin.service.WalletAdminInternalService;
@@ -91,5 +92,11 @@ public class AdminInternalController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to) {
         return ApiResponse.success(walletAdminInternalService.getStats(from, to));
+    }
+
+    @Operation(summary = "[Internal] 수익(환전/송금 수수료) 통계")
+    @GetMapping("/stats/revenue")
+    public ApiResponse<RevenueStatsResponse> getRevenue() {
+        return ApiResponse.success(walletAdminInternalService.getRevenue());
     }
 }

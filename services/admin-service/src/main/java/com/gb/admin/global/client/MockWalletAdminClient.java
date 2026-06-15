@@ -151,4 +151,31 @@ public class MockWalletAdminClient implements WalletAdminClient {
         byStatus.put("PENDING", 3L);
         return new AdminWalletStats(totals, byAction, byStatus, "0.9971", "0.9950", 12430L, 3L);
     }
+
+    @Override
+    public AdminRevenueStats revenue() {
+        // 발표용 fixture — 누적 환전+송금 수수료 수익 + 통화별/월별 추이.
+        List<AdminRevenueStats.CurrencyFee> byCurrency = List.of(
+                new AdminRevenueStats.CurrencyFee("USD", "7650000.0000", "4120000.0000"),
+                new AdminRevenueStats.CurrencyFee("VND", "5210000.0000", "3080000.0000"),
+                new AdminRevenueStats.CurrencyFee("CNY", "3380000.0000", "1640000.0000"),
+                new AdminRevenueStats.CurrencyFee("PHP", "1290000.0000", "560000.0000"),
+                new AdminRevenueStats.CurrencyFee("NPR", "900000.0000", "320000.0000"));
+        List<AdminRevenueStats.MonthlyFee> monthlyTrend = List.of(
+                new AdminRevenueStats.MonthlyFee("2026-01", "2100000.0000", "1200000.0000"),
+                new AdminRevenueStats.MonthlyFee("2026-02", "2450000.0000", "1350000.0000"),
+                new AdminRevenueStats.MonthlyFee("2026-03", "2780000.0000", "1510000.0000"),
+                new AdminRevenueStats.MonthlyFee("2026-04", "3020000.0000", "1640000.0000"),
+                new AdminRevenueStats.MonthlyFee("2026-05", "3260000.0000", "1760000.0000"),
+                new AdminRevenueStats.MonthlyFee("2026-06", "3210000.0000", "1840000.0000"));
+        return new AdminRevenueStats(
+                "KRW",
+                "18430000.0000",
+                "9720000.0000",
+                "28150000.0000",
+                "3210000.0000",
+                "1840000.0000",
+                byCurrency,
+                monthlyTrend);
+    }
 }

@@ -7,6 +7,7 @@ import com.gb.admin.domain.monitoring.dto.response.DomainSloResponse;
 import com.gb.admin.domain.monitoring.dto.response.InfraAlertsResponse;
 import com.gb.admin.domain.monitoring.dto.response.EmbedsResponse;
 import com.gb.admin.domain.monitoring.dto.response.QueuesResponse;
+import com.gb.admin.domain.monitoring.dto.response.RevenueResponse;
 import com.gb.admin.domain.monitoring.dto.response.ServiceHealthResponse;
 
 public interface MonitoringService {
@@ -24,6 +25,8 @@ public interface MonitoringService {
     EmbedsResponse embeds();
 
     BusinessAnalyticsResponse businessAnalytics();
+
+    RevenueResponse revenue();
 
     InfraAlertsResponse infraAlerts();
 }

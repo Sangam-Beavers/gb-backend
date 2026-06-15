@@ -11,12 +11,16 @@ import com.gb.wallet.domain.admin.dto.response.ChargeAttemptView;
 import com.gb.wallet.domain.admin.dto.response.TransactionAuditLogPageResponse;
 import com.gb.wallet.domain.admin.dto.response.TransactionAuditLogView;
 import com.gb.wallet.domain.admin.dto.response.TransactionAuditTrailResponse;
+import com.gb.wallet.domain.admin.dto.response.RevenueStatsResponse;
+import com.gb.wallet.domain.admin.dto.response.RevenueStatsResponse.CurrencyFee;
+import com.gb.wallet.domain.admin.dto.response.RevenueStatsResponse.MonthlyFee;
 import com.gb.wallet.domain.admin.dto.response.TransactionStatsResponse;
 import com.gb.wallet.domain.admin.service.WalletAdminInternalService;
 import com.gb.wallet.domain.transaction.entity.Transaction;
 import com.gb.wallet.domain.transaction.entity.TransactionAuditLog;
 import com.gb.wallet.domain.transaction.repository.TransactionAuditLogRepository;
 import com.gb.wallet.domain.transaction.repository.TransactionRepository;
+import com.gb.wallet.domain.transaction.repository.TransactionRepository.FeeByTypeCurrencyProjection;
 import com.gb.wallet.global.common.enums.CurrencyType;
 import com.gb.wallet.global.common.enums.TransactionStatus;
 import com.gb.wallet.global.common.enums.TransactionType;
@@ -25,6 +29,8 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.YearMonth;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -197,6 +203,85 @@ public class WalletAdminInternalServiceImpl implements WalletAdminInternalServic
 
         return new TransactionStatsResponse(
                 totals, byAction, byStatus, remRate, chargeRate, dau, failedChargeQueue);
+    }
+
+    @Override
+    public RevenueStatsResponse getRevenue() {
+        // 수익 = COMPLETED 환전/송금 거래의 fee 합계. (전체기간 + 이번 달 + 통화별 + 월별 추이)
+        // 기준 통화는 KRW — 외국인 근로자 환전/송금의 출금 통화가 KRW라 수수료도 KRW 기준이다.
+        List<FeeByTypeCurrencyProjection> allTime = transactionRepository.sumFeeByTypeAndCurrency(null, null);
+
+        BigDecimal totalExchange = BigDecimal.ZERO;
+        BigDecimal totalRemittance = BigDecimal.ZERO;
+        // 통화별 [환전, 송금] 누적. 입력 순서 유지를 위해 LinkedHashMap.
+        Map<CurrencyType, BigDecimal[]> byCur = new LinkedHashMap<>();
+        for (FeeByTypeCurrencyProjection p : allTime) {
+            BigDecimal fee = p.getTotalFee() != null ? p.getTotalFee() : BigDecimal.ZERO;
+            BigDecimal[] slot = byCur.computeIfAbsent(p.getCurrencyCode(),
+                    k -> new BigDecimal[] {BigDecimal.ZERO, BigDecimal.ZERO});
+            if (p.getType() == TransactionType.EXCHANGE) {
+                totalExchange = totalExchange.add(fee);
+                slot[0] = slot[0].add(fee);
+            } else if (p.getType() == TransactionType.REMITTANCE) {
+                totalRemittance = totalRemittance.add(fee);
+                slot[1] = slot[1].add(fee);
+            }
+        }
+
+        // 이번 달
+        LocalDateTime monthStart = LocalDate.now().withDayOfMonth(1).atStartOfDay();
+        LocalDateTime now = LocalDateTime.of(LocalDate.now(), LocalTime.MAX);
+        BigDecimal[] thisMonth = sumFeesByType(monthStart, now);
+
+        // 통화별 내역 — 환전/송금 둘 다 0인 통화는 제외.
+        List<CurrencyFee> byCurrency = new ArrayList<>();
+        for (Map.Entry<CurrencyType, BigDecimal[]> e : byCur.entrySet()) {
+            BigDecimal ex = e.getValue()[0];
+            BigDecimal rem = e.getValue()[1];
+            if (ex.signum() == 0 && rem.signum() == 0) continue;
+            byCurrency.add(new CurrencyFee(e.getKey().name(), money(ex), money(rem)));
+        }
+
+        // 최근 6개월 추이(이번 달 포함). 기간을 바꿔가며 같은 집계 쿼리를 재사용한다.
+        List<MonthlyFee> monthlyTrend = new ArrayList<>();
+        YearMonth current = YearMonth.from(LocalDate.now());
+        for (int i = 5; i >= 0; i--) {
+            YearMonth ym = current.minusMonths(i);
+            LocalDateTime f = ym.atDay(1).atStartOfDay();
+            LocalDateTime t = ym.atEndOfMonth().atTime(LocalTime.MAX);
+            BigDecimal[] m = sumFeesByType(f, t);
+            monthlyTrend.add(new MonthlyFee(ym.toString(), money(m[0]), money(m[1])));
+        }
+
+        return new RevenueStatsResponse(
+                CurrencyType.KRW.name(),
+                money(totalExchange),
+                money(totalRemittance),
+                money(totalExchange.add(totalRemittance)),
+                money(thisMonth[0]),
+                money(thisMonth[1]),
+                byCurrency,
+                monthlyTrend);
+    }
+
+    /** 기간 내 [환전, 송금] 수수료 합계(통화 무관 단순 합 — 기준 통화 KRW). */
+    private BigDecimal[] sumFeesByType(LocalDateTime from, LocalDateTime to) {
+        BigDecimal exchange = BigDecimal.ZERO;
+        BigDecimal remittance = BigDecimal.ZERO;
+        for (FeeByTypeCurrencyProjection p : transactionRepository.sumFeeByTypeAndCurrency(from, to)) {
+            BigDecimal fee = p.getTotalFee() != null ? p.getTotalFee() : BigDecimal.ZERO;
+            if (p.getType() == TransactionType.EXCHANGE) {
+                exchange = exchange.add(fee);
+            } else if (p.getType() == TransactionType.REMITTANCE) {
+                remittance = remittance.add(fee);
+            }
+        }
+        return new BigDecimal[] {exchange, remittance};
+    }
+
+    /** BigDecimal → 금액 String(소수 4자리, CLAUDE §5). null 은 0 처리. */
+    private static String money(BigDecimal v) {
+        return (v != null ? v : BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP).toPlainString();
     }
 
     private static String formatRate(long success, long total) {

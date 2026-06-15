@@ -201,6 +201,44 @@ public class RealWalletAdminClient implements WalletAdminClient {
         }
     }
 
+    @Override
+    public AdminRevenueStats revenue() {
+        try {
+            InternalApiEnvelope<RevenueStatsPayload> env = restClient.get()
+                    .uri(baseUrl + "/api/v1/internal/admin/stats/revenue")
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<InternalApiEnvelope<RevenueStatsPayload>>() {});
+            if (env == null || env.data() == null) {
+                throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+            }
+            RevenueStatsPayload p = env.data();
+            List<AdminRevenueStats.CurrencyFee> byCurrency = p.byCurrency() == null ? List.of()
+                    : p.byCurrency().stream()
+                            .map(c -> new AdminRevenueStats.CurrencyFee(
+                                    c.currencyCode(), c.exchangeFee(), c.remittanceFee()))
+                            .toList();
+            List<AdminRevenueStats.MonthlyFee> monthlyTrend = p.monthlyTrend() == null ? List.of()
+                    : p.monthlyTrend().stream()
+                            .map(m -> new AdminRevenueStats.MonthlyFee(
+                                    m.month(), m.exchangeFee(), m.remittanceFee()))
+                            .toList();
+            return new AdminRevenueStats(
+                    p.currencyCode(),
+                    p.totalExchangeFee(),
+                    p.totalRemittanceFee(),
+                    p.totalFeeRevenue(),
+                    p.thisMonthExchangeFee(),
+                    p.thisMonthRemittanceFee(),
+                    byCurrency,
+                    monthlyTrend);
+        } catch (BusinessException be) {
+            throw be;
+        } catch (RuntimeException e) {
+            log.error("[RealWalletAdminClient] revenue 실패: {}", e.getMessage());
+            throw new BusinessException(CommonErrorCode.SERVICE_UNAVAILABLE);
+        }
+    }
+
     private static AdminTransactionSummary toSummary(TransactionWire t) {
         return new AdminTransactionSummary(
                 t.transactionPublicId(),
@@ -316,6 +354,32 @@ public class RealWalletAdminClient implements WalletAdminClient {
             @JsonProperty("reason") String reason,
             @JsonProperty("bank_account_id") Long bankAccountId,
             @JsonProperty("created_at") LocalDateTime createdAt) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record RevenueStatsPayload(
+            @JsonProperty("currency_code") String currencyCode,
+            @JsonProperty("total_exchange_fee") String totalExchangeFee,
+            @JsonProperty("total_remittance_fee") String totalRemittanceFee,
+            @JsonProperty("total_fee_revenue") String totalFeeRevenue,
+            @JsonProperty("this_month_exchange_fee") String thisMonthExchangeFee,
+            @JsonProperty("this_month_remittance_fee") String thisMonthRemittanceFee,
+            @JsonProperty("by_currency") List<CurrencyFeeWire> byCurrency,
+            @JsonProperty("monthly_trend") List<MonthlyFeeWire> monthlyTrend) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record CurrencyFeeWire(
+            @JsonProperty("currency_code") String currencyCode,
+            @JsonProperty("exchange_fee") String exchangeFee,
+            @JsonProperty("remittance_fee") String remittanceFee) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record MonthlyFeeWire(
+            @JsonProperty("month") String month,
+            @JsonProperty("exchange_fee") String exchangeFee,
+            @JsonProperty("remittance_fee") String remittanceFee) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

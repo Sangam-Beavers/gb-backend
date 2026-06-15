@@ -16,4 +16,6 @@ public interface WalletAdminClient {
     Page<AdminChargeAttempt> searchChargeAttempts(String status, String userPublicId, int page, int size);
 
     AdminWalletStats stats();
+
+    AdminRevenueStats revenue();
 }

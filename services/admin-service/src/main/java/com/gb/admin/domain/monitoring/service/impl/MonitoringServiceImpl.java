@@ -16,6 +16,8 @@ import com.gb.admin.domain.monitoring.dto.response.InfraAlertsResponse.Alert;
 import com.gb.admin.domain.monitoring.dto.response.EmbedsResponse.GrafanaEmbed;
 import com.gb.admin.domain.monitoring.dto.response.QueuesResponse;
 import com.gb.admin.domain.monitoring.dto.response.QueuesResponse.Queue;
+import com.gb.admin.domain.monitoring.dto.response.RevenueResponse;
+import com.gb.admin.global.client.AdminRevenueStats;
 import com.gb.admin.domain.monitoring.dto.response.ServiceHealthResponse;
 import com.gb.admin.domain.monitoring.dto.response.ServiceHealthResponse.ServiceHealth;
 import com.gb.admin.domain.monitoring.service.MonitoringService;
@@ -334,6 +336,34 @@ public class MonitoringServiceImpl implements MonitoringService {
                 new Demographics(gender, age, nationality),
                 new Revenue(totalMembers, newMembersToday, dailyActiveUsers,
                         todayTransactionsTotal, transactionsByAction, exchangeFeeRate));
+    }
+
+    @Override
+    public RevenueResponse revenue() {
+        // 앱이 환전/송금 수수료로 번 돈. wallet-service 집계를 그대로 relay 한다(금액 String 통과).
+        // 문서분석 구독 매출은 별도 도메인(미구현)이라 본 응답에 없고, 프론트가 mock 으로 채운다.
+        AdminRevenueStats r = walletAdminClient.revenue();
+
+        List<RevenueResponse.CurrencyFee> byCurrency = r.byCurrency() == null ? List.of()
+                : r.byCurrency().stream()
+                        .map(c -> new RevenueResponse.CurrencyFee(
+                                c.currencyCode(), c.exchangeFee(), c.remittanceFee()))
+                        .toList();
+        List<RevenueResponse.MonthlyFee> monthlyTrend = r.monthlyTrend() == null ? List.of()
+                : r.monthlyTrend().stream()
+                        .map(m -> new RevenueResponse.MonthlyFee(
+                                m.month(), m.exchangeFee(), m.remittanceFee()))
+                        .toList();
+
+        RevenueResponse.FeeRevenue feeRevenue = new RevenueResponse.FeeRevenue(
+                r.currencyCode(),
+                r.totalExchangeFee(),
+                r.totalRemittanceFee(),
+                r.totalFeeRevenue(),
+                r.thisMonthExchangeFee(),
+                r.thisMonthRemittanceFee(),
+                byCurrency);
+        return new RevenueResponse(feeRevenue, monthlyTrend);
     }
 
     @Override

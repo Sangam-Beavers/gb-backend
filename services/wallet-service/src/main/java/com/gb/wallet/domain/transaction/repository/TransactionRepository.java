@@ -245,6 +245,25 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
             @Param("from") LocalDateTime from,
             @Param("to") LocalDateTime to);
 
+    /**
+     * 유형(EXCHANGE/REMITTANCE)·통화별 수수료(fee) 합계 — 수익(매출) 집계용.
+     * COMPLETED 거래만 집계하며(완료된 거래에서만 수수료를 실제로 벌었다고 본다),
+     * from/to 가 null 이면 전체 기간(누적)이다. 월별 추이는 Service가 기간을 바꿔가며 반복 호출한다.
+     */
+    @Query("""
+            SELECT t.type AS type, t.currencyCode AS currencyCode, COALESCE(SUM(t.fee), 0) AS totalFee
+            FROM Transaction t
+            WHERE t.status = com.gb.wallet.global.common.enums.TransactionStatus.COMPLETED
+              AND t.type IN (com.gb.wallet.global.common.enums.TransactionType.EXCHANGE,
+                             com.gb.wallet.global.common.enums.TransactionType.REMITTANCE)
+              AND (:from IS NULL OR t.createdAt >= :from)
+              AND (:to IS NULL OR t.createdAt <= :to)
+            GROUP BY t.type, t.currencyCode
+            """)
+    List<FeeByTypeCurrencyProjection> sumFeeByTypeAndCurrency(
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to);
+
     /** type+status 매트릭스 카운트 — 송금/충전 성공률 계산용. */
     @Query("""
             SELECT t.type AS type, t.status AS status, COUNT(t) AS cnt
@@ -278,5 +297,11 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
         com.gb.wallet.global.common.enums.TransactionType getType();
         com.gb.wallet.global.common.enums.TransactionStatus getStatus();
         long getCnt();
+    }
+
+    interface FeeByTypeCurrencyProjection {
+        com.gb.wallet.global.common.enums.TransactionType getType();
+        com.gb.wallet.global.common.enums.CurrencyType getCurrencyCode();
+        java.math.BigDecimal getTotalFee();
     }
 }

@@ -7,6 +7,7 @@ import com.gb.admin.domain.monitoring.dto.response.DomainSloResponse;
 import com.gb.admin.domain.monitoring.dto.response.InfraAlertsResponse;
 import com.gb.admin.domain.monitoring.dto.response.EmbedsResponse;
 import com.gb.admin.domain.monitoring.dto.response.QueuesResponse;
+import com.gb.admin.domain.monitoring.dto.response.RevenueResponse;
 import com.gb.admin.domain.monitoring.dto.response.ServiceHealthResponse;
 import com.gb.admin.domain.monitoring.service.MonitoringService;
 import com.gb.common.response.ApiResponse;
@@ -70,6 +71,13 @@ public class MonitoringController {
     @GetMapping("/business-analytics")
     public ApiResponse<BusinessAnalyticsResponse> businessAnalytics() {
         return ApiResponse.success(monitoringService.businessAnalytics());
+    }
+
+    @Operation(summary = "수익(환전/송금 수수료)",
+            description = "앱이 환전/송금 수수료로 번 돈 — wallet COMPLETED 거래 fee 집계(누적·이번 달·통화별·월별 추이).")
+    @GetMapping("/revenue")
+    public ApiResponse<RevenueResponse> revenue() {
+        return ApiResponse.success(monitoringService.revenue());
     }
 
     @Operation(summary = "인프라 경보",
