@@ -1,4 +1,4 @@
-FROM eclipse-temurin:17-jre
+FROM harbor.sb.fisa/global_bridge/eclipse-temurin:17-jre
 WORKDIR /app
 
 RUN (groupadd -r spring 2>/dev/null || true) && \
@@ -15,4 +15,4 @@ EXPOSE 8081
 ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
 ENV SPRING_PROFILES_ACTIVE="dev"
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPT
