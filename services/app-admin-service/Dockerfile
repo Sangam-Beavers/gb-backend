@@ -15,4 +15,4 @@ EXPOSE 8086
 ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
 ENV SPRING_PROFILES_ACTIVE="dev"
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OP
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
