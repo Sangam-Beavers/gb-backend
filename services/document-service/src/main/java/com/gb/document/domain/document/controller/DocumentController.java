@@ -51,6 +51,8 @@ public class DocumentController {
             "{\"success\":false,\"code\":\"COMMON4221\",\"message\":\"처리할 수 없는 요청입니다.\"}";
     private static final String EX_COMMON5000 =
             "{\"success\":false,\"code\":\"COMMON5000\",\"message\":\"서버 오류가 발생했습니다.\"}";
+    private static final String EX_DOCUMENT4002 =
+            "{\"success\":false,\"code\":\"DOCUMENT4002\",\"message\":\"서류 분석 크레딧이 부족합니다.\"}";
 
     private final DocumentSubmissionService documentSubmissionService;
 
@@ -74,6 +76,11 @@ public class DocumentController {
                     description = "AUTH4011 - 인증이 필요합니다(토큰 누락·만료·위조).",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class),
                             examples = @ExampleObject(name = "AUTH4011", value = EX_AUTH4011))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "422",
+                    description = "DOCUMENT4002 - 서류 분석 크레딧이 부족합니다.",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                            examples = @ExampleObject(name = "DOCUMENT4002", value = EX_DOCUMENT4002))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "500",
                     description = "COMMON5000 - 서버 오류.",

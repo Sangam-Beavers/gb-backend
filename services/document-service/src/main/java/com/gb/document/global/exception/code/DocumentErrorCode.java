@@ -16,7 +16,8 @@ import org.springframework.http.HttpStatus;
 @RequiredArgsConstructor
 public enum DocumentErrorCode implements ErrorCode {
 
-    DOCUMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "DOCUMENT4001", "존재하지 않는 문서입니다.");
+    DOCUMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "DOCUMENT4001", "존재하지 않는 문서입니다."),
+    INSUFFICIENT_CREDIT(HttpStatus.UNPROCESSABLE_ENTITY, "DOCUMENT4002", "서류 분석 크레딧이 부족합니다.");
 
     private final HttpStatus httpStatus;
     private final String code;

@@ -1,4 +1,4 @@
-FROM eclipse-temurin:17-jre
+FROM harbor.sb.fisa/global_bridge/eclipse-temurin:17-jre
 WORKDIR /app
 
 RUN (groupadd -r spring 2>/dev/null || true) && \
