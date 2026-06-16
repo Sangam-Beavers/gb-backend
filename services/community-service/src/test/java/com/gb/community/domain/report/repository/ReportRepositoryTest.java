@@ -160,4 +160,32 @@ class ReportRepositoryTest {
         assertThat(reportRepository.countByStatus(ReportStatus.PENDING)).isEqualTo(2);
         assertThat(reportRepository.countByStatus(ReportStatus.RESOLVED_DELETED)).isEqualTo(0);
     }
+
+    @Test
+    @DisplayName("countActiveByStatus — 대상이 soft-delete된 PENDING 신고는 제외")
+    void countActiveByStatus_excludesDeletedTarget() {
+        // post1: 살아있음, post2: 작성자 자가삭제(soft-delete)되었으나 신고는 PENDING으로 남음
+        reportRepository.save(
+                Report.of("u1", ReportTargetType.POST, post1.getId(), ReportReason.SPAM, null));
+        reportRepository.save(
+                Report.of("u2", ReportTargetType.POST, post2.getId(), ReportReason.ABUSE, null));
+        post2.softDelete();
+        postRepository.save(post2);
+
+        // 기존 countByStatus는 삭제된 대상까지 세어 2건
+        assertThat(reportRepository.countByStatus(ReportStatus.PENDING)).isEqualTo(2);
+        // 새 카운트는 살아있는 대상(post1)의 신고 1건만
+        assertThat(reportRepository.countActiveByStatus(ReportStatus.PENDING)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("countActiveByStatus — 대상이 모두 살아있으면 countByStatus와 동일")
+    void countActiveByStatus_allTargetsAlive() {
+        reportRepository.save(
+                Report.of("u1", ReportTargetType.POST, post1.getId(), ReportReason.SPAM, null));
+        reportRepository.save(
+                Report.of("u2", ReportTargetType.POST, post2.getId(), ReportReason.ABUSE, null));
+
+        assertThat(reportRepository.countActiveByStatus(ReportStatus.PENDING)).isEqualTo(2);
+    }
 }
