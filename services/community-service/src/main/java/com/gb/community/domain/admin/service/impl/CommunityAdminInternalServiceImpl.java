@@ -165,7 +165,9 @@ public class CommunityAdminInternalServiceImpl implements CommunityAdminInternal
 
     @Override
     public ReportStatsResponse stats() {
-        long pending = reportRepository.countByStatus(ReportStatus.PENDING);
+        // 대상(게시글/댓글)이 살아있는 PENDING 신고만 적체로 집계한다.
+        // 작성자 자가삭제 등으로 대상이 soft-delete된 신고는 처리할 수 없으므로 제외(=삭제와 동일 취급).
+        long pending = reportRepository.countActiveByStatus(ReportStatus.PENDING);
         return new ReportStatsResponse(pending);
     }
 
