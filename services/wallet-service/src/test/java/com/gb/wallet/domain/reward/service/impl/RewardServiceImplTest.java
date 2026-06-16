@@ -57,7 +57,7 @@ class RewardServiceImplTest {
         given(stampRepository.existsBySourceTransactionPublicId(TX_1)).willReturn(false);
         given(stampRepository.countByUserPublicId(USER)).willReturn(1L);
 
-        rewardService.accrueStamp(USER, TX_1, TransactionType.INTERNAL_TRANSFER);
+        rewardService.accrueStamp(USER, TX_1, TransactionType.REMITTANCE);
 
         verify(stampRepository).save(any(RewardStamp.class));
         verify(couponRepository, never()).save(any(Coupon.class));
@@ -75,13 +75,21 @@ class RewardServiceImplTest {
     }
 
     @Test
+    @DisplayName("앱 내 송금(INTERNAL_TRANSFER)은 수수료가 없어 적립/쿠폰 대상이 아니다 — 아무것도 하지 않는다")
+    void accrueStamp_internalTransfer_doesNotAccrue() {
+        rewardService.accrueStamp(USER, TX_1, TransactionType.INTERNAL_TRANSFER);
+
+        verifyNoInteractions(stampRepository, couponRepository);
+    }
+
+    @Test
     @DisplayName("5번째 적립 — 카드 완성으로 cycle 1 쿠폰 발급(TRANSFER_FEE_FREE / ISSUED)")
     void accrueStamp_fifthStamp_issuesCouponCycle1() {
         given(stampRepository.existsBySourceTransactionPublicId(TX_1)).willReturn(false);
         given(stampRepository.countByUserPublicId(USER)).willReturn(5L);
         given(couponRepository.existsByUserPublicIdAndCycleNo(USER, 1)).willReturn(false);
 
-        rewardService.accrueStamp(USER, TX_1, TransactionType.INTERNAL_TRANSFER);
+        rewardService.accrueStamp(USER, TX_1, TransactionType.REMITTANCE);
 
         ArgumentCaptor<Coupon> captor = ArgumentCaptor.forClass(Coupon.class);
         verify(couponRepository).save(captor.capture());
@@ -101,7 +109,7 @@ class RewardServiceImplTest {
         given(stampRepository.countByUserPublicId(USER)).willReturn(6L);
         given(couponRepository.existsByUserPublicIdAndCycleNo(USER, 1)).willReturn(true);
 
-        rewardService.accrueStamp(USER, TX_1, TransactionType.INTERNAL_TRANSFER);
+        rewardService.accrueStamp(USER, TX_1, TransactionType.REMITTANCE);
 
         verify(couponRepository, never()).save(any(Coupon.class));
     }
