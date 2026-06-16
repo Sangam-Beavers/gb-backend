@@ -45,6 +45,13 @@ public class RewardServiceImpl implements RewardService {
         // (예외도 없음). 그래서 REQUIRES_NEW로 독립 트랜잭션을 강제해 적립을 확실히 커밋한다
         // (코드베이스의 ChargeAttemptWriter/WalletBalanceWriter 등 REQUIRES_NEW writer 패턴과 동일).
 
+        // (0) 적립/쿠폰 대상은 "수수료가 발생하는 타행 송금(REMITTANCE)"만이다. 앱 내 송금(INTERNAL_TRANSFER)은
+        //     수수료가 없어 'TRANSFER_FEE_FREE(송금 수수료 무료)' 쿠폰 적립 대상이 아니므로 스탬프도 쌓지 않는다.
+        //     그 외 유형도 방어적으로 제외(이벤트는 REMITTANCE/INTERNAL만 발행되지만 단일 진실 규칙으로 여기서 차단).
+        if (transferType != TransactionType.REMITTANCE) {
+            return;
+        }
+
         // (1) 멱등 — 같은 송금 거래로 이미 적립됐으면 스킵(이벤트 중복/재시도 방어). UNIQUE가 최종 안전망.
         if (stampRepository.existsBySourceTransactionPublicId(transactionPublicId)) {
             return;
