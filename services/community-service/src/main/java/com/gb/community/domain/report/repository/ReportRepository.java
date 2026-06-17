@@ -70,6 +70,30 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     /** 신고 통계 — 특정 상태의 신고 수. */
     long countByStatus(ReportStatus status);
 
+    /**
+     * 신고 통계 — 특정 상태이면서 <b>대상(게시글/댓글)이 살아있는(soft-delete 안 된)</b> 신고 수.
+     *
+     * <p>{@link #countByStatus}와 달리, 대상이 이미 삭제된 신고는 제외한다. 작성자가 자기 글을
+     * 지우면({@code post.softDelete()}만 호출되고 신고 status는 PENDING으로 남음) 처리할 대상이 없는
+     * 신고가 적체 카운트(모니터링 "신고 게시글 적체")에 잡히는 문제를 막는다. 소프트삭제는 삭제와
+     * 동일하게 취급하므로 적체에서 뺀다.
+     *
+     * <p>POST/COMMENT는 단일 {@code target_id} 컬럼을 공유하는 polymorphic 구조라 JPA 매핑이 없어,
+     * 타입별 {@code EXISTS} 서브쿼리로 각각 대상 엔티티의 {@code deletedAt IS NULL}을 확인한다.
+     */
+    @Query("""
+            SELECT COUNT(r) FROM Report r
+            WHERE r.status = :status
+              AND (
+                (r.targetType = com.gb.community.domain.report.entity.ReportTargetType.POST
+                  AND EXISTS (SELECT 1 FROM Post p WHERE p.id = r.targetId AND p.deletedAt IS NULL))
+                OR
+                (r.targetType = com.gb.community.domain.report.entity.ReportTargetType.COMMENT
+                  AND EXISTS (SELECT 1 FROM Comment c WHERE c.id = r.targetId AND c.deletedAt IS NULL))
+              )
+            """)
+    long countActiveByStatus(@Param("status") ReportStatus status);
+
     /** 전체 신고 수 (상태 무관). */
     long countByTargetType(ReportTargetType targetType);
 }
