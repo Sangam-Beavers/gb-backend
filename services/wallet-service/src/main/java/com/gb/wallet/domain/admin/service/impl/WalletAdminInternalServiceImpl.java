@@ -29,7 +29,6 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -242,15 +241,18 @@ public class WalletAdminInternalServiceImpl implements WalletAdminInternalServic
             byCurrency.add(new CurrencyFee(e.getKey().name(), money(ex), money(rem)));
         }
 
-        // 최근 6개월 추이(이번 달 포함). 기간을 바꿔가며 같은 집계 쿼리를 재사용한다.
+        // 최근 8주 추이(이번 주 포함). 기간을 바꿔가며 같은 집계 쿼리를 재사용한다(주=월요일 시작).
+        // ※ DTO 필드명은 응답 계약 호환을 위해 month/monthlyTrend 그대로 두되, 값은 "주 시작일"(yyyy-MM-dd)을 담는다.
+        //    (월→주 전환. 추후 필드명을 weekStart/weeklyTrend로 정식 리네임하려면 wallet→admin→프론트 동시 변경 필요.)
         List<MonthlyFee> monthlyTrend = new ArrayList<>();
-        YearMonth current = YearMonth.from(LocalDate.now());
-        for (int i = 5; i >= 0; i--) {
-            YearMonth ym = current.minusMonths(i);
-            LocalDateTime f = ym.atDay(1).atStartOfDay();
-            LocalDateTime t = ym.atEndOfMonth().atTime(LocalTime.MAX);
-            BigDecimal[] m = sumFeesByType(f, t);
-            monthlyTrend.add(new MonthlyFee(ym.toString(), money(m[0]), money(m[1])));
+        LocalDate today = LocalDate.now();
+        LocalDate thisMonday = today.minusDays(today.getDayOfWeek().getValue() - 1L); // Mon=1 → 이번 주 월요일
+        for (int i = 7; i >= 0; i--) {
+            LocalDate weekStart = thisMonday.minusWeeks(i);
+            LocalDateTime f = weekStart.atStartOfDay();
+            LocalDateTime t = weekStart.plusDays(6).atTime(LocalTime.MAX);
+            BigDecimal[] w = sumFeesByType(f, t);
+            monthlyTrend.add(new MonthlyFee(weekStart.toString(), money(w[0]), money(w[1]))); // value="2026-06-09"
         }
 
         return new RevenueStatsResponse(

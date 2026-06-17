@@ -19,6 +19,7 @@ import com.gb.member.domain.member.entity.Gender;
 import com.gb.member.domain.member.entity.Member;
 import com.gb.member.domain.member.repository.MemberRepository;
 import com.gb.member.domain.member.service.MemberService;
+import com.gb.member.domain.member.util.NationalityNormalizer;
 import com.gb.member.global.client.AppAdminClient;
 import com.gb.member.global.client.IdpUserClient;
 import com.gb.member.global.exception.code.MemberErrorCode;
@@ -108,7 +109,7 @@ public class MemberServiceImpl implements MemberService {
                 .email(request.getEmail())
                 .name(request.getName())
                 .nickname(request.getNickname())
-                .nationality(request.getNationality())
+                .nationality(NationalityNormalizer.normalize(request.getNationality()))
                 .language(request.getLanguage())
                 .gender(gender)
                 .ageRange(ageRange)
@@ -172,7 +173,7 @@ public class MemberServiceImpl implements MemberService {
                 .email(email)
                 .name(name)
                 .nickname(request.getNickname())
-                .nationality(request.getNationality())
+                .nationality(NationalityNormalizer.normalize(request.getNationality()))
                 .language(request.getLanguage())
                 .gender(gender)
                 .ageRange(ageRange)
