@@ -370,8 +370,10 @@ public class MonitoringServiceImpl implements MonitoringService {
     public InfraAlertsResponse infraAlerts() {
         // Prometheus(YACE) 지표 기준 인프라 경보. PromQL에 임계 조건을 넣어 결과 시리즈=발화 경보로 본다.
         // base-url 미설정/호출 실패 시 PrometheusClient가 빈 리스트 → 경보 0건(fail-soft).
+        // ⚠️ DEMO 임시 임계값 — 영상 촬영용으로 RDS CPU 규칙만 1%로 낮춰 무조건 발화하도록 함.
+        //    촬영 후 반드시 원래 임계값(CPU > 80)으로 원복할 것. 나머지 4개는 원본 그대로.
         List<Alert> alerts = new ArrayList<>();
-        evalRule(alerts, "aws_rds_cpuutilization_average{dimension_DBInstanceIdentifier!=\"\"} > 80",
+        evalRule(alerts, "aws_rds_cpuutilization_average{dimension_DBInstanceIdentifier!=\"\"} > 1",
                 "critical", "RDS", "dimension_DBInstanceIdentifier", "RDS CPU 높음", "%");
         evalRule(alerts, "aws_rds_aurora_replica_lag_average{dimension_DBInstanceIdentifier!=\"\"} > 1000",
                 "warning", "RDS", "dimension_DBInstanceIdentifier", "Aurora replica lag 높음", "ms");
